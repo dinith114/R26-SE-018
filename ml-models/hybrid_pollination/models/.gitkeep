@@ -1,0 +1,2 @@
+# Trained model files (.pkl, .joblib, .tflite)
+# Commit lightweight model files; large models go to cloud storage

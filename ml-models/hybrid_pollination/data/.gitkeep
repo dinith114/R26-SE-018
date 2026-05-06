@@ -1,0 +1,4 @@
+# Hybrid Pollination - Data directory
+# Store orchid image datasets and CSV trait files here
+# NOTE: Raw data files are gitignored – do NOT commit large datasets
+# Upload datasets to Google Drive or Firebase Storage instead

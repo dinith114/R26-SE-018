@@ -1,0 +1,3 @@
+// ESP32 Sensor Reader - Placeholder
+// Reads DHT22 temperature/humidity data and sends to Firebase via WiFi
+// TODO: Implement using Arduino framework or PlatformIO
