@@ -21,7 +21,7 @@ The system focuses primarily on **Vanda orchids**, which are widely cultivated i
 
 | #  | Component | Description | Member |
 |----|-----------|-------------|--------|
-| 1  | **Orchid Disease Detection & Treatment Recommendation** | Analyzes leaf/plant images to detect diseases and recommend treatments | TBD |
+| 1  | **Orchid Disease Detection & Treatment Recommendation** | Analyzes leaf/plant images to detect diseases and recommend treatments | IT22064936 - Rathnamalala D.M.J.P |
 | 2  | **Orchid Growth Stage Recognition & Bloom Prediction** | Identifies growth stages and predicts flowering periods using images + environmental data | TBD |
 | 3  | **Smart Watering & Automated Fertilization** | IoT sensor-driven ML models for automated irrigation and fertilization | TBD |
 | 4  | **Hybrid Pollination & Compatibility Analysis** | Predicts hybrid compatibility between parent orchids using image analysis + ML | IT22065230 – Wickramasinghe D.P |
