@@ -41,6 +41,7 @@ mlruns/
 # Large datasets (store in cloud, not git)
 ml-models/*/data/raw/
 ml-models/*/data/processed/
+ml-models/*/data/images/
 datasets/
 
 # ===========================
