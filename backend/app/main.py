@@ -43,9 +43,9 @@ async def health_check():
 # from app.api.routes import disease_detection
 # from app.api.routes import growth_stage
 # from app.api.routes import smart_watering
-# from app.api.routes import hybrid_pollination
-#
+from app.api.routes import hybrid_pollination
+
 # app.include_router(disease_detection.router, prefix="/api/v1/disease",      tags=["Disease Detection"])
 # app.include_router(growth_stage.router,      prefix="/api/v1/growth",       tags=["Growth Stage"])
 # app.include_router(smart_watering.router,     prefix="/api/v1/watering",     tags=["Smart Watering"])
-# app.include_router(hybrid_pollination.router,  prefix="/api/v1/pollination",  tags=["Hybrid Pollination"])
+app.include_router(hybrid_pollination.router,  prefix="/api/v1/pollination",  tags=["Hybrid Pollination"])

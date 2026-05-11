@@ -1,0 +1,88 @@
+Training Results - 2026-05-10 21:12
+Best Model: SVM (RBF)
+======================================================================
+
+--------------------------------------------------
+Random Forest
+--------------------------------------------------
+Train Accuracy: 1.0000
+Val Accuracy:   0.9630
+Test Accuracy:  0.9630
+Test F1:        0.9604
+CV (5-fold):    0.9639 +/- 0.0078
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Moderate       1.00      0.71      0.83         7
+Not Suitable       0.93      1.00      0.96        13
+    Suitable       0.97      1.00      0.99        34
+
+    accuracy                           0.96        54
+   macro avg       0.97      0.90      0.93        54
+weighted avg       0.96      0.96      0.96        54
+
+
+--------------------------------------------------
+SVM (RBF) * BEST
+--------------------------------------------------
+Train Accuracy: 1.0000
+Val Accuracy:   1.0000
+Test Accuracy:  1.0000
+Test F1:        1.0000
+CV (5-fold):    0.9839 +/- 0.0150
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Moderate       1.00      1.00      1.00         7
+Not Suitable       1.00      1.00      1.00        13
+    Suitable       1.00      1.00      1.00        34
+
+    accuracy                           1.00        54
+   macro avg       1.00      1.00      1.00        54
+weighted avg       1.00      1.00      1.00        54
+
+
+--------------------------------------------------
+Logistic Regression
+--------------------------------------------------
+Train Accuracy: 1.0000
+Val Accuracy:   0.9630
+Test Accuracy:  0.9630
+Test F1:        0.9632
+CV (5-fold):    0.9679 +/- 0.0159
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Moderate       0.86      0.86      0.86         7
+Not Suitable       0.93      1.00      0.96        13
+    Suitable       1.00      0.97      0.99        34
+
+    accuracy                           0.96        54
+   macro avg       0.93      0.94      0.94        54
+weighted avg       0.96      0.96      0.96        54
+
+
+--------------------------------------------------
+XGBoost
+--------------------------------------------------
+Train Accuracy: 1.0000
+Val Accuracy:   0.9630
+Test Accuracy:  0.9815
+Test F1:        0.9809
+CV (5-fold):    0.9639 +/- 0.0233
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Moderate       1.00      0.86      0.92         7
+Not Suitable       1.00      1.00      1.00        13
+    Suitable       0.97      1.00      0.99        34
+
+    accuracy                           0.98        54
+   macro avg       0.99      0.95      0.97        54
+weighted avg       0.98      0.98      0.98        54
+
+
