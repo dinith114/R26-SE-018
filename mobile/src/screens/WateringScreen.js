@@ -86,8 +86,20 @@ const WateringScreen = ({ navigation }) => {
           <View style={styles.grid}>
             <SensorCard title="Temp" value={sensorData?.temperature?.toFixed(1) ?? '--'} unit="°C" color={COLORS.temperature} iconName="thermometer-outline" />
             <SensorCard title="Humidity" value={sensorData?.humidity?.toFixed(1) ?? '--'} unit="%" color={COLORS.humidity} iconName="water-outline" />
-            <SensorCard title="Soil" value={sensorData?.soilMoisturePct?.toFixed(1) ?? '--'} unit="%" color={COLORS.soil} iconName="leaf-outline" />
-            <SensorCard title="Elapsed" value={sensorData?.hoursSinceWater?.toFixed(1) ?? '--'} unit="hrs" color={accentColor} iconName="timer-outline" />
+            <SensorCard title="Light" value={sensorData?.light === -999 ? 'N/A' : (sensorData?.light?.toFixed(0) ?? '--')} unit="lux" color={COLORS.light} iconName="sunny-outline" />
+            <SensorCard title="Root" value={sensorData?.rootMoisturePct?.toFixed(1) ?? '--'} unit="%" color={COLORS.soil} iconName="leaf-outline" />
+          </View>
+          <View style={[styles.elapsedRow, SHADOW.sm]}>
+            <View style={[styles.elapsedIcon, { backgroundColor: `${accentColor}15` }]}>
+              <Ionicons name="timer-outline" size={20} color={accentColor} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.elapsedLabel}>Time Since Last Watering</Text>
+              <Text style={styles.elapsedSub}>Updated every sensor cycle</Text>
+            </View>
+            <Text style={[styles.elapsedValue, { color: accentColor }]}>
+              {sensorData?.hoursSinceWater?.toFixed(1) ?? '--'} hrs
+            </Text>
           </View>
 
           <Text style={styles.sectionTitle}>{isWater ? 'Irrigation' : 'Fertilizer'} Schedule</Text>
@@ -143,7 +155,12 @@ const styles = StyleSheet.create({
   toggleTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '600' },
   toggleDesc: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
   sectionTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.md },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: SPACE.xl },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: SPACE.sm },
+  elapsedRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.xl, gap: SPACE.md },
+  elapsedIcon: { width: 40, height: 40, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center' },
+  elapsedLabel: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '600' },
+  elapsedSub: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2 },
+  elapsedValue: { fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.md, marginBottom: SPACE.sm },
   timeBadge: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: RADIUS.sm - 2, marginRight: SPACE.md },
   timeText: { fontSize: FONT.sm, fontWeight: '700', fontVariant: ['tabular-nums'] },
