@@ -99,7 +99,7 @@ const HomeScreen = ({ navigation }) => {
             <SensorCard title="Temp" value={sensorData?.temperature?.toFixed(1) ?? '--'} unit="°C" color={COLORS.temperature} iconName="thermometer-outline" />
             <SensorCard title="Humidity" value={sensorData?.humidity?.toFixed(1) ?? '--'} unit="%" color={COLORS.humidity} iconName="water-outline" />
             <SensorCard title="Light" value={sensorData?.light === -999 ? 'N/A' : (sensorData?.light?.toFixed(0) ?? '--')} unit="lux" color={COLORS.light} iconName="sunny-outline" />
-            <SensorCard title="Soil" value={sensorData?.soilMoisturePct?.toFixed(1) ?? '--'} unit="%" color={COLORS.soil} iconName="leaf-outline" />
+            <SensorCard title="Root" value={sensorData?.rootMoisturePct?.toFixed(1) ?? '--'} unit="%" color={COLORS.soil} iconName="leaf-outline" />
           </View>
 
           {/* Prediction */}

@@ -23,8 +23,8 @@ numpy==1.26.4
 pandas==2.2.2
 joblib==1.4.2
 
-# TensorFlow Lite (for model inference)
-# tflite-runtime==2.14.0
+# TensorFlow (CNN visual hydration model — MobileNetV2)
+tensorflow==2.20.0
 
 # File Upload
 python-multipart==0.0.9
@@ -32,6 +32,9 @@ python-multipart==0.0.9
 # Testing
 pytest==8.3.0
 httpx==0.27.0
+
+# HTTP client (Firebase REST calls from prediction API)
+requests==2.32.3
 
 # Utilities
 python-dotenv==1.0.1
