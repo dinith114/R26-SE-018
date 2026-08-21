@@ -29,7 +29,7 @@ const GrowthStageScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Growth Stage" subtitle="Lifecycle" navigation={navigation} />
+      <ScreenHeader title="Growth Stage" subtitle="Lifecycle" navigation={navigation} showSettings />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
           <View style={[styles.timelineCard, SHADOW.sm]}>

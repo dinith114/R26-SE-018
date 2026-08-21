@@ -9,15 +9,15 @@ const DiseaseDetectionScreen = ({ navigation }) => {
   useEffect(() => { Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start(); }, []);
 
   const diseases = [
-    { name: 'Black Rot', risk: 'High', color: COLORS.danger, icon: 'alert-circle', desc: 'Fungal — black lesions on leaves' },
-    { name: 'Root Rot', risk: 'Medium', color: COLORS.warning, icon: 'warning', desc: 'Overwatering — root decay' },
-    { name: 'Leaf Spot', risk: 'Low', color: COLORS.info, icon: 'information-circle', desc: 'Bacterial — surface spots' },
+    { name: 'Black Rot', risk: 'High', color: COLORS.danger, icon: 'alert-circle', desc: 'Fungal, black lesions on leaves' },
+    { name: 'Root Rot', risk: 'Medium', color: COLORS.warning, icon: 'warning', desc: 'Overwatering, root decay' },
+    { name: 'Leaf Spot', risk: 'Low', color: COLORS.info, icon: 'information-circle', desc: 'Bacterial, surface spots' },
     { name: 'Crown Rot', risk: 'Medium', color: COLORS.warning, icon: 'warning', desc: 'Water accumulation in crown' },
   ];
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Disease Detection" subtitle="AI Diagnosis" navigation={navigation} />
+      <ScreenHeader title="Disease Detection" subtitle="AI Diagnosis" navigation={navigation} showSettings />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
           <TouchableOpacity activeOpacity={0.7} style={[styles.captureCard, SHADOW.md]}>
