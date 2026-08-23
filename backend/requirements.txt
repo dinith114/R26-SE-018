@@ -22,9 +22,17 @@ scikit-learn==1.5.0
 numpy==1.26.4
 pandas==2.2.2
 joblib==1.4.2
+tensorflow==2.16.2         # Required by growth_stage's src.predict (was missing - route import would fail without it). 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch and matches Colab's Keras 3 save format
 
 # TensorFlow Lite (for model inference)
 # tflite-runtime==2.14.0
+
+# Object Detection (used by growth_stage's /identify-objects and
+# bloom_prediction endpoints, via shared/object_detection)
+torch==2.3.1
+torchvision==0.18.1
+transformers==4.44.2       # Zero-shot detector (OWLv2) - still used for the bud class
+ultralytics==8.2.103       # Custom YOLOv8 detector for orchid_plant/flower_bunch/seed_pod
 
 # File Upload
 python-multipart==0.0.9
