@@ -1,0 +1,16 @@
+{
+  "model_type": "efficientnet",
+  "input_shape": [
+    224,
+    224,
+    3
+  ],
+  "tabular_features": [
+    "Temperature",
+    "Humidity",
+    "Light intensity"
+  ],
+  "training_time": 673.24698138237,
+  "epochs": 25,
+  "batch_size": 16
+}

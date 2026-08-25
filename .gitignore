@@ -12,6 +12,7 @@ build/
 .Python
 env/
 venv/
+venv*/
 .venv/
 pip-log.txt
 pip-delete-this-directory.txt
@@ -40,9 +41,27 @@ mlruns/
 
 # Large datasets (store in cloud, not git)
 ml-models/*/data/raw/
+ml-models/*/data/raw.zip
 ml-models/*/data/processed/
 ml-models/*/data/images/
 datasets/
+
+# Raw annotated photos for the object detector (~300MB) - regenerate the
+# trainable dataset from these with prepare_dataset.py
+ml-models/shared/object_detection/data/flowers/
+ml-models/shared/object_detection/data/plants/
+ml-models/shared/object_detection/data/seeds/
+ml-models/shared/object_detection/data/buds/
+
+# Generated YOLO dataset (regenerate with prepare_dataset.py) and training runs
+ml-models/shared/object_detection/data/yolo/
+ml-models/shared/object_detection/runs/
+
+# Colab upload/download bundles - regenerate with prepare_for_colab.py /
+# zip_for_colab.py, or re-download from Drive; too large for git anyway
+# (growth_stage/bloom_prediction colab zips exceed GitHub's 100MB file limit)
+*_colab.zip
+ml-models/trained models/
 
 # ===========================
 # React Native / Node.js
