@@ -14,8 +14,14 @@ from PIL import Image
 import io
 
 # Use absolute path directly
-ML_PATH = Path("D:/Research/Project/Project_002/R26-SE-018/ml-models/growth_stage")
-
+# Resolved relative to the repository, with the original absolute path kept as
+# a fallback. It was hardcoded to one machine's D:\Research\... directory, so
+# on any other checkout the import below raised and took the WHOLE backend down
+# with it - not just this component's endpoints.
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+ML_PATH = _REPO_ROOT / "ml-models" / "growth_stage"
+if not ML_PATH.exists():
+    ML_PATH = Path("D:/Research/Project/Project_002/R26-SE-018/ml-models/growth_stage")
 print(f"[INFO] Looking for ML module at: {ML_PATH}")
 print(f"[INFO] ML_PATH exists: {ML_PATH.exists()}")
 
@@ -32,13 +38,18 @@ try:
     from src.config import STAGE_NAMES, STAGE_LABELS
     print("[OK] Successfully imported growth_stage modules")
 except ImportError as e:
-    print(f"[ERROR] Import error: {e}")
-    # List what's in the directory
-    if ML_PATH.exists():
-        print(f"Contents of {ML_PATH}:")
-        for item in ML_PATH.iterdir():
-            print(f"  - {item.name}")
-    raise
+    # Do NOT re-raise. This module's ML stack is optional: TensorFlow needs
+    # Python 3.13 and the backend also runs on 3.12, where importing it fails.
+    # Re-raising took the ENTIRE backend down - every route, for every
+    # component - because one component's optional dependency was missing.
+    # The component's own endpoints now return 503 and everything else runs.
+    ML_IMPORT_ERROR = str(e)
+    print(f"[WARN] {__name__}: ML stack unavailable ({e}). "
+          "This component's endpoints will return 503; the rest of the API is unaffected.")
+    GrowthStagePredictor = None
+    GrowthStageDetectionPipeline = None
+    get_stage_info = None
+    STAGE_NAMES = STAGE_LABELS = None
 finally:
     # growth_stage and bloom_prediction each ship a top-level package
     # literally named `src`. Evicting it (and ML_PATH) here stops the one
