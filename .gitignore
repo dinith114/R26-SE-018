@@ -115,3 +115,11 @@ Thumbs.db
 # ===========================
 iot/esp32/.pio/
 iot/esp32/.vscode/
+
+# Firebase service-account keys. These grant server-side access to the whole
+# project - unlike google-services.json, which is only client config. The real
+# one lives OUTSIDE this repo at ~/.orchid-secrets/firebase-admin.json; this
+# pattern only exists so a stray copy cannot be committed by accident.
+*firebase-adminsdk*.json
+firebase-admin.json
+serviceAccountKey.json
