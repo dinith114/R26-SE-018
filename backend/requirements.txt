@@ -24,8 +24,8 @@ pandas==2.2.2
 joblib==1.4.2
 tensorflow==2.16.2         # Required by growth_stage's src.predict (was missing - route import would fail without it). 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch and matches Colab's Keras 3 save format
 
-# TensorFlow Lite (for model inference)
-# tflite-runtime==2.14.0
+# TensorFlow (CNN visual hydration model — MobileNetV2)
+tensorflow==2.20.0
 
 # Object Detection (used by growth_stage's /identify-objects and
 # bloom_prediction endpoints, via shared/object_detection)
@@ -40,6 +40,9 @@ python-multipart==0.0.9
 # Testing
 pytest==8.3.0
 httpx==0.27.0
+
+# HTTP client (Firebase REST calls from prediction API)
+requests==2.32.3
 
 # Utilities
 python-dotenv==1.0.1

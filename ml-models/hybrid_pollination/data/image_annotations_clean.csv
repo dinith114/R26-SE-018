@@ -1,0 +1,358 @@
+sample_id,image_name,image_type,species,leaf_condition,leaf_count,plant_strength,disease_visible,flower_condition,suitability_label,image_path
+id1,20260328_100120_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100120_HDR.jpg
+id1,20260328_100122_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100122_HDR.jpg
+id1,20260328_100123_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100123_HDR.jpg
+id1,20260328_100126_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100126_HDR.jpg
+id1,20260328_100128_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100128_HDR.jpg
+id1,20260328_100130_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100130_HDR.jpg
+id1,20260328_100132_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100132_HDR.jpg
+id1,20260328_100134_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100134_HDR.jpg
+id1,20260328_100139_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100139_HDR.jpg
+id1,20260328_100141_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100141_HDR.jpg
+id1,20260328_100144_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100144_HDR.jpg
+id1,20260328_100147_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100147_HDR.jpg
+id1,20260328_100149_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100149_HDR.jpg
+id1,20260328_100154_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100154_HDR.jpg
+id1,20260328_100157_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100157_HDR.jpg
+id1,20260328_100158_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100158_HDR.jpg
+id1,20260328_100200_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100200_HDR.jpg
+id1,20260328_100202_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100202_HDR.jpg
+id1,20260328_100204_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100204_HDR.jpg
+id2,20260328_100220_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100220_HDR.jpg
+id2,20260328_100222_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100222_HDR.jpg
+id2,20260328_100224_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100224_HDR.jpg
+id2,20260328_100226_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100226_HDR.jpg
+id2,20260328_100229_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100229_HDR.jpg
+id2,20260328_100231_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100231_HDR.jpg
+id2,20260328_100233_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100233_HDR.jpg
+id2,20260328_100236_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100236_HDR.jpg
+id2,20260328_100239_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100239_HDR.jpg
+id2,20260328_100243_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100243_HDR.jpg
+id2,20260328_100245_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100245_HDR.jpg
+id3,20260328_100258_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100258_HDR.jpg
+id3,20260328_100300_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100300_HDR.jpg
+id3,20260328_100302_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100302_HDR.jpg
+id3,20260328_100304_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100304_HDR.jpg
+id3,20260328_100308_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100308_HDR.jpg
+id3,20260328_100351_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100351_HDR.jpg
+id3,20260328_100354_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100354_HDR.jpg
+id4,20260328_100551_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100551_HDR.jpg
+id4,20260328_100554_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100554_HDR.jpg
+id4,20260328_100557_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100557_HDR.jpg
+id4,20260328_100559_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100559_HDR.jpg
+id4,20260328_100601_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100601_HDR.jpg
+id4,20260328_100603_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100603_HDR.jpg
+id4,20260328_100607_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100607_HDR.jpg
+id4,20260328_100615_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100615_HDR.jpg
+id4,20260328_100618_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100618_HDR.jpg
+id5,20260328_100623_HDR.jpg,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100623_HDR.jpg
+id5,20260328_100625_HDR.jpg,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100625_HDR.jpg
+id5,20260328_100629_HDR.jpg,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100629_HDR.jpg
+id5,20260328_100632_HDR.jpg,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100632_HDR.jpg
+id5,20260328_100637_HDR.jpg,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100637_HDR.jpg
+id6,20260328_100646_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100646_HDR.jpg
+id6,20260328_100649_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100649_HDR.jpg
+id6,20260328_100654_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100654_HDR.jpg
+id6,20260328_100658_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100658_HDR.jpg
+id6,20260328_100745_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100745_HDR.jpg
+id6,20260328_100747_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100747_HDR.jpg
+id6,20260328_100750_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100750_HDR.jpg
+id6,20260328_100759_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100759_HDR.jpg
+id6,20260328_100802_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100802_HDR.jpg
+id6,20260328_100806_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100806_HDR.jpg
+id6,20260328_100810_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100810_HDR.jpg
+id6,20260328_100813_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100813_HDR.jpg
+id6,20260328_100817_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100817_HDR.jpg
+id6,20260328_100820_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100820_HDR.jpg
+id6,20260328_100824_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100824_HDR.jpg
+id6,20260328_100827_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100827_HDR.jpg
+id6,20260328_100833.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100833.jpg
+id6,20260328_100835.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100835.jpg
+id6,20260328_100838_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100838_HDR.jpg
+id6,20260328_100843.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100843.jpg
+id6,20260328_100845.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100845.jpg
+id6,20260328_100847.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100847.jpg
+id6,20260328_100849.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100849.jpg
+id6,20260328_100851.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100851.jpg
+id6,20260328_100855.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100855.jpg
+id6,20260328_100902.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100902.jpg
+id6,20260328_100905.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100905.jpg
+id6,20260328_100908.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100908.jpg
+id6,20260328_100910.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100910.jpg
+id6,20260328_100912.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100912.jpg
+id6,20260328_100915.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100915.jpg
+id6,20260328_100918.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100918.jpg
+id6,20260328_100920.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100920.jpg
+id6,20260328_100926.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100926.jpg
+id6,20260328_100929.jpg,plant,vanda,moderate,many,moderate,no,unknown,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_100929.jpg
+id7,20260328_101004_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101004_HDR.jpg
+id7,20260328_101028_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101028_HDR.jpg
+id7,20260328_101031_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101031_HDR.jpg
+id7,20260328_101033_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101033_HDR.jpg
+id7,20260328_101038_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101038_HDR.jpg
+id7,20260328_101042_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101042_HDR.jpg
+id7,20260328_101045_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101045_HDR.jpg
+id7,20260328_101049_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101049_HDR.jpg
+id7,20260328_101056_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101056_HDR.jpg
+id7,20260328_101059_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101059_HDR.jpg
+id7,20260328_101105_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101105_HDR.jpg
+id7,20260328_101108_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101108_HDR.jpg
+id7,20260328_101112_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101112_HDR.jpg
+id7,20260328_101115_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101115_HDR.jpg
+id7,20260328_101118_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101118_HDR.jpg
+id7,20260328_101121_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101121_HDR.jpg
+id7,20260328_101125_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101125_HDR.jpg
+id7,20260328_101128_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101128_HDR.jpg
+id7,20260328_101131_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101131_HDR.jpg
+id7,20260328_101138_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101138_HDR.jpg
+id7,20260328_101141_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101141_HDR.jpg
+id7,20260328_101143_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101143_HDR.jpg
+id8,20260328_101154.jpg,plant,vanda,moderate,many,strong,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101154.jpg
+id8,20260328_101157.jpg,plant,vanda,moderate,many,strong,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101157.jpg
+id9,20260328_101259_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101259_HDR.jpg
+id9,20260328_101302_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101302_HDR.jpg
+id9,20260328_101306_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101306_HDR.jpg
+id9,20260328_101310_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101310_HDR.jpg
+id9,20260328_101326_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101326_HDR.jpg
+id9,20260328_101330_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101330_HDR.jpg
+id9,20260328_101335_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101335_HDR.jpg
+id9,20260328_101340_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101340_HDR.jpg
+id9,20260328_101344_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101344_HDR.jpg
+id9,20260328_101348_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101348_HDR.jpg
+id9,20260328_101354_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101354_HDR.jpg
+id9,20260328_101359_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101359_HDR.jpg
+id9,20260328_101402_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101402_HDR.jpg
+id9,20260328_101405_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101405_HDR.jpg
+id9,20260328_101408_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101408_HDR.jpg
+id9,20260328_101411_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101411_HDR.jpg
+id9,20260328_101413_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101413_HDR.jpg
+id10,20260328_101426_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101426_HDR.jpg
+id10,20260328_101428_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101428_HDR.jpg
+id10,20260328_101516_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101516_HDR.jpg
+id10,20260328_101521_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101521_HDR.jpg
+id10,20260328_101523_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101523_HDR.jpg
+id10,20260328_101535_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101535_HDR.jpg
+id10,20260328_101537_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101537_HDR.jpg
+id10,20260328_101822_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101822_HDR.jpg
+id11,20260328_101831_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101831_HDR.jpg
+id11,20260328_101834_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101834_HDR.jpg
+id11,20260328_101837_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101837_HDR.jpg
+id11,20260328_101840_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101840_HDR.jpg
+id11,20260328_101842_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101842_HDR.jpg
+id11,20260328_101854_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101854_HDR.jpg
+id11,20260328_101857_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101857_HDR.jpg
+id11,20260328_101902_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101902_HDR.jpg
+id11,20260328_101907_HDR.jpg,plant,vanda,moderate,many,moderate,yes,moderate,Moderate,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101907_HDR.jpg
+id12,20260328_101924_HDR.jpg,plant,vanda,weak,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101924_HDR.jpg
+id12,20260328_101927_HDR.jpg,plant,vanda,weak,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101927_HDR.jpg
+id12,20260328_101939_HDR.jpg,plant,vanda,weak,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_101939_HDR.jpg
+id13,20260328_102209.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102209.jpg
+id13,20260328_102214.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102214.jpg
+id13,20260328_102218.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102218.jpg
+id13,20260328_102222.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102222.jpg
+id13,20260328_102223.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102223.jpg
+id13,20260328_102233.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102233.jpg
+id13,20260328_102243.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102243.jpg
+id14,20260328_102251.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102251.jpg
+id14,20260328_102254.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102254.jpg
+id14,20260328_102257.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102257.jpg
+id14,20260328_102307.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102307.jpg
+id14,20260328_102311.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102311.jpg
+id14,20260328_102316.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102316.jpg
+id14,20260328_102322.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102322.jpg
+id14,20260328_102329.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102329.jpg
+id14,20260328_102354.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102354.jpg
+id14,20260328_102357.jpg,plant,vanda,weak,many,weak,yes,weak,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102357.jpg
+id15,20260328_102959_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_102959_HDR.jpg
+id15,20260328_103001_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103001_HDR.jpg
+id15,20260328_103003_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103003_HDR.jpg
+id15,20260328_103005_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103005_HDR.jpg
+id15,20260328_103007_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103007_HDR.jpg
+id15,20260328_103014_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103014_HDR.jpg
+id15,20260328_103016_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103016_HDR.jpg
+id15,20260328_103022_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103022_HDR.jpg
+id15,20260328_103024_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103024_HDR.jpg
+id15,20260328_103035_HDR.jpg,plant,vanda,healthy,many,strong,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103035_HDR.jpg
+id16,20260328_103202_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103202_HDR.jpg
+id16,20260328_103204_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103204_HDR.jpg
+id16,20260328_103206_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103206_HDR.jpg
+id16,20260328_103208_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103208_HDR.jpg
+id16,20260328_103237_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103237_HDR.jpg
+id16,20260328_103239_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103239_HDR.jpg
+id16,20260328_103241_HDR.jpg,plant,vanda,weak,many,weak,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103241_HDR.jpg
+id17,20260328_103614_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103614_HDR.jpg
+id17,20260328_103623_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103623_HDR.jpg
+id17,20260328_103626_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103626_HDR.jpg
+id17,20260328_103629_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103629_HDR.jpg
+id17,20260328_103631_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103631_HDR.jpg
+id17,20260328_103635_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103635_HDR.jpg
+id17,20260328_103638_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103638_HDR.jpg
+id17,20260328_103641_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103641_HDR.jpg
+id17,20260328_103645_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103645_HDR.jpg
+id17,20260328_103650_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103650_HDR.jpg
+id17,20260328_103653_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103653_HDR.jpg
+id17,20260328_103658_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103658_HDR.jpg
+id17,20260328_103704_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103704_HDR.jpg
+id17,20260328_103707_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103707_HDR.jpg
+id17,20260328_103712_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103712_HDR.jpg
+id18,20260328_103724.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103724.jpg
+id18,20260328_103728_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103728_HDR.jpg
+id18,20260328_103730_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103730_HDR.jpg
+id18,20260328_103733_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103733_HDR.jpg
+id18,20260328_103734.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103734.jpg
+id18,20260328_103738_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103738_HDR.jpg
+id18,20260328_103741_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103741_HDR.jpg
+id18,20260328_103745_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103745_HDR.jpg
+id18,20260328_103749_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103749_HDR.jpg
+id18,20260328_103752.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103752.jpg
+id19,20260328_103809.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103809.jpg
+id19,20260328_103824_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103824_HDR.jpg
+id19,20260328_103827_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103827_HDR.jpg
+id19,20260328_103831_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103831_HDR.jpg
+id19,20260328_103834_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103834_HDR.jpg
+id19,20260328_103839_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103839_HDR.jpg
+id19,20260328_103844_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103844_HDR.jpg
+id19,20260328_103847_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103847_HDR.jpg
+id19,20260328_103851_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103851_HDR.jpg
+id19,20260328_103857_HDR.jpg,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103857_HDR.jpg
+id20,20260328_103909.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103909.jpg
+id20,20260328_103913.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103913.jpg
+id20,20260328_103916_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103916_HDR.jpg
+id20,20260328_103918.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103918.jpg
+id20,20260328_103920.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103920.jpg
+id20,20260328_103924.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103924.jpg
+id20,20260328_103926.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103926.jpg
+id20,20260328_103928.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103928.jpg
+id20,20260328_103930.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103930.jpg
+id20,20260328_103933.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103933.jpg
+id20,20260328_103935.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103935.jpg
+id20,20260328_103938.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103938.jpg
+id20,20260328_103940.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103940.jpg
+id20,20260328_103944.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103944.jpg
+id20,20260328_103947.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103947.jpg
+id20,20260328_103951.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_103951.jpg
+id20,20260328_104001_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104001_HDR.jpg
+id20,20260328_104003_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104003_HDR.jpg
+id20,20260328_104006_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104006_HDR.jpg
+id20,20260328_104010_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104010_HDR.jpg
+id20,20260328_104021_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104021_HDR.jpg
+id20,20260328_104025_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104025_HDR.jpg
+id20,20260328_104029_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104029_HDR.jpg
+id20,20260328_104032_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104032_HDR.jpg
+id20,20260328_104035_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104035_HDR.jpg
+id20,20260328_104038_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104038_HDR.jpg
+id20,20260328_104041_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104041_HDR.jpg
+id20,20260328_104046_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104046_HDR.jpg
+id20,20260328_104048_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104048_HDR.jpg
+id20,20260328_104051_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104051_HDR.jpg
+id20,20260328_104056_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104056_HDR.jpg
+id20,20260328_104059_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104059_HDR.jpg
+id20,20260328_104113_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104113_HDR.jpg
+id20,20260328_104115_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104115_HDR.jpg
+id20,20260328_104117_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104117_HDR.jpg
+id20,20260328_104119.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104119.jpg
+id20,20260328_104122.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104122.jpg
+id20,20260328_104124.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104124.jpg
+id20,20260328_104130_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104130_HDR.jpg
+id20,20260328_104135.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104135.jpg
+id20,20260328_104139_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104139_HDR.jpg
+id20,20260328_104142_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104142_HDR.jpg
+id20,20260328_104145_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104145_HDR.jpg
+id20,20260328_104149_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104149_HDR.jpg
+id20,20260328_104158_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104158_HDR.jpg
+id20,20260328_104200_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104200_HDR.jpg
+id20,20260328_104205_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104205_HDR.jpg
+id20,20260328_104208_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104208_HDR.jpg
+id20,20260328_104211_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104211_HDR.jpg
+id20,20260328_104214_HDR.jpg,plant,vanda,moderate,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104214_HDR.jpg
+id21,20260328_104226_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104226_HDR.jpg
+id21,20260328_104229_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104229_HDR.jpg
+id21,20260328_104233_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104233_HDR.jpg
+id21,20260328_104236_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104236_HDR.jpg
+id21,20260328_104239_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104239_HDR.jpg
+id21,20260328_104242_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104242_HDR.jpg
+id21,20260328_104246_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104246_HDR.jpg
+id21,20260328_104249_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104249_HDR.jpg
+id21,20260328_104252_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104252_HDR.jpg
+id21,20260328_104257_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104257_HDR.jpg
+id21,20260328_104300_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104300_HDR.jpg
+id21,20260328_104333_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104333_HDR.jpg
+id21,20260328_104336_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104336_HDR.jpg
+id21,20260328_104340_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104340_HDR.jpg
+id21,20260328_104344_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104344_HDR.jpg
+id22,20260328_104618_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104618_HDR.jpg
+id22,20260328_104619_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104619_HDR.jpg
+id22,20260328_104623_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104623_HDR.jpg
+id22,20260328_104625_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104625_HDR.jpg
+id22,20260328_104628_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104628_HDR.jpg
+id22,20260328_104631_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104631_HDR.jpg
+id22,20260328_104636_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104636_HDR.jpg
+id22,20260328_104639_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104639_HDR.jpg
+id22,20260328_104643_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104643_HDR.jpg
+id22,20260328_104647_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104647_HDR.jpg
+id22,20260328_104652_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104652_HDR.jpg
+id22,20260328_104655_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104655_HDR.jpg
+id22,20260328_104659_HDR.jpg,plant,vanda,moderate,many,moderate,unknown,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104659_HDR.jpg
+id22,20260328_104702_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104702_HDR.jpg
+id22,20260328_104712_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_104712_HDR.jpg
+id23,20260328_105132.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105132.jpg
+id23,20260328_105134.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105134.jpg
+id23,20260328_105137.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105137.jpg
+id23,20260328_105140.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105140.jpg
+id23,20260328_105141.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105141.jpg
+id23,20260328_105144.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105144.jpg
+id23,20260328_105146.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105146.jpg
+id23,20260328_105148.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105148.jpg
+id23,20260328_105158.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105158.jpg
+id23,20260328_105200.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105200.jpg
+id23,20260328_105204.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105204.jpg
+id23,20260328_105205.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105205.jpg
+id23,20260328_105207.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105207.jpg
+id23,20260328_105213.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105213.jpg
+id23,20260328_105215.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105215.jpg
+id23,20260328_105225_HDR.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105225_HDR.jpg
+id23,20260328_105228_HDR.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105228_HDR.jpg
+id23,20260328_105231_HDR.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105231_HDR.jpg
+id23,20260328_105235_HDR.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105235_HDR.jpg
+id23,20260328_105237.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105237.jpg
+id23,20260328_105241.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105241.jpg
+id23,20260328_105245.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105245.jpg
+id23,20260328_105307.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105307.jpg
+id23,20260328_105310.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105310.jpg
+id23,20260328_105415.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105415.jpg
+id23,20260328_105420.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105420.jpg
+id23,20260328_105423_HDR.jpg,plant,vanda,moderate,many,moderate,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105423_HDR.jpg
+id24,20260328_105458_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105458_HDR.jpg
+id24,20260328_105500_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105500_HDR.jpg
+id24,20260328_105510_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105510_HDR.jpg
+id24,20260328_105519_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105519_HDR.jpg
+id24,20260328_105522_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105522_HDR.jpg
+id24,20260328_105527.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105527.jpg
+id24,20260328_105529_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105529_HDR.jpg
+id24,20260328_105532_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105532_HDR.jpg
+id24,20260328_105537_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105537_HDR.jpg
+id24,20260328_105540_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105540_HDR.jpg
+id24,20260328_105543.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105543.jpg
+id24,20260328_105545.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105545.jpg
+id24,20260328_105548.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105548.jpg
+id24,20260328_105555_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105555_HDR.jpg
+id24,20260328_105557.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105557.jpg
+id24,20260328_105604_HDR.jpg,plant,vanda,moderate,many,moderate,yes,unknown,Not Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\20260328_105604_HDR.jpg
+id25,IMG_3331.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3331.JPG
+id25,IMG_3332.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3332.JPG
+id25,IMG_3333.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3333.JPG
+id25,IMG_3334.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3334.JPG
+id25,IMG_3335.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3335.JPG
+id25,IMG_3336.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3336.JPG
+id25,IMG_3337.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3337.JPG
+id25,IMG_3338.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3338.JPG
+id25,IMG_3339.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3339.JPG
+id25,IMG_3340.JPG,plant,vanda,healthy,many,moderate,no,unknown,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3340.JPG
+id28,IMG_3350.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3350.JPG
+id29,IMG_3373.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3373.JPG
+id29,IMG_3374.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3374.JPG
+id29,IMG_3375.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3375.JPG
+id30,IMG_3404.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3404.JPG
+id30,IMG_3405.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3405.JPG
+id30,IMG_3406.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3406.JPG
+id30,IMG_3407.JPG,plant,vanda,healthy,many,strong,no,good,Suitable,C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\data\images\plants\IMG_3407.JPG

@@ -1,0 +1,681 @@
+﻿sample_id,image_name,image_type,species,leaf_condition,leaf_count,plant_strength,disease_visible,flower_condition,suitability_label
+id1,20260328_100120_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100122_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100123_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100126_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100128_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100130_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100132_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100134_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100139_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100141_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100144_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100147_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100149_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100154_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100157_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100158_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100200_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100202_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id1,20260328_100204_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100220_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100222_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100224_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100226_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100229_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100231_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100233_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100236_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100239_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100243_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id2,20260328_100245_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100258_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100300_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100302_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100304_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100308_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100351_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id3,20260328_100354_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100551_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100554_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100557_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100559_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100601_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100603_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100607_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100615_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id4,20260328_100618_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id5,20260328_100623_HDR.jpg,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id5,20260328_100625_HDR.jpg,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id5,20260328_100629_HDR.jpg,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id5,20260328_100632_HDR.jpg,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id5,20260328_100637_HDR.jpg,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id6,20260328_100646_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100649_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100654_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100658_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100745_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100747_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100750_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100759_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100802_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100806_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100810_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100813_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100817_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100820_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100824_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100827_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100833.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100835.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100838_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100843.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100845.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100847.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100849.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100851.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100855.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100902.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100905.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100908.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100910.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100912.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100915.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100918.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100920.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100926.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id6,20260328_100929.jpg,plant,Vanda,moderate,many,moderate,no,unknown,moderate
+id7,20260328_101004_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101028_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101031_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101033_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101038_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101042_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101045_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101049_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101056_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101059_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101105_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101108_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101112_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101115_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101118_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101121_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101125_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101128_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101131_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101138_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101141_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id7,20260328_101143_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id8,20260328_101154.jpg,plant,Vanda,moderate,many,strong,yes,unknown,Not  Suitable
+id8,20260328_101157.jpg,plant,Vanda,moderate,many,strong,yes,unknown,Not  Suitable
+id9,20260328_101259_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101302_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101306_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101310_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101326_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101330_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101335_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101340_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101344_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101348_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101354_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101359_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101402_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101405_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101408_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101411_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id9,20260328_101413_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101426_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101428_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101516_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101521_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101523_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101535_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101537_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id10,20260328_101822_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id11,20260328_101831_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101834_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101837_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101840_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101842_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101854_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101857_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101902_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id11,20260328_101907_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,moderate,moderate
+id12,20260328_101924_HDR.jpg,plant,Vanda,weak,many,moderate,yes,unknown,Not  Suitable
+id12,20260328_101927_HDR.jpg,plant,Vanda,weak,many,moderate,yes,unknown,Not  Suitable
+id12,20260328_101939_HDR.jpg,plant,Vanda,weak,many,moderate,yes,unknown,Not  Suitable
+id13,20260328_102209.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102214.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102218.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102222.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102223.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102233.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id13,20260328_102243.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102251.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102254.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102257.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102307.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102311.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102316.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102322.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102329.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102354.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id14,20260328_102357.jpg,plant,Vanda,weak,many,weak,yes,weak,Not  Suitable
+id15,20260328_102959_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103001_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103003_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103005_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103007_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103014_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103016_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103022_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103024_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id15,20260328_103035_HDR.jpg,plant,Vanda,healthy,many,strong,no,unknown,Suitable
+id16,20260328_103202_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103204_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103206_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103208_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103237_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103239_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id16,20260328_103241_HDR.jpg,plant,Vanda,weak,many,weak,yes,unknown,Not  Suitable
+id17,20260328_103614_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103623_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103626_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103629_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103631_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103635_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103638_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103641_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103645_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103650_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103653_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103658_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103704_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103707_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id17,20260328_103712_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id18,20260328_103724.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103728_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103730_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103733_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103734.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103738_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103741_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103745_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103749_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id18,20260328_103752.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id19,20260328_103809.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103824_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103827_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103831_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103834_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103839_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103844_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103847_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103851_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id19,20260328_103857_HDR.jpg,plant,Vanda,healthy,many,strong,no,good,Suitable
+id20,20260328_103909.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103913.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103916_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103918.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103920.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103924.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103926.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103928.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103930.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103933.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103935.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103938.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103940.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103944.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103947.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_103951.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104001_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104003_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104006_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104010_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104021_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104025_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104029_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104032_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104035_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104038_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104041_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104046_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104048_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104051_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104056_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104059_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104113_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104115_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104117_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104119.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104122.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104124.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104130_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104135.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104139_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104142_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104145_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104149_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104158_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104200_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104205_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104208_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104211_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id20,20260328_104214_HDR.jpg,plant,Vanda,moderate,many,moderate,no,unknown,Suitable
+id21,20260328_104226_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104229_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104233_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104236_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104239_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104242_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104246_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104249_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104252_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104257_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104300_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104333_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104336_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104340_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id21,20260328_104344_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104618_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104619_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104623_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104625_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104628_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104631_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104636_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104639_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104643_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104647_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104652_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104655_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104659_HDR.jpg,plant,Vanda,moderate,many,moderate,,unknown,Not  Suitable
+id22,20260328_104702_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id22,20260328_104712_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id23,20260328_105132.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105134.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105137.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105140.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105141.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105144.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105146.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105148.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105158.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105200.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105204.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105205.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105207.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105213.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105215.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105225_HDR.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105228_HDR.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105231_HDR.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105235_HDR.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105237.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105241.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105245.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105307.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105310.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105415.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105420.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id23,20260328_105423_HDR.jpg,plant,Vanda,moderate,many,moderate,no,good,Suitable
+id24,20260328_105458_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105500_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105510_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105519_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105522_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105527.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105529_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105532_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105537_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105540_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105543.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105545.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105548.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105555_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105557.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id24,20260328_105604_HDR.jpg,plant,Vanda,moderate,many,moderate,yes,unknown,Not  Suitable
+id25,IMG_3331.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3332.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3333.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3334.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3335.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3336.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3337.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3338.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3339.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id25,IMG_3340.JPG,plant,Vanda,healthy,many,moderate,no,unknown,Suitable
+id26,IMG_3341.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3342.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3343.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3344.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3345.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3346.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3347.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3348.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id26,IMG_3349.DNG,plant,Vanda,weak,many,moderate,no,unknown,Not  Suitable
+id28,IMG_3350.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3351.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3352.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3353.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3354.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3355.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id28,IMG_3356.DNG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id29,IMG_3373.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id29,IMG_3374.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id29,IMG_3375.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id30,IMG_3404.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id30,IMG_3405.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id30,IMG_3406.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+id30,IMG_3407.JPG,plant,Vanda,healthy,many,strong,no,good,Suitable
+,flower_001.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_002.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_003.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_004.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_005.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_006.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_007.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_008.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_009.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_010.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_011.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_012.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_013.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_014.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_015.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_016.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_017.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_018.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_019.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_020.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_021.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_022.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_023.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_024.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_025.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_026.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_027.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_028.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_029.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_030.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_031.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_032.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_033.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_034.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_035.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_036.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_037.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_038.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_039.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_040.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_041.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_042.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_043.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_044.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_045.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_046.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_047.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_048.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_049.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_050.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_051.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_052.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_053.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_054.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_055.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_056.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_057.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_058.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_059.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_060.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_061.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_062.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_063.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_064.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_065.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_066.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_067.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_068.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_069.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_070.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_071.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_072.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_073.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_074.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_075.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_076.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_077.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_078.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_079.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_080.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_081.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_082.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_083.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_084.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_085.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_086.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_087.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_088.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_089.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_090.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_091.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_092.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_093.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_094.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_095.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_096.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_097.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_098.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_099.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_100.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_101.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_102.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_103.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_104.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_105.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_106.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_107.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_108.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_109.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_110.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_111.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_112.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_113.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_114.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_115.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_116.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_117.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_118.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_119.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_120.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_121.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_122.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_123.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_124.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_125.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_126.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_127.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_128.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_129.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_130.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_131.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_132.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_133.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_134.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_135.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_136.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_137.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_138.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_139.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_140.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_141.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_142.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_143.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_144.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_145.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_146.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_147.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_148.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_149.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_150.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_151.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_152.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_153.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_154.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_155.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_156.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_157.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_158.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_159.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_160.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_161.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_162.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_163.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_164.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_165.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_166.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_167.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_168.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_169.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_170.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_171.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_172.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_173.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_174.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_175.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_176.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_177.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_178.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_179.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_180.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_181.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_182.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_183.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_184.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_185.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_186.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_187.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_188.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_189.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_190.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_191.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_192.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_193.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_194.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_195.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_196.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_197.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_198.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_199.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_200.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_201.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_202.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_203.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_204.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_205.png,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_206.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_207.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_208.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_209.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_210.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_211.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_212.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_213.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_214.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_215.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_216.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_217.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_218.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_219.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_220.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_221.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_222.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_223.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_224.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_225.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_226.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_227.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_228.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_229.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_230.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_231.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_232.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_233.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_234.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_235.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_236.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_237.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_238.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_239.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_240.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_241.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_242.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_243.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_244.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_245.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_246.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_247.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_248.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_249.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_250.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_251.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_252.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_253.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_254.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_255.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_256.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_257.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_258.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_259.png,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_260.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_261.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_262.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_263.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_264.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_265.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_266.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_267.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_268.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_269.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_270.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_271.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_272.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_273.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_274.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_275.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_276.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_277.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_278.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_279.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_280.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_281.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_282.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_283.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_284.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_285.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_286.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_287.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_288.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_289.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_290.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_291.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_292.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_293.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_294.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_295.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_296.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_297.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_298.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_299.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,flower_300.jpg,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3358.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3359.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3360.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3361.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3362.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3364.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3365.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable
+,IMG_3366.DNG,flower,Vanda,unknown,unknown,unknown,no,good,Suitable

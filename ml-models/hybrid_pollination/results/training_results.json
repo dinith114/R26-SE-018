@@ -1,0 +1,129 @@
+{
+  "timestamp": "2026-05-10T21:12:59.463064",
+  "best_model": "SVM (RBF)",
+  "dataset_info": {
+    "train_samples": 249,
+    "val_samples": 54,
+    "test_samples": 54,
+    "num_features": 66,
+    "classes": [
+      "Moderate",
+      "Not Suitable",
+      "Suitable"
+    ]
+  },
+  "models": {
+    "Random Forest": {
+      "train_accuracy": 1.0,
+      "val_accuracy": 0.963,
+      "test_accuracy": 0.963,
+      "val_f1": 0.9604,
+      "test_f1": 0.9604,
+      "test_precision": 0.9648,
+      "test_recall": 0.963,
+      "cv_mean": 0.9639,
+      "cv_std": 0.0078,
+      "confusion_matrix": [
+        [
+          5,
+          1,
+          1
+        ],
+        [
+          0,
+          13,
+          0
+        ],
+        [
+          0,
+          0,
+          34
+        ]
+      ]
+    },
+    "SVM (RBF)": {
+      "train_accuracy": 1.0,
+      "val_accuracy": 1.0,
+      "test_accuracy": 1.0,
+      "val_f1": 1.0,
+      "test_f1": 1.0,
+      "test_precision": 1.0,
+      "test_recall": 1.0,
+      "cv_mean": 0.9839,
+      "cv_std": 0.015,
+      "confusion_matrix": [
+        [
+          7,
+          0,
+          0
+        ],
+        [
+          0,
+          13,
+          0
+        ],
+        [
+          0,
+          0,
+          34
+        ]
+      ]
+    },
+    "Logistic Regression": {
+      "train_accuracy": 1.0,
+      "val_accuracy": 0.963,
+      "test_accuracy": 0.963,
+      "val_f1": 0.9632,
+      "test_f1": 0.9632,
+      "test_precision": 0.9643,
+      "test_recall": 0.963,
+      "cv_mean": 0.9679,
+      "cv_std": 0.0159,
+      "confusion_matrix": [
+        [
+          6,
+          1,
+          0
+        ],
+        [
+          0,
+          13,
+          0
+        ],
+        [
+          1,
+          0,
+          33
+        ]
+      ]
+    },
+    "XGBoost": {
+      "train_accuracy": 1.0,
+      "val_accuracy": 0.963,
+      "test_accuracy": 0.9815,
+      "val_f1": 0.9604,
+      "test_f1": 0.9809,
+      "test_precision": 0.982,
+      "test_recall": 0.9815,
+      "cv_mean": 0.9639,
+      "cv_std": 0.0233,
+      "confusion_matrix": [
+        [
+          6,
+          0,
+          1
+        ],
+        [
+          0,
+          13,
+          0
+        ],
+        [
+          0,
+          0,
+          34
+        ]
+      ]
+    }
+  }
+}

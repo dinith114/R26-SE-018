@@ -43,6 +43,7 @@ mlruns/
 ml-models/*/data/raw/
 ml-models/*/data/raw.zip
 ml-models/*/data/processed/
+ml-models/*/data/images/
 datasets/
 
 # Raw annotated photos for the object detector (~300MB) - regenerate the

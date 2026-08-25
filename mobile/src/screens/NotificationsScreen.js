@@ -8,6 +8,7 @@ import ScreenHeader from '../components/ScreenHeader';
 
 const NotificationsScreen = ({ navigation }) => {
   const [prediction, setPrediction] = useState(null);
+  const [hybridPrediction, setHybridPrediction] = useState(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -17,7 +18,14 @@ const NotificationsScreen = ({ navigation }) => {
       const val = snapshot.val();
       if (val) setPrediction(val);
     });
-    return () => unsub();
+
+    const hybridRef = ref(database, 'hybridPrediction');
+    const unsubHybrid = onValue(hybridRef, (snapshot) => {
+      const val = snapshot.val();
+      if (val) setHybridPrediction(val);
+    });
+
+    return () => { unsub(); unsubHybrid(); };
   }, []);
 
   const needsWater = prediction?.waterNeeded === 'Yes';
@@ -37,7 +45,8 @@ const NotificationsScreen = ({ navigation }) => {
       message: `Soil moisture is low. The ML model recommends watering now with ${prediction?.confidence?.toFixed(0) || '--'}% confidence.`,
       time: prediction?.timestamp || 'Just now',
       action: 'Go to Care',
-      route: 'Care',
+      route: 'MainTabs',
+      params: { screen: 'Care' },
     });
   }
 
@@ -51,7 +60,8 @@ const NotificationsScreen = ({ navigation }) => {
       message: 'Nutrient levels are depleted based on soil moisture, temperature, and time since last application.',
       time: prediction?.timestamp || 'Just now',
       action: 'Go to Care',
-      route: 'Care',
+      route: 'MainTabs',
+      params: { screen: 'Care' },
     });
   }
 
@@ -104,6 +114,21 @@ const NotificationsScreen = ({ navigation }) => {
       title: 'All Optimal',
       message: 'No watering or fertilizing action required at this time. All conditions are within optimal ranges.',
       time: 'Now',
+    });
+  }
+
+  if (hybridPrediction) {
+    notifications.push({
+      id: 'ml_hybrid',
+      type: 'info',
+      icon: 'leaf-outline',
+      color: COLORS.primary,
+      title: 'Pollination Assessment Updated',
+      message: `Latest assessment: ${hybridPrediction.label} (${hybridPrediction.confidence?.toFixed(0)}% confidence)`,
+      time: hybridPrediction.timestamp || '--',
+      action: 'View',
+      route: 'MainTabs',
+      params: { screen: 'Hybrid' },
     });
   }
 
@@ -172,7 +197,7 @@ const NotificationsScreen = ({ navigation }) => {
                     {notif.action && (
                       <TouchableOpacity
                         style={styles.notifAction}
-                        onPress={() => navigation.navigate(notif.route)}
+                        onPress={() => navigation.navigate(notif.route, notif.params)}
                         activeOpacity={0.6}
                       >
                         <Text style={[styles.notifActionText, { color: notif.color }]}>{notif.action}</Text>
