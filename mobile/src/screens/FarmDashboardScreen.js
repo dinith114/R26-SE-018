@@ -299,7 +299,8 @@ export default function FarmDashboardScreen({ navigation }) {
                                 so they kept signalling good or bad. */}
                             <Text style={[styles.envVal, { color: good ? col : COLORS.textTertiary }]}
                               numberOfLines={1}>{val}</Text>
-                            <Text style={styles.envLbl}>{lbl}</Text>
+                            <Text style={styles.envLbl} numberOfLines={1}
+                              adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{lbl}</Text>
                           </View>
                         ))}
                       </View>

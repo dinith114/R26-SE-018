@@ -95,7 +95,8 @@ const HomeScreen = ({ navigation }) => {
                 <View style={[styles.navIcon, { backgroundColor: `${item.color}12` }]}>
                   <Ionicons name={item.icon} size={18} color={item.color} />
                 </View>
-                <Text style={styles.navLabel}>{item.label}</Text>
+                <Text style={styles.navLabel} numberOfLines={1}
+                  adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{item.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -153,7 +154,8 @@ const HomeScreen = ({ navigation }) => {
                   <View key={i} style={[styles.tile, SHADOW.sm]}>
                     <Ionicons name={ic} size={16} color={c} />
                     <Text style={[styles.tileVal, { color: c }]}>{v}<Text style={styles.tileUnit}>{u}</Text></Text>
-                    <Text style={styles.tileLbl}>{l}</Text>
+                    <Text style={styles.tileLbl} numberOfLines={1}
+                      adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{l}</Text>
                   </View>
                 ))}
               </View>
