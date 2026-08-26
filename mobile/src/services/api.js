@@ -5,14 +5,7 @@
  * Handles communication with the FastAPI backend.
  */
 
-const getBaseUrl = () => {
-  // If you test on a physical phone using Expo Go, change this to your PC's IP address
-  if (Platform.OS === 'web') return 'http://localhost:8000';
-  // Use the exact IP address of this computer for physical devices to connect over Wi-Fi
-  return 'http://192.168.1.129:8000';
-};
-
-const BASE_URL = getBaseUrl();
+import BASE_URL from '../config/backend';
 const API_PREFIX = '/api/v1/pollination';
 
 /**

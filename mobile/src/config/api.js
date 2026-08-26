@@ -1,44 +1,15 @@
 /**
- * API Configuration
- * Component: Orchid Growth Stage Recognition
+ * API configuration for Component 2 (growth stage and bloom prediction).
+ *
+ * The backend address is NOT chosen here any more. This module used to pick
+ * ENV.DEV.ANDROID_URL (10.0.2.2) on Android - the emulator's alias for the host
+ * machine, unreachable from a real phone - and in a release build __DEV__ is
+ * false, so it fell through to a 'your-api-domain.com' placeholder. Either way
+ * this component could not reach the backend from an installed APK.
+ *
+ * One constant now, shared with every other screen and service.
  */
-import { Platform } from 'react-native';
-
-// For different environments
-const ENV = {
-    DEV: {
-        BASE_URL: 'http://localhost:8000',        // For iOS simulator
-        ANDROID_URL: 'http://10.0.2.2:8000',      // For Android emulator
-        LOCAL_URL: 'http://192.168.1.129:8000'    // this laptop; keep in step with careV2.js
-    },
-    PROD: {
-        BASE_URL: 'https://your-api-domain.com'   // For production
-    }
-};
-
-// Detect platform
-const isAndroid = Platform.OS === 'android';
-
-// Choose base URL
-// react-native-device-info isn't a project dependency, so emulator vs. physical
-// device can't be auto-detected. Defaults to the Android emulator address;
-// switch to ENV.DEV.LOCAL_URL manually when testing on a physical Android device.
-let BASE_URL;
-if (Platform.OS === 'web') {
-    BASE_URL = ENV.DEV.BASE_URL;
-} else {
-    /* The LAN address, on device and in release alike.
-   
-       This used to pick ENV.DEV.ANDROID_URL (10.0.2.2) on Android, which is the
-       emulator's alias for the host machine and unreachable from a real phone;
-       and in a RELEASE build __DEV__ is false, so it fell through to
-       ENV.PROD.BASE_URL - the 'your-api-domain.com' placeholder. Either way this
-       component could not reach the backend from the APK on a physical device.
-   
-       Kept in step with LAN_IP in services/careV2.js. Both must be updated when
-       the laptop's address changes; `node preflight.js` prints it. */
-    BASE_URL = ENV.DEV.LOCAL_URL;
-}
+import BASE_URL from './backend';
 
 export const API_CONFIG = {
     BASE_URL: BASE_URL,

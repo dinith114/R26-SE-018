@@ -9,7 +9,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const BASE_URL  = Platform.OS === 'web' ? 'http://localhost:8000' : 'http://192.168.1.129:8000';
+import BASE_URL from '../config/backend';
 const GRID_RES  = 0.5;
 const WALLS     = ['north', 'south', 'east', 'west'];
 const WALL_COLOR = { north: COLORS.info, south: COLORS.warning, east: COLORS.primary, west: COLORS.fertilizer };
