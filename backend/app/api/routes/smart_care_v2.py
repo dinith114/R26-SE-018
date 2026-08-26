@@ -33,6 +33,10 @@ state, which made the app take seconds to show anything. Keep them apart.
 import math
 import os
 import pickle
+# joblib, not pickle, for the v2 bundles: they are stored compressed so the
+# backend can be deployed without shipping 1.7 GB. joblib.load reads a plain
+# pickle too, so restoring an uncompressed backup still works.
+import joblib
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,12 +71,9 @@ _fert:  Optional[dict] = None
 
 def _load_v2():
     global _water, _tray, _fert
-    with open(os.path.join(_MODEL_DIR, "watering_v2.pkl"), "rb") as f:
-        _water = pickle.load(f)
-    with open(os.path.join(_MODEL_DIR, "tray_v2.pkl"), "rb") as f:
-        _tray = pickle.load(f)
-    with open(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"), "rb") as f:
-        _fert = pickle.load(f)
+    _water = joblib.load(os.path.join(_MODEL_DIR, "watering_v2.pkl"))
+    _tray  = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
+    _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
     m = _water["metrics"]
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
           f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
@@ -104,6 +105,11 @@ SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
 # sooner than this after a fill is caused by dry air, not an empty tray — so we
 # refuse to refill and avoid a wasteful overflow loop.
 COOLDOWN_HOURS = 6.0
+
+# What "days since fertilized" means for a section that has never been fed
+# through the system. Deliberately at the Active-stage interval so it reads as
+# due once, is acted on, and then runs on real timestamps from that point.
+FERT_UNKNOWN_DAYS = 7.0
 
 
 # Physically possible ranges. A reading outside these means the sensor is
@@ -827,8 +833,12 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     # fertilization was invisible unless the user tapped that one button.)
     fert = _fert_decision(section)
     existing = (section or {}).get("fertilizer") or {}
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer.json",
-            {**existing, **fert, "updatedAt": plan["generatedAt"]})
+    # Nulls from the decision must not clobber what is already recorded. The
+    # decision is computed from a snapshot taken BEFORE this pass, so a feed
+    # recorded moments ago reads back as None here and would erase itself.
+    merged = {**existing, **{k: v for k, v in fert.items() if v is not None},
+              "updatedAt": plan["generatedAt"]}
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer.json", merged)
     plan["fertilizer"] = fert
     return plan
 
@@ -1004,7 +1014,11 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
         cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
         _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
-        _issue_node_command(house_id, section_id, "tray", secs)
+        node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
+        _log_event(house_id, section_id, section,
+                   action="tray", durationSec=secs, withFertilizer=False,
+                   by="auto", commandId=(node_cmd or {}).get("id"),
+                   confirmed=False)
         commanded = True
         msg += " Auto mode: filling now."
 
@@ -1029,13 +1043,110 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
 
 # ═══════════════════════ ML: fertilizer ═══════════════════════════════════════
 
+def _days_since_fertilized(section: dict) -> float:
+    """How long since this section was actually fed, in days.
+
+    Derived from a TIMESTAMP, not from a stored number.
+
+    The previous version read a plain `daysSince` integer that nothing ever
+    wrote. Three faults compounded:
+      * a number cannot advance with time, so it never grew;
+      * nothing reset it after a feed, so it never shrank;
+      * its default (7) equalled the Active-stage interval (7), so any section
+        created through the app was born "due" and stayed due forever.
+    The visible result was every single watering claiming to mix in plant food,
+    and a "Fertilizer due" alert that could never be cleared.
+    """
+    fert = (section or {}).get("fertilizer") or {}
+    now_ms = _device_now_ms(section)
+
+    ts = fert.get("lastFertilizedTs")
+    if ts:
+        hrs = _hours_since(ts, now_ms)
+        if hrs is not None:
+            return round(hrs / 24.0, 2)
+
+    # Never fed through the system. Fall back to whatever was seeded, and treat
+    # an absent value as "due now" rather than inventing a history - a section
+    # whose feeding is unknown SHOULD be flagged once, and recording the first
+    # feed then starts the clock properly.
+    try:
+        return float(fert.get("daysSince"))
+    except (TypeError, ValueError):
+        return float(FERT_UNKNOWN_DAYS)
+
+
+def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
+    """Start the clock. Called when a watering that CARRIES fertilizer is issued.
+
+    Recorded at issue rather than at the node's acknowledgement: an ack can be
+    lost, and feeding twice because a confirmation went missing is worse than
+    the small risk of counting a feed the pump never delivered. The farmer can
+    correct it from the section screen.
+    """
+    now_ms = _device_now_ms(section)
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedTs.json",
+            now_ms)
+    # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
+    # raised inside the request and turned every fertilised watering into a 500,
+    # after the timestamp above had already been written.
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedAt.json",
+            to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"))
+
+
+# How many events are kept per section. Events are written a handful of times a
+# day, so this is roughly a month of history - enough to answer "when was this
+# last watered and fed" without the document growing without bound.
+EVENT_KEEP = 60
+
+
+def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optional[str]:
+    """Record something that MOVED WATER, so it can be shown as history.
+
+    The only record before this was `watering/log/{day}-{tag}`, holding `{at,
+    by}`. It was written by the automatic path only, carried no duration and no
+    fertilizer detail, and was keyed by day so at most two entries survived per
+    day. There was no way to answer "when was this section last fed", which is
+    the question the fertilizer schedule depends on.
+
+    Keyed by epoch milliseconds so the keys sort chronologically.
+    """
+    now_ms = int(_device_now_ms(section))
+    ev = {"at": now_ms,
+          "atLocal": to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"),
+          **fields}
+    key = str(now_ms)
+    # OUTSIDE the section subtree, on its own branch.
+    #
+    # /farm/houses.json is the engine's hot path - fetched every 60 seconds, so
+    # 1,440 times a day. Anything stored inside a section is paid for on every
+    # one of those fetches. At 60 events per section this log would have added
+    # ~84 KB to a 23 KB document and taken the engine alone from 29 MB/day to
+    # about 147 MB. History was moved out of the section subtree for exactly
+    # this reason once already.
+    base = f"/farm/events/{house_id}/{section_id}"
+    if not _fb_put(f"{base}/{key}.json", ev):
+        return None
+
+    # Prune oldest beyond EVENT_KEEP. `shallow=true` returns keys only, so this
+    # costs a few hundred bytes rather than the whole log.
+    try:
+        keys = _fb_get(f"{base}.json?shallow=true") or {}
+        if len(keys) > EVENT_KEEP:
+            for old_key in sorted(keys, key=lambda k: int(k) if k.isdigit() else 0)[:len(keys) - EVENT_KEEP]:
+                _fb_delete(f"{base}/{old_key}.json")
+    except Exception:
+        pass          # a failed prune must never fail the watering
+    return key
+
+
 def _fert_decision(section: dict) -> dict:
     latest = _clean((section or {}).get("latest") or {})
     # Growth stage decides WHICH fertilizer — take it from Component 2 if it has
     # reported, else the farmer's setting, else a seasonal guess (and say so).
     gs     = _resolve_growth_stage(section)
     stage  = gs["stage"]
-    days   = float((section or {}).get("fertilizer", {}).get("daysSince", 7))
+    days   = _days_since_fertilized(section)
     now    = datetime.now(timezone.utc)
 
     # The farmer can switch plant food off entirely (e.g. they feed by hand).
@@ -1069,6 +1180,10 @@ def _fert_decision(section: dict) -> dict:
     npk = _fert["npk_encoder"].inverse_transform(_fert["model_npk"].predict(Xs))[0]
     strength = 0.5 if now.month not in (11, 12, 1, 2) and stage != "Dormant" else 0.25
 
+    # What this stage takes, regardless of whether a feed is due right now. The
+    # history needs it: a farmer who feeds early still mixed something, and
+    # recording "None" against a feed that happened is simply wrong.
+    npk_for_stage = npk
     if not due:
         npk = "None"
         nxt = _fert["schedule_days"].get(stage, 7) - days
@@ -1077,8 +1192,16 @@ def _fert_decision(section: dict) -> dict:
         msg = (f"Due now: {npk} at {int(strength*100)}% strength, "
                f"mixed into the next watering (never on dry roots).")
 
+    fert_rec = (section or {}).get("fertilizer") or {}
     return {"due": due, "npkType": npk, "strength": strength,
-            "daysSinceFertilize": days, "growthStage": stage,
+            "daysSinceFertilize": days,
+            # None until the first recorded feed, which the app shows as
+            # "not recorded yet" rather than inventing a date.
+            "npkForStage": npk_for_stage,
+            "lastFertilizedAt": fert_rec.get("lastFertilizedAt"),
+            "everFertilized": bool(fert_rec.get("lastFertilizedTs")),
+            "intervalDays": int(_fert["schedule_days"].get(stage, 7)),
+            "growthStage": stage,
             "growthSource": gs["source"], "growthMessage": gs["message"],
             "growthNeedsAttention": gs["needsAttention"],
             "growthConfidence": gs["confidence"],
@@ -1405,11 +1528,53 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
     node_cmd = _issue_node_command(house_id, section_id, "water",
                                    command["durationSec"],
                                    withFertilizer=command["withFertilizer"])
+    # Start the fertilizer clock. Without this the counter never moves, so every
+    # subsequent watering claims to mix in plant food and the "due" alert can
+    # never be cleared.
+    fert_now = _fert_decision(s) if command["withFertilizer"] else None
+    if command["withFertilizer"]:
+        _record_fertilized(house_id, section_id, s)
+    _log_event(house_id, section_id, s,
+               action="water",
+               durationSec=command["durationSec"],
+               withFertilizer=bool(command["withFertilizer"]),
+               npkType=((fert_now or {}).get("npkForStage")
+                        if command["withFertilizer"] else None),
+               strength=(fert_now or {}).get("strength") if command["withFertilizer"] else None,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),
             "message": (f"Watering for {command['durationSec']}s. The node picks "
                         "this up within about 15 seconds.")}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/events")
+def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
+    """Everything that moved water in this section, newest first.
+
+    Includes whether the node confirmed it. A command the server accepted and a
+    pour the hardware actually ran are different claims, and the history has to
+    show which one it is holding.
+    """
+    raw = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+    items = []
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            items.append({"id": k, **v})
+    items.sort(key=lambda x: x.get("at") or 0, reverse=True)
+
+    waters = [x for x in items if x.get("action") == "water"]
+    feeds  = [x for x in waters if x.get("withFertilizer")]
+    return {"status": "success",
+            "events": items[:max(1, min(limit, 200))],
+            "counts": {"total": len(items),
+                       "waterings": len(waters),
+                       "feeds": len(feeds)},
+            "lastWatered": waters[0]["atLocal"] if waters else None,
+            "lastFed": feeds[0]["atLocal"] if feeds else None}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/command-status")
@@ -1457,6 +1622,21 @@ def command_status(house_id: str, section_id: str,
     remaining = None
     if running and started_at:
         remaining = max(0, int(started_at) + int(secs) - int(time.time()))
+
+    # Stamp the outcome onto the event that started it. The app polls this
+    # throughout every manual run, so the history learns whether the node
+    # actually did the work without any extra request.
+    if matches and bool(ack.get("done")) and want:
+        try:
+            evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+            for k, v in evs.items():
+                if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
+                    ev = f"/farm/events/{house_id}/{section_id}/{k}"
+                    _fb_put(f"{ev}/confirmed.json", True)
+                    _fb_put(f"{ev}/stoppedEarly.json", bool(ack.get("stopped")))
+                    break
+        except Exception:
+            pass
 
     return {
         "status": "success",
@@ -1584,6 +1764,16 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
 
     node_cmd = _issue_node_command(house_id, section_id, "tray",
                                    command["fillSeconds"])
+    # Tray fills belong in the history too. Watering was logged and this was
+    # not, so the record answered "when was it watered" but never "when was the
+    # tray last topped up" - which is the other half of humidity control.
+    _log_event(house_id, section_id, s,
+               action="tray",
+               durationSec=command["fillSeconds"],
+               withFertilizer=False,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),

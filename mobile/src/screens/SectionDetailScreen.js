@@ -23,7 +23,7 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, lastSeenLabel, signalLabel,
-  stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
+  stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
 } from '../services/careV2';
 
@@ -45,6 +45,31 @@ function DropRow({ icon, label, value, onPress, disabled }) {
       <Text style={styles.dropValue}>{value}</Text>
       <Ionicons name="chevron-down" size={16} color={COLORS.textTertiary} />
     </TouchableOpacity>
+  );
+}
+
+/* A section heading that carries meaning rather than just separating.
+
+   Every block on this screen used the same plain bold line, so a farmer
+   scanning for the tray had to read all eight to find it. The icon and its
+   tint identify the subject before the words are read; the pill on the right
+   carries the one fact that decides whether the block needs opening at all. */
+function SectionHead({ icon, title, tint, tintDim, status, statusTone, first, style }) {
+  const tone = statusTone || tint;
+  return (
+    <View style={[styles.shead, first && { marginTop: 0 }, style]}>
+      <View style={[styles.sheadIcon, { backgroundColor: tintDim }]}>
+        <Ionicons name={icon} size={14} color={tint} />
+      </View>
+      <Text style={styles.sheadTitle} numberOfLines={1}
+        maxFontSizeMultiplier={1.15}>{title}</Text>
+      {!!status && (
+        <View style={[styles.sheadPill, { backgroundColor: `${tone}1A` }]}>
+          <Text style={[styles.sheadPillTxt, { color: tone }]} numberOfLines={1}
+            maxFontSizeMultiplier={1.1}>{status}</Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -91,6 +116,19 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [wifi,     setWifi]     = useState(null);   // { ssid, pass, saving }
   // Shown after a pour ends on its own: { kind, secs }
   const [again,    setAgain]    = useState(null);
+  /* Whether plant food goes into the next manual watering.
+     Seeded from whether it is due each time the sheet opens, but the farmer
+     decides - previously the app just announced that food would be mixed in and
+     gave no way to decline, which is the wrong default for something that burns
+     roots if overdone. */
+  const [addFert,  setAddFert]  = useState(false);
+  /* The screen was twelve stacked cards on one scroll: readings, actions,
+     control, chart, forecast, plan, tray, plant food, sensor node, interval,
+     Wi-Fi, rename, delete. Everything was one swipe away and nothing was
+     findable. Split by what the farmer came to do. */
+  const [tab,      setTab]      = useState('now');
+  const [events,   setEvents]   = useState(null);
+  const [evLoading, setEvLoading] = useState(false);
   const [blinking,  setBlinking]  = useState(false);
   const [savingIv,  setSavingIv]  = useState(null);
   // One sheet at a time: 'water' | 'fill' | 'interval' | 'control' | 'unlink'
@@ -280,7 +318,7 @@ export default function SectionDetailScreen({ route, navigation }) {
     setBusy(kind);
     try {
       const r = kind === 'water'
-        ? await waterSection(houseId, sectionId, secs, !!fert?.due)
+        ? await waterSection(houseId, sectionId, secs, !!addFert)
         : await fillTray(houseId, sectionId, secs);
       const id = r?.command?.id || r?.nodeCommand?.id || null;
       setRun({ kind, id, secs, remaining: secs, phase: 'sending', sentAt: Date.now() });
@@ -357,6 +395,19 @@ export default function SectionDetailScreen({ route, navigation }) {
     tick();
     return () => { alive = false; clearInterval(id); clearTimeout(giveUp); };
   }, [run?.id, houseId, sectionId]);
+
+  // History is fetched only when its tab is opened, and again after any run
+  // finishes — there is no reason to pay for it while the farmer is on Now.
+  useEffect(() => {
+    if (tab !== 'history') return undefined;
+    let alive = true;
+    setEvLoading(true);
+    getSectionEvents(houseId, sectionId, 40)
+      .then((r) => { if (alive) setEvents(r); })
+      .catch(() => { if (alive) setEvents(null); })
+      .finally(() => { if (alive) setEvLoading(false); });
+    return () => { alive = false; };
+  }, [tab, houseId, sectionId, run?.id]);
 
   // Local 1 s countdown between server polls, so the number moves smoothly.
   useEffect(() => {
@@ -482,17 +533,61 @@ export default function SectionDetailScreen({ route, navigation }) {
         icon="rainy-outline"
         title="Water this section?"
         body={`The pump will run for ${sec?.plan?.durationSec || 45} seconds in `
-            + `${sec?.meta?.name || sectionId}.`
-            + (fert?.due
-                ? ` Plant food (${fert.npkType} at ${Math.round((fert.strength || 0.5) * 100)}% strength) `
-                  + 'will be mixed into the same water.'
-                : '')}
+            + `${sec?.meta?.name || sectionId}.`}
         caution="Vanda roots rot if they are watered too often. Only do this if the plants clearly need it."
-        confirmLabel="Water now"
+        confirmLabel={addFert ? 'Water and feed' : 'Water now'}
         busy={busy === 'water'}
         onCancel={() => setSheet(null)}
-        onConfirm={() => runAction('water')}
-      />
+        onConfirm={() => runAction('water')}>
+
+        {/* Plant food is a decision made HERE, with the evidence to make it.
+            Fertiliser only ever goes in with water, so this is the only moment
+            it can be chosen - but the app used to announce it as already
+            decided, with no way to decline and no indication of when the
+            section was last fed. */}
+        <View style={styles.fsBox}>
+          <View style={styles.fsHead}>
+            <Ionicons name="flask-outline" size={17}
+              color={addFert ? COLORS.fertilizer : COLORS.textTertiary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fsTitle}>Mix in plant food</Text>
+              <Text style={styles.fsSub}>
+                {fert?.due
+                  ? `Due now · ${fert.npkType} at ${Math.round((fert.strength || 0.5) * 100)}% strength`
+                  : 'Not due yet'}
+              </Text>
+            </View>
+            <Switch
+              value={addFert}
+              onValueChange={setAddFert}
+              trackColor={{ false: COLORS.border, true: `${COLORS.fertilizer}40` }}
+              thumbColor={addFert ? COLORS.fertilizer : COLORS.textTertiary}
+              accessibilityLabel="Mix plant food into this watering"
+            />
+          </View>
+
+          <View style={styles.fsRow}>
+            <Text style={styles.fsKey}>Last fed</Text>
+            <Text style={styles.fsVal}>
+              {fert?.everFertilized
+                ? (fert.lastFertilizedAt || `${Math.round(fert.daysSinceFertilize || 0)} days ago`)
+                : 'Not recorded yet'}
+            </Text>
+          </View>
+          <View style={styles.fsRow}>
+            <Text style={styles.fsKey}>Feeds every</Text>
+            <Text style={styles.fsVal}>
+              {fert?.intervalDays || 7} days · {fert?.growthStage || 'Active'}
+            </Text>
+          </View>
+
+          {addFert && !fert?.due && (
+            <Text style={styles.fsWarn}>
+              This section is not due. Feeding early builds up salts in the roots.
+            </Text>
+          )}
+        </View>
+      </ConfirmSheet>
 
       <ConfirmSheet
         visible={sheet === 'fill'}
@@ -750,405 +845,592 @@ export default function SectionDetailScreen({ route, navigation }) {
         refreshControl={<RefreshControl refreshing={refresh} tintColor={COLORS.primary}
           onRefresh={() => { setRefresh(true); load(); }} />}>
 
-        {/* How old these numbers are, said BEFORE they are shown.
-            A reading with no age on it is the thing this project keeps getting
-            caught by: a dead node's last value looks identical to a live one. */}
-        <StaleWarning freshness={sec?.freshness} name={meta.name || sectionId} />
-
-        {/* Live readings.
-
-            Greyed, uncoloured and unlabelled the moment the node stops keeping
-            its promise. An old number in full colour is indistinguishable from
-            a current one, which is how a section with NO node at all came to
-            display 28C and a green 70% "GOOD" - those were the model's fallback
-            defaults leaking through, and 70% happens to sit in the ideal band.
-            Nothing here is invented now: no reading prints as --. */}
-        <View style={styles.grid}>
-          {[
-            ['thermometer-outline', COLORS.temperature, fmt(latest.temperature, 1), '°C',
-             'Temperature'],
-            ['water-outline',       rh.color,           fmt(latest.humidity, 0),    '%',
-             live ? `Humidity · ${rh.label}` : 'Humidity'],
-            ['sunny-outline',       COLORS.light,       fmt(latest.light, 0),       'lux',
-             'Light'],
-            ['speedometer-outline', vp.color,           fmt(latest.vpd ?? tray.vpd, 2), 'kPa',
-             live ? `Drying · ${vp.label}` : 'Drying'],
-          ].map(([ic, c, v, u, l], i) => (
-            <View key={i} style={[styles.tile, SHADOW.sm, !live && styles.tileDead]}>
-              <Ionicons name={ic} size={17} color={live ? c : COLORS.textTertiary} />
-              <Text style={[styles.tileVal, { color: live ? c : COLORS.textTertiary }]}>
-                {v}<Text style={styles.tileUnit}>{u}</Text>
-              </Text>
-              <Text style={styles.tileLbl}>{l}</Text>
-            </View>
+        {/* Three jobs, not one scroll: what is happening now, what has
+            happened, and how this section is set up. */}
+        <View style={styles.tabs}>
+          {[['now', 'Now', 'pulse-outline'],
+            ['history', 'History', 'time-outline'],
+            ['settings', 'Setup', 'options-outline']].map(([k, label, ic]) => (
+            <TouchableOpacity key={k}
+              style={[styles.tab, tab === k && styles.tabOn]}
+              onPress={() => setTab(k)}
+              activeOpacity={0.8}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: tab === k }}
+              accessibilityLabel={label}>
+              <Ionicons name={ic} size={15}
+                color={tab === k ? COLORS.primary : COLORS.textTertiary} />
+              <Text style={[styles.tabTxt, tab === k && styles.tabTxtOn]}>{label}</Text>
+            </TouchableOpacity>
           ))}
         </View>
 
-        {/* Directly under the numbers, because it is the caveat on them: how
-            old they are, and whether there is a node behind them at all. */}
-        <View style={styles.freshRow}>
-          <Text style={[styles.freshLbl, !live && { color: COLORS.warning }]}>
-            {noNode ? 'No sensor node detected'
-                    : live ? 'Last read'
-                           : 'No signal — last read'}
-          </Text>
-          {!noNode && <FreshnessBadge freshness={fresh} />}
-        </View>
+        {tab === 'now' && (<>
+          {/* How old these numbers are, said BEFORE they are shown.
+              A reading with no age on it is the thing this project keeps getting
+              caught by: a dead node's last value looks identical to a live one. */}
+          <StaleWarning freshness={sec?.freshness} name={meta.name || sectionId} />
 
-        {/* While water is moving, the buttons are replaced by what is
-            actually happening. The countdown and the Stop button are both
-            anchored to the node's own acknowledgements, not to a timer this
-            screen started - the node says when the relay closed and when it
-            opened, and everything here follows that. */}
-        {run ? (
-          <View style={[styles.runCard, SHADOW.md]}>
-            <View style={styles.runTop}>
-              <Ionicons
-                name={run.kind === 'water' ? 'rainy' : 'add-circle'}
-                size={20}
-                color={run.kind === 'water' ? COLORS.primary : COLORS.info} />
-              <Text style={styles.runTitle}>
-                {run.phase === 'sending'
-                  ? (run.kind === 'water' ? 'Starting watering' : 'Starting tray fill')
-                  : (run.kind === 'water' ? 'Watering now' : 'Filling the tray')}
-              </Text>
-              {run.phase === 'sending' && <ActivityIndicator size="small" color={COLORS.textTertiary} />}
-            </View>
+          {/* Live readings.
 
-            {run.phase === 'sending' ? (
-              <Text style={styles.runWait}>
-                Waiting for the node to pick this up. It checks every couple of seconds.
-              </Text>
-            ) : (
-              <>
-                <Text style={styles.runCount}>
-                  {Math.max(0, run.remaining)}<Text style={styles.runCountUnit}>s left</Text>
-                </Text>
-                <View style={styles.runTrack}>
-                  <View style={[styles.runFill, {
-                    width: `${Math.max(0, Math.min(100,
-                      ((run.secs - Math.max(0, run.remaining)) / Math.max(1, run.secs)) * 100))}%`,
-                    backgroundColor: run.kind === 'water' ? COLORS.primary : COLORS.info,
-                  }]} />
-                </View>
-                <Text style={styles.runNote}>
-                  It stops by itself after {run.secs} seconds.
-                </Text>
-              </>
-            )}
-
-            <TouchableOpacity
-              style={[styles.stopBtn, stopping && { opacity: 0.6 }]}
-              onPress={() => setSheet('stop')}
-              disabled={stopping}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Stop this now">
-              {stopping
-                ? <ActivityIndicator color={COLORS.danger} size="small" />
-                : <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />}
-              <Text style={styles.stopTxt}>{stopping ? 'Stopping…' : 'Stop now'}</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <>
-          {/* The two things a farmer opens this screen to do, directly under the
-              readings they decide from. They used to sit below the chart, the
-              forecast, the plan, the tray, the fertilizer and the control card -
-              far enough down that they were genuinely hard to find. */}
-          <View style={styles.btnGrid}>
+              Greyed, uncoloured and unlabelled the moment the node stops keeping
+              its promise. An old number in full colour is indistinguishable from
+              a current one, which is how a section with NO node at all came to
+              display 28C and a green 70% "GOOD" - those were the model's fallback
+              defaults leaking through, and 70% happens to sit in the ideal band.
+              Nothing here is invented now: no reading prints as --. */}
+          <View style={styles.grid}>
             {[
-              ['water', 'Water Now',   'rainy-outline',      COLORS.primary, () => setSheet('water')],
-              ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill')],
-            ].map(([k, label, ic, c, fn]) => (
-              <TouchableOpacity key={k}
-                style={[styles.btn, { backgroundColor: actionsOff ? COLORS.bgCardAlt : c },
-                        !actionsOff && SHADOW.md, busy && { opacity: 0.6 }]}
-                onPress={fn} disabled={!!busy || actionsOff} activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityState={{ disabled: actionsOff }}
-                accessibilityLabel={actionsOff ? `${label}, unavailable. ${blockReason}` : label}>
-                {busy === k
-                  ? <ActivityIndicator color="#FFF" size="small" />
-                  : <Ionicons name={ic} size={17}
-                      color={actionsOff ? COLORS.textTertiary : '#FFF'} />}
-                <Text style={[styles.btnText, actionsOff && { color: COLORS.textTertiary }]}>
-                  {label}
+              ['thermometer-outline', COLORS.temperature, fmt(latest.temperature, 1), '°C',
+               'Temperature'],
+              ['water-outline',       rh.color,           fmt(latest.humidity, 0),    '%',
+               live ? `Humidity · ${rh.label}` : 'Humidity'],
+              ['sunny-outline',       COLORS.light,       fmt(latest.light, 0),       'lux',
+               'Light'],
+              ['speedometer-outline', vp.color,           fmt(latest.vpd ?? tray.vpd, 2), 'kPa',
+               live ? `Drying · ${vp.label}` : 'Drying'],
+            ].map(([ic, c, v, u, l], i) => (
+              <View key={i} style={[styles.tile, SHADOW.sm, !live && styles.tileDead]}>
+                <Ionicons name={ic} size={17} color={live ? c : COLORS.textTertiary} />
+                <Text style={[styles.tileVal, { color: live ? c : COLORS.textTertiary }]}>
+                  {v}<Text style={styles.tileUnit}>{u}</Text>
                 </Text>
-              </TouchableOpacity>
+                <Text style={styles.tileLbl} numberOfLines={1}
+                adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{l}</Text>
+              </View>
             ))}
           </View>
 
-          {/* A disabled button with no reason next to it reads as a broken app. */}
-          {actionsOff && (
-            <View style={styles.blockNote}>
-              <Ionicons name="lock-closed-outline" size={14} color={COLORS.textTertiary} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.blockTxt}>{blockReason}</Text>
-                {noNode && (
-                  <TouchableOpacity onPress={() => setPicking(true)} activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel="Link a sensor node to this section">
-                    <Text style={styles.blockLink}>Link a node</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )}
-          </>
-        )}
-
-        {/* controls */}
-        <Text style={styles.h}>Control</Text>
-        <View style={[styles.card, SHADOW.sm]}>
-          <View style={styles.tRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.tTitle}>This section</Text>
-            </View>
+          {/* Directly under the numbers, because it is the caveat on them: how
+              old they are, and whether there is a node behind them at all. */}
+          <View style={styles.freshRow}>
+            <Text style={[styles.freshLbl, !live && { color: COLORS.warning }]}
+            numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>
+              {noNode ? 'No sensor node detected'
+                      : live ? 'Last read'
+                             : 'No signal — last read'}
+            </Text>
+            {!noNode && <FreshnessBadge freshness={fresh} />}
           </View>
 
-          <DropRow
-            icon="options-outline"
-            label="Runs"
-            value={(CONTROL_OPTIONS.find((o) => o.override === override) || CONTROL_OPTIONS[0]).label}
-            onPress={() => setSheet('control')}
-          />
-
-          <View style={[styles.tRow, { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: SPACE.md, marginTop: SPACE.md }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.tTitle}>Humidity tray</Text>
-              <Text style={styles.tDesc}>Keep the 3 cm tray topped up automatically</Text>
-            </View>
-            <Switch value={trayOn} onValueChange={toggleTray}
-              trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
-              thumbColor={trayOn ? COLORS.info : COLORS.textTertiary} />
-          </View>
-        </View>
-
-        {/* history, over a range the farmer chooses */}
-        <View style={styles.chartHead}>
-          <Text style={[styles.h, { marginTop: 0, marginBottom: 0 }]}>Conditions over time</Text>
-          <RangePicker
-            options={HISTORY_RANGES}
-            value={range.hours}
-            onChange={(o) => setRange(o)}
-          />
-        </View>
-        <View style={[styles.card, SHADOW.sm]}>
-          <LineChart series={series} band={{ low: RH_LOW, high: RH_HIGH }} width={CHART_W} />
-        </View>
-
-        {/* What the model expects for the REST of today. This is what lets the
-            tray be topped up before the heat instead of chasing it. */}
-        {fcast?.hours?.length > 1 && (
-          <>
-            <View style={styles.chartHead}>
-              <Text style={[styles.h, { marginTop: 0, marginBottom: 0 }]}>Expected today</Text>
-              {fcast.hotDay && (
-                <View style={styles.hotPill}>
-                  <Ionicons name="flame" size={13} color={COLORS.danger} />
-                  <Text style={styles.hotPillTxt}>Hot day</Text>
-                </View>
-              )}
-            </View>
-            <View style={[styles.card, SHADOW.sm]}>
-              <Text style={styles.fcLead}>
-                Around {String(fcast.peakHour).padStart(2, '0')}:00 this section is expected to
-                reach {fcast.peakTemp}°C, with humidity down to {fcast.minHumidity}%.
-              </Text>
-              <LineChart width={CHART_W} band={{ low: RH_LOW, high: RH_HIGH }}
-                series={fcast.hours.map((h, i) => ({
-                  temperature: fcast.temperature[i],
-                  humidity: fcast.humidity[i],
-                  label: String(h).padStart(2, '0') + ':00',
-                }))} />
-              <Text style={styles.fcNote}>
-                Predicted at dawn, so it is an estimate: peak temperature is usually within
-                {' '}{fcast.confidence?.peakTempMae?.toFixed?.(1) ?? '1'}°C. The system uses it
-                to act early, never to skip watering.
-              </Text>
-            </View>
-          </>
-        )}
-
-        {/* today's plan */}
-        <Text style={styles.h}>Today's Watering Plan</Text>
-        <View style={[styles.card, SHADOW.sm]}>
-          {plan.waterTime ? (
-            <>
-              <View style={styles.planTop}>
-                <Text style={styles.planTime}>{plan.waterTime}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.planDur}>for {plan.durationSec} seconds</Text>
-                  <Text style={styles.planDate}>{plan.date}</Text>
-                </View>
-              </View>
-              {plan.secondSession && (
-                <View style={styles.second}>
-                  <Ionicons name="flame-outline" size={15} color={COLORS.danger} />
-                  <Text style={styles.secondTxt}>
-                    Extreme heat, second session {plan.secondTime} for {plan.secondDurationSec}s
-                    ({plan.secondConfidence}%)
-                  </Text>
-                </View>
-              )}
-              <Text style={styles.reason}>{plan.reason}</Text>
-            </>
-          ) : <Text style={styles.none}>No plan worked out for today yet.</Text>}
-        </View>
-
-        {/* humidity tray */}
-        <Text style={styles.h}>Humidity Tray</Text>
-        <View style={[styles.card, SHADOW.sm]}>
-          <View style={styles.trayTop}>
-            <Ionicons
-              name={tray.status === 'cooldown' ? 'time' : 'water'}
-              size={20}
-              color={tray.status === 'fill' ? COLORS.warning
-                   : tray.status === 'cooldown' ? COLORS.info : COLORS.success} />
-            <Text style={styles.trayTxt}>{tray.message || `Target ${RH_LOW}–${RH_HIGH}% RH.`}</Text>
-          </View>
-
-          {tray.status === 'cooldown' && (
-            <View style={styles.cooldown}>
-              <View style={styles.cdRow}>
-                <Text style={styles.cdLabel}>Filled</Text>
-                <Text style={styles.cdVal}>{tray.hoursSinceFill}h ago</Text>
-              </View>
-              <View style={styles.cdRow}>
-                <Text style={styles.cdLabel}>Next fill allowed in</Text>
-                <Text style={[styles.cdVal, { color: COLORS.info }]}>{tray.hoursUntilNextFill}h</Text>
-              </View>
-              <View style={styles.cdBarTrack}>
-                <View style={[styles.cdBarFill, {
-                  width: `${Math.max(0, Math.min(100,
-                    ((tray.cooldownHours - tray.hoursUntilNextFill) / tray.cooldownHours) * 100))}%` }]} />
-              </View>
-              {tray.trayAtLimit && (
-                <Text style={styles.cdNote}>
-                  Humidity is still low, but the tray has water, the air is very dry today.
-                  Refilling would only overflow. Extra watering is the right fix.
+          {/* While water is moving, the buttons are replaced by what is
+              actually happening. The countdown and the Stop button are both
+              anchored to the node's own acknowledgements, not to a timer this
+              screen started - the node says when the relay closed and when it
+              opened, and everything here follows that. */}
+          {run ? (
+            <View style={[styles.runCard, SHADOW.md]}>
+              <View style={styles.runTop}>
+                <Ionicons
+                  name={run.kind === 'water' ? 'rainy' : 'add-circle'}
+                  size={20}
+                  color={run.kind === 'water' ? COLORS.primary : COLORS.info} />
+                <Text style={styles.runTitle}>
+                  {run.phase === 'sending'
+                    ? (run.kind === 'water' ? 'Starting watering' : 'Starting tray fill')
+                    : (run.kind === 'water' ? 'Watering now' : 'Filling the tray')}
                 </Text>
-              )}
-            </View>
-          )}
-          <View style={styles.barTrack}>
-            <View style={[styles.barIdeal, { left: `${RH_LOW}%`, width: `${RH_HIGH - RH_LOW}%` }]} />
-            {latest.humidity != null && (
-              <View style={[styles.barMark, { left: `${Math.max(0, Math.min(100, latest.humidity))}%`, backgroundColor: rh.color }]} />
-            )}
-          </View>
-          <Text style={styles.barLbl}>0%     ideal band {RH_LOW}–{RH_HIGH}%     100%</Text>
-        </View>
-
-        {/* fertilizer */}
-        {(fert || sec?.fertilizer) && (
-          <>
-            <Text style={styles.h}>Fertilizer</Text>
-            <View style={[styles.card, SHADOW.sm, { borderLeftWidth: 3, borderLeftColor: fert.due ? COLORS.fertilizer : COLORS.border }]}>
-              <View style={styles.fertTop}>
-                <Ionicons name="flask-outline" size={18} color={fert.due ? COLORS.fertilizer : COLORS.textTertiary} />
-                <Text style={styles.fertNpk}>{fert.due ? `${fert.npkType} @ ${Math.round(fert.strength * 100)}% strength` : 'Not due'}</Text>
+                {run.phase === 'sending' && <ActivityIndicator size="small" color={COLORS.textTertiary} />}
               </View>
-              <Text style={styles.fertMsg}>{fert.message}</Text>
-            </View>
-          </>
-        )}
 
-        {/* Which physical node reports for this section. A section with no node
-            is a normal state, not an error, so it gets an explanation rather
-            than a warning. */}
-        <Text style={styles.h}>Sensor node</Text>
-        <View style={[styles.card, SHADOW.sm]}>
-          {device ? (
-            <>
-              <View style={styles.nodeTop}>
-                <View style={[styles.nodeDot, { backgroundColor: device.online ? COLORS.success : COLORS.textTertiary }]} />
-                <Text style={styles.nodeName}>Node {device.shortId}</Text>
-                <Text style={[styles.nodeState, { color: device.online ? COLORS.success : COLORS.textTertiary }]}>
-                  {device.online ? 'Online' : 'Offline'}
+              {run.phase === 'sending' ? (
+                <Text style={styles.runWait}>
+                  Waiting for the node to pick this up. It checks every couple of seconds.
                 </Text>
-              </View>
-              <Text style={styles.nodeMeta}>
-                Seen {lastSeenLabel(device.lastSeenSec)} · {sig.label} signal
-                {device.ip ? ` · ${device.ip}` : ''}
-              </Text>
-              <Text style={styles.nodeMac}>{device.mac}</Text>
-
-              <View style={styles.ivBlock}>
-                <DropRow
-                  icon="reload-outline"
-                  label="Reads"
-                  value={intervalLabel(device.readIntervalMs)}
-                  onPress={() => setSheet('interval')}
-                  disabled={savingIv != null}
-                />
-                <DropRow
-                  icon="wifi-outline"
-                  label="Wi-Fi"
-                  value={device.ssid || 'Change'}
-                  onPress={() => { setWifi({ ssid: '', pass: '', saving: false,
-                                             scanning: true, networks: [] });
-                                   scanWifi(); }}
-                />
-              </View>
-
-              <View style={styles.nodeBtns}>
-                <TouchableOpacity style={[styles.nodeBtn, blinking && styles.nodeBtnOn]}
-                  onPress={blinkNode} disabled={blinking} activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Identify node ${device.shortId} by blinking its light`}>
-                  <Ionicons name="flashlight-outline" size={15}
-                    color={blinking ? '#FFF' : COLORS.primary} />
-                  <Text style={[styles.nodeBtnTxt, blinking && { color: '#FFF' }]}>
-                    {blinking ? 'Blinking' : 'Identify'}
+              ) : (
+                <>
+                  <Text style={styles.runCount}>
+                    {Math.max(0, run.remaining)}<Text style={styles.runCountUnit}>s left</Text>
                   </Text>
-                </TouchableOpacity>
+                  <View style={styles.runTrack}>
+                    <View style={[styles.runFill, {
+                      width: `${Math.max(0, Math.min(100,
+                        ((run.secs - Math.max(0, run.remaining)) / Math.max(1, run.secs)) * 100))}%`,
+                      backgroundColor: run.kind === 'water' ? COLORS.primary : COLORS.info,
+                    }]} />
+                  </View>
+                  <Text style={styles.runNote}>
+                    It stops by itself after {run.secs} seconds.
+                  </Text>
+                </>
+              )}
 
-                <TouchableOpacity style={styles.unlinkBtn}
-                  onPress={() => setSheet('unlink')} disabled={unlinking} activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Unlink node ${device.shortId} from this section`}>
-                  {unlinking ? <ActivityIndicator color={COLORS.danger} size="small" />
-                             : <Ionicons name="unlink-outline" size={15} color={COLORS.danger} />}
-                  <Text style={styles.unlinkTxt}>{unlinking ? 'Unlinking…' : 'Unlink node'}</Text>
-                </TouchableOpacity>
-              </View>
-            </>
+              <TouchableOpacity
+                style={[styles.stopBtn, stopping && { opacity: 0.6 }]}
+                onPress={() => setSheet('stop')}
+                disabled={stopping}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Stop this now">
+                {stopping
+                  ? <ActivityIndicator color={COLORS.danger} size="small" />
+                  : <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />}
+                <Text style={styles.stopTxt}>{stopping ? 'Stopping…' : 'Stop now'}</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
-              <View style={styles.nodeTop}>
-                <View style={[styles.nodeDot, { backgroundColor: COLORS.textTertiary }]} />
-                <Text style={styles.nodeName}>No node linked</Text>
+            {/* The two things a farmer opens this screen to do, directly under the
+                readings they decide from. They used to sit below the chart, the
+                forecast, the plan, the tray, the fertilizer and the control card -
+                far enough down that they were genuinely hard to find. */}
+            <View style={styles.btnGrid}>
+              {[
+                ['water', 'Water Now',   'rainy-outline',      COLORS.primary,
+               () => { setAddFert(!!fert?.due); setSheet('water'); }],
+                ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill')],
+              ].map(([k, label, ic, c, fn]) => (
+                <TouchableOpacity key={k}
+                  style={[styles.btn, { backgroundColor: actionsOff ? COLORS.bgCardAlt : c },
+                          !actionsOff && SHADOW.md, busy && { opacity: 0.6 }]}
+                  onPress={fn} disabled={!!busy || actionsOff} activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: actionsOff }}
+                  accessibilityLabel={actionsOff ? `${label}, unavailable. ${blockReason}` : label}>
+                  {busy === k
+                    ? <ActivityIndicator color="#FFF" size="small" />
+                    : <Ionicons name={ic} size={17}
+                        color={actionsOff ? COLORS.textTertiary : '#FFF'} />}
+                  <Text style={[styles.btnText, actionsOff && { color: COLORS.textTertiary }]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* A disabled button with no reason next to it reads as a broken app. */}
+            {actionsOff && (
+              <View style={styles.blockNote}>
+                <Ionicons name="lock-closed-outline" size={14} color={COLORS.textTertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.blockTxt}>{blockReason}</Text>
+                  {noNode && (
+                    <TouchableOpacity onPress={() => setPicking(true)} activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Link a sensor node to this section">
+                      <Text style={styles.blockLink}>Link a node</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
-              <Text style={styles.nodeHint}>
-                This section has no sensor node, so it has no readings and cannot be
-                watered from the app. Power a node on, then link it here.
-              </Text>
-              <TouchableOpacity style={styles.linkBtn} onPress={() => setPicking(true)}
-                activeOpacity={0.85} accessibilityRole="button"
-                accessibilityLabel="Link a sensor node to this section">
-                <Ionicons name="add-circle-outline" size={16} color="#FFF" />
-                <Text style={styles.linkBtnTxt}>Link a node</Text>
-              </TouchableOpacity>
+            )}
             </>
           )}
-        </View>
 
-        <Text style={styles.device}>Device ID: {meta.deviceId || `${houseId}-${sectionId}`}</Text>
+          {/* controls */}
+          <SectionHead icon="options-outline" title="How this section runs"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim}
+            status={(CONTROL_OPTIONS.find((o) => o.override === override) || CONTROL_OPTIONS[0])
+                      .label.replace('Follow the farm', farmAuto ? 'Auto' : 'Manual')
+                      .replace('Always automatic', 'Auto')
+                      .replace('Always manual', 'Manual')}
+            statusTone={override === 'manual' || (!override && !farmAuto)
+                          ? COLORS.warning : COLORS.primary} />
+          <View style={[styles.card, SHADOW.sm]}>
+            <View style={styles.tRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.tTitle}>This section</Text>
+              </View>
+            </View>
 
-        <TouchableOpacity style={styles.renameBtn} onPress={() => setRenaming(true)}
-          activeOpacity={0.7} accessibilityRole="button"
-          accessibilityLabel={`Rename this section. Currently called ${meta.name || sectionId}.`}>
-          <Ionicons name="create-outline" size={18} color={COLORS.primary} />
-          <Text style={styles.renameTxt}>Rename this section</Text>
-        </TouchableOpacity>
+            <DropRow
+              icon="options-outline"
+              label="Runs"
+              value={(CONTROL_OPTIONS.find((o) => o.override === override) || CONTROL_OPTIONS[0]).label}
+              onPress={() => setSheet('control')}
+            />
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={() => setSheet('delete')} activeOpacity={0.7}
-          accessibilityRole="button" accessibilityLabel="Delete this section">
-          <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
-          <Text style={styles.deleteTxt}>Delete this section</Text>
-        </TouchableOpacity>
+            <View style={[styles.tRow, { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: SPACE.md, marginTop: SPACE.md }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.tTitle}>Humidity tray</Text>
+                <Text style={styles.tDesc}>Keep the 3 cm tray topped up automatically</Text>
+              </View>
+              <Switch value={trayOn} onValueChange={toggleTray}
+                trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
+                thumbColor={trayOn ? COLORS.info : COLORS.textTertiary} />
+            </View>
+          </View>
+
+          {/* today's plan */}
+          <SectionHead icon="rainy-outline" title="Today's watering"
+            tint={COLORS.info} tintDim={COLORS.infoDim}
+            status={plan.waterTime || 'no plan'}
+            statusTone={plan.waterTime ? COLORS.info : COLORS.textTertiary} />
+          <View style={[styles.card, SHADOW.sm]}>
+            {plan.waterTime ? (
+              <>
+                <View style={styles.planTop}>
+                  <Text style={styles.planTime}>{plan.waterTime}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.planDur}>for {plan.durationSec} seconds</Text>
+                    <Text style={styles.planDate}>{plan.date}</Text>
+                  </View>
+                </View>
+                {plan.secondSession && (
+                  <View style={styles.second}>
+                    <Ionicons name="flame-outline" size={15} color={COLORS.danger} />
+                    <Text style={styles.secondTxt}>
+                      Extreme heat, second session {plan.secondTime} for {plan.secondDurationSec}s
+                      ({plan.secondConfidence}%)
+                    </Text>
+                  </View>
+                )}
+                <Text style={styles.reason}>{plan.reason}</Text>
+              </>
+            ) : <Text style={styles.none}>No plan worked out for today yet.</Text>}
+          </View>
+
+          {/* humidity tray */}
+          <SectionHead icon="water-outline" title="Humidity tray"
+            tint={COLORS.humidity} tintDim={COLORS.humidityDim}
+            status={tray.status === 'fill' ? 'needs water'
+                  : tray.status === 'cooldown' ? 'resting'
+                  : tray.status ? 'ok' : '\u2014'}
+            statusTone={tray.status === 'fill' ? COLORS.warning
+                      : tray.status === 'cooldown' ? COLORS.info : COLORS.success} />
+          <View style={[styles.card, SHADOW.sm]}>
+            <View style={styles.trayTop}>
+              <Ionicons
+                name={tray.status === 'cooldown' ? 'time' : 'water'}
+                size={20}
+                color={tray.status === 'fill' ? COLORS.warning
+                     : tray.status === 'cooldown' ? COLORS.info : COLORS.success} />
+              <Text style={styles.trayTxt}>{tray.message || `Target ${RH_LOW}–${RH_HIGH}% RH.`}</Text>
+            </View>
+
+            {tray.status === 'cooldown' && (
+              <View style={styles.cooldown}>
+                <View style={styles.cdRow}>
+                  <Text style={styles.cdLabel}>Filled</Text>
+                  <Text style={styles.cdVal}>{tray.hoursSinceFill}h ago</Text>
+                </View>
+                <View style={styles.cdRow}>
+                  <Text style={styles.cdLabel}>Next fill allowed in</Text>
+                  <Text style={[styles.cdVal, { color: COLORS.info }]}>{tray.hoursUntilNextFill}h</Text>
+                </View>
+                <View style={styles.cdBarTrack}>
+                  <View style={[styles.cdBarFill, {
+                    width: `${Math.max(0, Math.min(100,
+                      ((tray.cooldownHours - tray.hoursUntilNextFill) / tray.cooldownHours) * 100))}%` }]} />
+                </View>
+                {tray.trayAtLimit && (
+                  <Text style={styles.cdNote}>
+                    Humidity is still low, but the tray has water, the air is very dry today.
+                    Refilling would only overflow. Extra watering is the right fix.
+                  </Text>
+                )}
+              </View>
+            )}
+            <View style={styles.barTrack}>
+              <View style={[styles.barIdeal, { left: `${RH_LOW}%`, width: `${RH_HIGH - RH_LOW}%` }]} />
+              {latest.humidity != null && (
+                <View style={[styles.barMark, { left: `${Math.max(0, Math.min(100, latest.humidity))}%`, backgroundColor: rh.color }]} />
+              )}
+            </View>
+            <Text style={styles.barLbl}>0%     ideal band {RH_LOW}–{RH_HIGH}%     100%</Text>
+          </View>
+
+          {/* Plant food.
+
+              Read through one resolved object: the guard used to allow `fert` to
+              be null while `sec.fertilizer` existed, and then read `fert.due`
+              straight after - a crash waiting for the first section whose plan
+              had not run yet.
+
+              The card now shows WHEN it was last fed and when the next feed is
+              due, because "due / not due" alone gave the farmer nothing to check
+              against and no way to tell whether a feed had been recorded at
+              all. */}
+          {(() => {
+            const f = fert || sec?.fertilizer;
+            if (!f) return null;
+            const due = !!f.due;
+            const tone = due ? COLORS.fertilizer : COLORS.textTertiary;
+            const every = f.intervalDays || 7;
+            const since = f.daysSinceFertilize;
+            const left = Math.max(0, Math.round(every - (since ?? 0)));
+            return (
+              <>
+                <SectionHead icon="flask-outline" title="Plant food"
+                  tint={COLORS.fertilizer} tintDim={COLORS.fertilizerDim}
+                  status={due ? 'due now' : `in ${left}d`}
+                  statusTone={due ? COLORS.fertilizer : COLORS.textTertiary} />
+                <View style={[styles.card, SHADOW.sm,
+                              { borderLeftWidth: 3, borderLeftColor: due ? COLORS.fertilizer : COLORS.border }]}>
+                  <View style={styles.fertTop}>
+                    <Ionicons name="flask-outline" size={18} color={tone} />
+                    <Text style={[styles.fertNpk, { color: tone }]}>
+                      {due ? `Due now \u00b7 ${f.npkType} at ${Math.round((f.strength || 0.5) * 100)}% strength`
+                           : `Next feed in about ${left} day${left === 1 ? '' : 's'}`}
+                    </Text>
+                  </View>
+
+                  <View style={styles.fertRows}>
+                    <View style={styles.fertRow}>
+                      <Text style={styles.fertKey}>Last fed</Text>
+                      <Text style={styles.fertVal}>
+                        {f.everFertilized
+                          ? (f.lastFertilizedAt || `${Math.round(since ?? 0)} days ago`)
+                          : 'Not recorded yet'}
+                      </Text>
+                    </View>
+                    <View style={styles.fertRow}>
+                      <Text style={styles.fertKey}>Feeds every</Text>
+                      <Text style={styles.fertVal}>
+                        {every} days \u00b7 {f.growthStage || 'Active'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* How far through the feeding cycle this section is. A date
+                    alone does not answer "is it nearly due"; a bar does, at a
+                    glance, without arithmetic. */}
+                <View style={styles.fertBarWrap}>
+                  <View style={styles.fertBarTrack}>
+                    <View style={[styles.fertBarFill, {
+                      width: `${Math.max(3, Math.min(100,
+                        ((since ?? 0) / Math.max(1, every)) * 100))}%`,
+                      backgroundColor: due ? COLORS.fertilizer : `${COLORS.fertilizer}66`,
+                    }]} />
+                  </View>
+                  <Text style={styles.fertBarTxt}>
+                    {due ? 'due' : `${left}d`}
+                  </Text>
+                </View>
+
+                <Text style={styles.fertMsg}>{f.message}</Text>
+
+                  {!f.everFertilized && (
+                    <Text style={styles.fertHint}>
+                      No feed has been recorded for this section yet, so it is shown as due once.
+                      Watering it with plant food starts the schedule.
+                    </Text>
+                  )}
+                </View>
+              </>
+            );
+          })()}
+        </>)}
+
+        {tab === 'history' && (<>
+          {/* history, over a range the farmer chooses */}
+          <View style={styles.chartHead}>
+            <SectionHead first style={{ flex: 1, marginBottom: 0 }}
+              icon="analytics-outline" title="Conditions over time"
+              tint={COLORS.temperature} tintDim={COLORS.temperatureDim} />
+            <RangePicker
+              options={HISTORY_RANGES}
+              value={range.hours}
+              onChange={(o) => setRange(o)}
+            />
+          </View>
+          <View style={[styles.card, SHADOW.sm]}>
+            <LineChart series={series} band={{ low: RH_LOW, high: RH_HIGH }} width={CHART_W} />
+          </View>
+
+          {/* What the model expects for the REST of today. This is what lets the
+              tray be topped up before the heat instead of chasing it. */}
+          {fcast?.hours?.length > 1 && (
+            <>
+              <View style={styles.chartHead}>
+                <SectionHead first style={{ flex: 1, marginBottom: 0 }}
+                  icon="partly-sunny-outline" title="Expected today"
+                  tint={COLORS.light} tintDim={COLORS.lightDim} />
+                {fcast.hotDay && (
+                  <View style={styles.hotPill}>
+                    <Ionicons name="flame" size={13} color={COLORS.danger} />
+                    <Text style={styles.hotPillTxt}>Hot day</Text>
+                  </View>
+                )}
+              </View>
+              <View style={[styles.card, SHADOW.sm]}>
+                <Text style={styles.fcLead}>
+                  Around {String(fcast.peakHour).padStart(2, '0')}:00 this section is expected to
+                  reach {fcast.peakTemp}°C, with humidity down to {fcast.minHumidity}%.
+                </Text>
+                <LineChart width={CHART_W} band={{ low: RH_LOW, high: RH_HIGH }}
+                  series={fcast.hours.map((h, i) => ({
+                    temperature: fcast.temperature[i],
+                    humidity: fcast.humidity[i],
+                    label: String(h).padStart(2, '0') + ':00',
+                  }))} />
+                <Text style={styles.fcNote}>
+                  Predicted at dawn, so it is an estimate: peak temperature is usually within
+                  {' '}{fcast.confidence?.peakTempMae?.toFixed?.(1) ?? '1'}°C. The system uses it
+                  to act early, never to skip watering.
+                </Text>
+              </View>
+            </>
+          )}
+
+          {/* What actually happened, from the node's own acknowledgements. */}
+          <SectionHead first icon="list-outline" title="Watering and feeding"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim}
+            status={events?.counts ? `${events.counts.waterings} runs` : undefined} />
+          {evLoading && !events ? (
+            <View style={[styles.card, SHADOW.sm, { alignItems: 'center', paddingVertical: SPACE.xl }]}>
+              <ActivityIndicator color={COLORS.primary} />
+            </View>
+          ) : !events?.events?.length ? (
+            <View style={[styles.card, SHADOW.sm]}>
+              <Text style={styles.none}>
+                Nothing recorded yet. Every watering and tray fill from now on is logged here,
+                with how long it ran and whether plant food went in.
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.evSummary}>
+                <View style={styles.evStat}>
+                  <Text style={styles.evStatV}>{events.counts?.waterings ?? 0}</Text>
+                  <Text style={styles.evStatK}>waterings</Text>
+                </View>
+                <View style={styles.evStat}>
+                  <Text style={styles.evStatV}>{events.counts?.feeds ?? 0}</Text>
+                  <Text style={styles.evStatK}>with food</Text>
+                </View>
+                <View style={[styles.evStat, { flex: 1.6 }]}>
+                  <Text style={styles.evStatV} numberOfLines={1}>{events.lastFed || 'never'}</Text>
+                  <Text style={styles.evStatK}>last fed</Text>
+                </View>
+              </View>
+
+              <View style={[styles.card, SHADOW.sm, { paddingVertical: SPACE.sm }]}>
+                {events.events.map((e, i) => (
+                  <View key={e.id || i}
+                    style={[styles.evRow, i > 0 && styles.evRowDiv]}>
+                    <Ionicons
+                      name={e.action === 'tray' ? 'add-circle-outline' : 'rainy-outline'}
+                      size={16}
+                      color={e.action === 'tray' ? COLORS.info : COLORS.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.evWhen}>{e.atLocal}</Text>
+                      <Text style={styles.evWhat}>
+                        {e.action === 'tray' ? 'Tray fill' : 'Watered'} {e.durationSec}s
+                        {e.withFertilizer && e.npkType && e.npkType !== 'None'
+                          ? `  \u00b7  ${e.npkType}`
+                          : ''}
+                        {`  \u00b7  ${e.by === 'auto' ? 'automatic' : 'by you'}`}
+                      </Text>
+                    </View>
+                    {e.withFertilizer && (
+                      <Ionicons name="flask" size={13} color={COLORS.fertilizer} />
+                    )}
+                    <Text style={[styles.evOk,
+                                  { color: e.confirmed ? COLORS.success : COLORS.textTertiary }]}>
+                      {e.stoppedEarly ? 'stopped' : e.confirmed ? 'confirmed' : 'sent'}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <Text style={styles.evNote}>
+                “Confirmed” means the node reported back that the relay ran. “Sent” means the
+                command was written but no acknowledgement has arrived.
+              </Text>
+            </>
+          )}
+        </>)}
+
+        {tab === 'settings' && (<>
+          {/* Which physical node reports for this section. A section with no node
+              is a normal state, not an error, so it gets an explanation rather
+              than a warning. */}
+          <SectionHead first icon="hardware-chip-outline" title="Sensor node"
+            tint={COLORS.textSecondary} tintDim={COLORS.bgCardAlt}
+            status={device ? (device.online ? 'online' : 'offline') : 'none linked'}
+            statusTone={device?.online ? COLORS.success : COLORS.textTertiary} />
+          <View style={[styles.card, SHADOW.sm]}>
+            {device ? (
+              <>
+                <View style={styles.nodeTop}>
+                  <View style={[styles.nodeDot, { backgroundColor: device.online ? COLORS.success : COLORS.textTertiary }]} />
+                  <Text style={styles.nodeName}>Node {device.shortId}</Text>
+                  <Text style={[styles.nodeState, { color: device.online ? COLORS.success : COLORS.textTertiary }]}>
+                    {device.online ? 'Online' : 'Offline'}
+                  </Text>
+                </View>
+                <Text style={styles.nodeMeta}>
+                  Seen {lastSeenLabel(device.lastSeenSec)} · {sig.label} signal
+                  {device.ip ? ` · ${device.ip}` : ''}
+                </Text>
+                <Text style={styles.nodeMac}>{device.mac}</Text>
+
+                <View style={styles.ivBlock}>
+                  <DropRow
+                    icon="reload-outline"
+                    label="Reads"
+                    value={intervalLabel(device.readIntervalMs)}
+                    onPress={() => setSheet('interval')}
+                    disabled={savingIv != null}
+                  />
+                  <DropRow
+                    icon="wifi-outline"
+                    label="Wi-Fi"
+                    value={device.ssid || 'Change'}
+                    onPress={() => { setWifi({ ssid: '', pass: '', saving: false,
+                                               scanning: true, networks: [] });
+                                     scanWifi(); }}
+                  />
+                </View>
+
+                <View style={styles.nodeBtns}>
+                  <TouchableOpacity style={[styles.nodeBtn, blinking && styles.nodeBtnOn]}
+                    onPress={blinkNode} disabled={blinking} activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Identify node ${device.shortId} by blinking its light`}>
+                    <Ionicons name="flashlight-outline" size={15}
+                      color={blinking ? '#FFF' : COLORS.primary} />
+                    <Text style={[styles.nodeBtnTxt, blinking && { color: '#FFF' }]}>
+                      {blinking ? 'Blinking' : 'Identify'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.unlinkBtn}
+                    onPress={() => setSheet('unlink')} disabled={unlinking} activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Unlink node ${device.shortId} from this section`}>
+                    {unlinking ? <ActivityIndicator color={COLORS.danger} size="small" />
+                               : <Ionicons name="unlink-outline" size={15} color={COLORS.danger} />}
+                    <Text style={styles.unlinkTxt}>{unlinking ? 'Unlinking…' : 'Unlink node'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.nodeTop}>
+                  <View style={[styles.nodeDot, { backgroundColor: COLORS.textTertiary }]} />
+                  <Text style={styles.nodeName}>No node linked</Text>
+                </View>
+                <Text style={styles.nodeHint}>
+                  This section has no sensor node, so it has no readings and cannot be
+                  watered from the app. Power a node on, then link it here.
+                </Text>
+                <TouchableOpacity style={styles.linkBtn} onPress={() => setPicking(true)}
+                  activeOpacity={0.85} accessibilityRole="button"
+                  accessibilityLabel="Link a sensor node to this section">
+                  <Ionicons name="add-circle-outline" size={16} color="#FFF" />
+                  <Text style={styles.linkBtnTxt}>Link a node</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+
+          <Text style={styles.device}>Device ID: {meta.deviceId || `${houseId}-${sectionId}`}</Text>
+
+          <TouchableOpacity style={styles.renameBtn} onPress={() => setRenaming(true)}
+            activeOpacity={0.7} accessibilityRole="button"
+            accessibilityLabel={`Rename this section. Currently called ${meta.name || sectionId}.`}>
+            <Ionicons name="create-outline" size={18} color={COLORS.primary} />
+            <Text style={styles.renameTxt}>Rename this section</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.deleteBtn} onPress={() => setSheet('delete')} activeOpacity={0.7}
+            accessibilityRole="button" accessibilityLabel="Delete this section">
+            <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
+            <Text style={styles.deleteTxt}>Delete this section</Text>
+          </TouchableOpacity>
+        </>)}
+
         <View style={{ height: 100 }} />
       </ScrollView>
     </View>
@@ -1179,6 +1461,70 @@ const styles = StyleSheet.create({
   h:         { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.md, marginTop: SPACE.lg },
 
   tileDead: { backgroundColor: COLORS.bgCardAlt },
+  shead:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+             marginTop: SPACE.xl, marginBottom: SPACE.sm },
+  sheadIcon: { width: 26, height: 26, borderRadius: 8,
+               alignItems: 'center', justifyContent: 'center' },
+  sheadTitle: { flex: 1, color: COLORS.text, fontSize: 15.5, fontWeight: '800',
+                letterSpacing: -0.2 },
+  sheadPill: { borderRadius: RADIUS.full, paddingHorizontal: 9, paddingVertical: 3 },
+  sheadPillTxt: { fontSize: 11, fontWeight: '800', letterSpacing: 0.2,
+                  textTransform: 'lowercase' },
+
+  fertBarWrap: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+                 marginTop: SPACE.md },
+  fertBarTrack: { flex: 1, height: 6, borderRadius: 3,
+                  backgroundColor: COLORS.border, overflow: 'hidden' },
+  fertBarFill: { height: '100%', borderRadius: 3 },
+  fertBarTxt: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700',
+                minWidth: 30, textAlign: 'right' },
+
+  tabs:    { flexDirection: 'row', gap: 4, backgroundColor: COLORS.bgCardAlt,
+             borderRadius: RADIUS.md, padding: 4, marginBottom: SPACE.lg },
+  tab:     { flex: 1, flexDirection: 'row', alignItems: 'center',
+             justifyContent: 'center', gap: 5, paddingVertical: SPACE.sm,
+             borderRadius: RADIUS.sm },
+  tabOn:   { backgroundColor: COLORS.bgCard, ...SHADOW.sm },
+  tabTxt:  { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '700' },
+  tabTxtOn:{ color: COLORS.primary },
+
+  evSummary: { flexDirection: 'row', gap: SPACE.sm, marginBottom: SPACE.sm },
+  evStat:  { flex: 1, backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm,
+             paddingVertical: SPACE.md, paddingHorizontal: SPACE.md },
+  evStatV: { color: COLORS.text, fontSize: FONT.lg, fontWeight: '800',
+             fontVariant: ['tabular-nums'] },
+  evStatK: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
+  evRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
+             paddingVertical: SPACE.md },
+  evRowDiv:{ borderTopWidth: 1, borderTopColor: COLORS.border },
+  evWhen:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700',
+             fontVariant: ['tabular-nums'] },
+  evWhat:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
+  evOk:    { fontSize: FONT.xs, fontWeight: '700' },
+  evNote:  { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
+             marginTop: SPACE.sm },
+
+  fsBox:   { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.md,
+             padding: SPACE.md, marginTop: SPACE.md, gap: 6 },
+  fsHead:  { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+             paddingBottom: SPACE.sm, borderBottomWidth: 1,
+             borderBottomColor: COLORS.border, marginBottom: 2 },
+  fsTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
+  fsSub:   { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
+  fsRow:   { flexDirection: 'row', alignItems: 'baseline',
+             justifyContent: 'space-between', gap: SPACE.md },
+  fsKey:   { color: COLORS.textTertiary, fontSize: FONT.xs },
+  fsVal:   { color: COLORS.textSecondary, fontSize: FONT.xs, fontWeight: '700' },
+  fsWarn:  { color: COLORS.warning, fontSize: FONT.xs, lineHeight: 16,
+             marginTop: SPACE.xs },
+  fertRows: { borderTopWidth: 1, borderTopColor: COLORS.border,
+              marginTop: SPACE.md, paddingTop: SPACE.md, gap: 6 },
+  fertRow:  { flexDirection: 'row', alignItems: 'baseline',
+              justifyContent: 'space-between', gap: SPACE.md },
+  fertKey:  { color: COLORS.textTertiary, fontSize: FONT.sm },
+  fertVal:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
+  fertHint: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
+              marginTop: SPACE.sm },
   wLbl:   { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700',
             marginTop: SPACE.md, marginBottom: SPACE.xs },
   wHead:  { flexDirection: 'row', alignItems: 'center',
@@ -1248,7 +1594,8 @@ const styles = StyleSheet.create({
   tileUnit:{ fontSize: FONT.xs, fontWeight: '600' },
   tileLbl: { color: COLORS.textTertiary, fontSize: FONT.xs },
 
-  card: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg },
+  card: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg,
+          borderWidth: 1, borderColor: COLORS.borderLight },
   none: { color: COLORS.textTertiary, fontSize: FONT.sm },
 
   planTop:  { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },

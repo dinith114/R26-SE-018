@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 
-const BASE_URL = Platform.OS === 'web' ? 'http://localhost:8000' : 'http://192.168.1.129:8000';
+import BASE_URL from '../config/backend';
 
 const ZONE_COLORS = ['#4CAF50', '#2196F3', '#FF9800', '#E91E63', '#9C27B0', '#00BCD4', '#FF5722', '#607D8B'];
 

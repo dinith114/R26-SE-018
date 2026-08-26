@@ -26,7 +26,7 @@
 
 export const COLORS = {
   // ── Backgrounds — warm stone, not cream ──
-  bg: '#FAFAF9',
+  bg: '#EEF0EA',       // ground: steps back so white cards read as surfaces
   bgElevated: '#FFFFFF',
   bgCard: '#FFFFFF',
   bgCardAlt: '#F5F5F4',      // nested sub-cards
@@ -41,7 +41,7 @@ export const COLORS = {
   // ── Text ──
   text: '#1C1917',           // 16.74:1
   textSecondary: '#57534E',  //  7.30:1
-  textTertiary: '#736D67',   //  4.89:1 on bg, 4.68:1 on sub-cards
+  textTertiary: '#6A645E',   //  5.13:1 on bg, 4.9:1 on sub-cards
   textInverse: '#FFFFFF',
 
   // ── Primary — emerald, reserved for the main action ──

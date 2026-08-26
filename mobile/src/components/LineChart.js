@@ -116,9 +116,9 @@ export default function LineChart({ series = [], band, width = 300 }) {
       </View>
 
       <View style={[s.axis, { width }]}>
-        <Text style={s.axisTxt}>{series[0].label}</Text>
-        <Text style={s.axisTxt}>{series[Math.floor(series.length / 2)].label}</Text>
-        <Text style={s.axisTxt}>{series[series.length - 1].label}</Text>
+        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[0].label}</Text>
+        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[Math.floor(series.length / 2)].label}</Text>
+        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[series.length - 1].label}</Text>
       </View>
 
       <View style={s.legend}>

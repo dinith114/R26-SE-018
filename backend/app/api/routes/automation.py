@@ -51,6 +51,7 @@ from app.api.routes.smart_care_v2 import (
     _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL,
     _device_now_ms, _hours_since, _clean, _freshness, _farm_now_ms, _ready,
+    _record_fertilized, _log_event,
 )
 
 router = APIRouter()
@@ -601,8 +602,25 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                     })
                     # The scheduled watering has to reach the physical node too,
                     # not just the simulator's control/* contract.
-                    _issue_node_command(hid, sid, "water", secs,
-                                        withFertilizer=with_fert)
+                    node_cmd = _issue_node_command(hid, sid, "water", secs,
+                                                   withFertilizer=with_fert)
+                    if with_fert:
+                        # Same reason as the manual path: feeding has to be
+                        # recorded or the schedule can never advance. Inside the
+                        # auto branch: a section that only ALARMS has not been
+                        # fed, and recording one there would silently push its
+                        # next feed a week out.
+                        _record_fertilized(hid, sid, s)
+                    _log_event(hid, sid, s,
+                               action="water",
+                               durationSec=secs,
+                               withFertilizer=bool(with_fert),
+                               npkType=(fert.get("npkForStage") or fert.get("npkType")
+                                        if with_fert else None),
+                               strength=fert.get("strength") if with_fert else None,
+                               by="auto",
+                               commandId=(node_cmd or {}).get("id"),
+                               confirmed=False)
                     _mark_done(hid, sid, day, tag, "auto")
                     watered.append(f"{hid}-{sid}-{tag}")
                     _raise_alarm(

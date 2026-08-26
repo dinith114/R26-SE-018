@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 
 const { width: SW, height: SH } = Dimensions.get('window');
-const BASE_URL = Platform.OS === 'web' ? 'http://localhost:8000' : 'http://192.168.1.129:8000';
+import BASE_URL from '../config/backend';
 
 // â”€â”€ Farm diagram: where to stand for each position â”€â”€
 //   Positions 1-8 around the perimeter (clockwise from south)

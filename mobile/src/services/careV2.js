@@ -4,38 +4,10 @@
  */
 import { Platform } from 'react-native';
 
-/**
- * Where the backend lives.
- *
- * On a real device this MUST be the laptop's LAN address, not localhost -
- * localhost on the phone means the phone. The address changes whenever you move
- * between Wi-Fi and the hotspot, and a stale value here shows up as "Cannot
- * connect" on every screen, so it is read from Expo's dev-server host when that
- * is available and only falls back to the constant below.
- *
- * Check it with:  node preflight.js   (prints this machine's current IPv4)
- */
-const LAN_IP = '192.168.1.129';         // only used when USE_USB_TUNNEL is false
-// true  = phone on USB, reached through 'adb reverse tcp:8000 tcp:8000'
-// false = phone on the same Wi-Fi as the laptop, reached at LAN_IP
-const USE_USB_TUNNEL = false;   // release build: reach the backend over Wi-Fi
-
-function resolveHost() {
-  if (Platform.OS === 'web') return 'http://localhost:8000';
-
-  // localhost FIRST, because the phone is attached by USB and
-  //     adb reverse tcp:8000 tcp:8000
-  // makes "localhost" on the phone mean this laptop. That path works on any
-  // network, including university Wi-Fi that blocks device-to-device traffic
-  // (which is exactly what broke the LAN-IP approach on SLIIT-STD).
-  //
-  // The LAN address is kept as a fallback for running over Wi-Fi with no cable.
-  // If the app cannot reach the backend, the tunnel is almost always missing:
-  //     adb reverse tcp:8000 tcp:8000
-  return USE_USB_TUNNEL ? 'http://localhost:8000' : `http://${LAN_IP}:8000`;
-}
-
-export const BASE_URL = resolveHost();
+// Single source of truth for the backend address - see config/backend.js.
+export { BASE_URL } from '../config/backend';
+import BASE_URL_VALUE from '../config/backend';
+const BASE_URL = BASE_URL_VALUE;
 
 const API = `${BASE_URL}/api/v2/care`;
 
@@ -126,6 +98,15 @@ export const fillTray = (h, s, fillSeconds = 15) =>
  * Safe to send when nothing is running - the node acknowledges it as idle
  * rather than leaving the app waiting for a confirmation that never comes.
  */
+/**
+ * Everything that moved water in this section, newest first.
+ *
+ * Includes whether the NODE confirmed it — a command the server accepted and a
+ * pour the hardware ran are different claims, and the history says which it is.
+ */
+export const getSectionEvents = (h, s, limit = 40) =>
+  req(`/houses/${h}/sections/${s}/events?limit=${limit}`);
+
 export const stopSection = (h, s) =>
   req(`/houses/${h}/sections/${s}/stop`, { method: 'POST' });
 

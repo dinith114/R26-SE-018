@@ -31,6 +31,9 @@ export default function ConfirmSheet({
   icon,
   onCancel,
   onConfirm,
+  // Extra controls shown between the body and the caution — a choice the
+  // farmer makes as part of confirming, not a separate screen.
+  children,
 }) {
   const tint = destructive ? COLORS.danger : COLORS.primary;
 
@@ -69,6 +72,8 @@ export default function ConfirmSheet({
       )}
 
       {!!body && <Text style={s.body}>{body}</Text>}
+
+      {children}
 
       {!!caution && (
         <View style={s.caution} accessibilityRole="alert">
