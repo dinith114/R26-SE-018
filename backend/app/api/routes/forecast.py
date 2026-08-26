@@ -27,6 +27,7 @@ The dawn reading alone gave recall 0.62. Adding the outdoor weather forecast
 import json
 import os
 import pickle
+import joblib
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -40,8 +41,7 @@ _MODEL_DIR = os.path.abspath(os.path.join(
 _fc: Optional[dict] = None
 
 try:
-    with open(os.path.join(_MODEL_DIR, "forecast_v2.pkl"), "rb") as f:
-        _fc = pickle.load(f)
+    _fc = joblib.load(os.path.join(_MODEL_DIR, "forecast_v2.pkl"))
     m = _fc["metrics"]
     print(f"[ML v2] Forecast      temp MAE={m['temp']['mae']:.2f}C  "
           f"peak MAE={m['peak_temp_mae']:.2f}C  hot-day F1={m['hot_day_f1']:.3f}")

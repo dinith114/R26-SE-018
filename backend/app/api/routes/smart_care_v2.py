@@ -33,6 +33,10 @@ state, which made the app take seconds to show anything. Keep them apart.
 import math
 import os
 import pickle
+# joblib, not pickle, for the v2 bundles: they are stored compressed so the
+# backend can be deployed without shipping 1.7 GB. joblib.load reads a plain
+# pickle too, so restoring an uncompressed backup still works.
+import joblib
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,12 +71,9 @@ _fert:  Optional[dict] = None
 
 def _load_v2():
     global _water, _tray, _fert
-    with open(os.path.join(_MODEL_DIR, "watering_v2.pkl"), "rb") as f:
-        _water = pickle.load(f)
-    with open(os.path.join(_MODEL_DIR, "tray_v2.pkl"), "rb") as f:
-        _tray = pickle.load(f)
-    with open(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"), "rb") as f:
-        _fert = pickle.load(f)
+    _water = joblib.load(os.path.join(_MODEL_DIR, "watering_v2.pkl"))
+    _tray  = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
+    _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
     m = _water["metrics"]
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
           f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
