@@ -34,10 +34,14 @@ export const BASE_URL = Platform.OS === 'web' ? WEB_HOST : HOST;
  * a pump or move a node onto another Wi-Fi network. Reads are left open; only
  * writes are checked, and only on /api/v2.
  *
- * This is a shared secret compiled into the app, so it is not a real identity
- * system - it stops a stranger who finds the hostname, not a determined
- * attacker with the APK. Proper per-user auth is the next step. */
-export const API_KEY = 'WIXrGQxyl4Ng4q0xUeRoy-VHFpgZR4YlAt5ynFAKkbc';
+ * The value lives in secret.js, which is GITIGNORED. This repository is
+ * public, so a key written here is a key published to the world - which is
+ * exactly what happened to the first one, and why it was rotated.
+ *
+ * Even so this is a shared secret compiled into the app: it stops a stranger
+ * who finds the hostname, not someone holding the APK. Proper per-user auth
+ * is the next step. */
+export { API_KEY } from './secret';
 
 export const IS_SECURE = BASE_URL.startsWith('https://');
 

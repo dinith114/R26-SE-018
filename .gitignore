@@ -142,3 +142,6 @@ iot/esp32/.vscode/
 *firebase-adminsdk*.json
 firebase-admin.json
 serviceAccountKey.json
+
+# The API key. The repo is PUBLIC - never commit the real one.
+mobile/src/config/secret.js
