@@ -1594,7 +1594,8 @@ const styles = StyleSheet.create({
   tileUnit:{ fontSize: FONT.xs, fontWeight: '600' },
   tileLbl: { color: COLORS.textTertiary, fontSize: FONT.xs },
 
-  card: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg },
+  card: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg,
+          borderWidth: 1, borderColor: COLORS.borderLight },
   none: { color: COLORS.textTertiary, fontSize: FONT.sm },
 
   planTop:  { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
