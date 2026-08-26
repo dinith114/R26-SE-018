@@ -50,6 +50,9 @@ from pydantic import BaseModel, Field
 import requests as _req
 
 from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
+# Liveness lives with the registry that owns lastSeen; importing it keeps one
+# definition of "is this board there" instead of two that can drift apart.
+from app.api.routes.devices import device_liveness as _device_liveness
 
 router = APIRouter()
 
@@ -1344,7 +1347,11 @@ async def overview():
         if assigned:
             by_section[assigned] = {"mac": mac,
                                     "shortId": mac[-4:],
-                                    "readIntervalMs": (rec or {}).get("readIntervalMs")}
+                                    "readIntervalMs": (rec or {}).get("readIntervalMs"),
+                                    # Whether the BOARD is answering, which is a
+                                    # different question from whether its last
+                                    # READING is fresh - see device_liveness().
+                                    **_device_liveness(rec)}
 
     # One clock for the whole farm, so sections are aged consistently.
     farm_now = _farm_now_ms(houses)
@@ -1433,7 +1440,11 @@ async def get_house(house_id: str):
         if assigned:
             by_section[assigned] = {"mac": mac,
                                     "shortId": mac[-4:],
-                                    "readIntervalMs": (rec or {}).get("readIntervalMs")}
+                                    "readIntervalMs": (rec or {}).get("readIntervalMs"),
+                                    # Whether the BOARD is answering, which is a
+                                    # different question from whether its last
+                                    # READING is fresh - see device_liveness().
+                                    **_device_liveness(rec)}
 
     farm_now = _farm_now_ms({house_id: h})
     for sid, sec in ((h.get("sections") or {})).items():
