@@ -17,7 +17,7 @@ import { Platform } from 'react-native';
      LAN      →  'http://192.168.1.129:8000'
      hosted   →  'https://api.example.com'      (port implied by https)
      USB      →  'http://localhost:8000'        (needs: adb reverse tcp:8000 tcp:8000) */
-const HOST = 'http://192.168.1.129:8000';
+const HOST = 'https://orchidfarm.duckdns.org';
 
 /* localhost on a phone means the phone, so it is only ever right for the web
    build — or over an adb reverse tunnel, which is what HOST would say. */
