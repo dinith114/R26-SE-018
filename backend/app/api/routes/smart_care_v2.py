@@ -1082,8 +1082,11 @@ def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
     now_ms = _device_now_ms(section)
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedTs.json",
             now_ms)
+    # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
+    # raised inside the request and turned every fertilised watering into a 500,
+    # after the timestamp above had already been written.
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedAt.json",
-            to_farm_time(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M"))
+            to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"))
 
 
 def _fert_decision(section: dict) -> dict:
