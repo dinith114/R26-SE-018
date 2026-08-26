@@ -48,6 +48,31 @@ function DropRow({ icon, label, value, onPress, disabled }) {
   );
 }
 
+/* A section heading that carries meaning rather than just separating.
+
+   Every block on this screen used the same plain bold line, so a farmer
+   scanning for the tray had to read all eight to find it. The icon and its
+   tint identify the subject before the words are read; the pill on the right
+   carries the one fact that decides whether the block needs opening at all. */
+function SectionHead({ icon, title, tint, tintDim, status, statusTone, first, style }) {
+  const tone = statusTone || tint;
+  return (
+    <View style={[styles.shead, first && { marginTop: 0 }, style]}>
+      <View style={[styles.sheadIcon, { backgroundColor: tintDim }]}>
+        <Ionicons name={icon} size={14} color={tint} />
+      </View>
+      <Text style={styles.sheadTitle} numberOfLines={1}
+        maxFontSizeMultiplier={1.15}>{title}</Text>
+      {!!status && (
+        <View style={[styles.sheadPill, { backgroundColor: `${tone}1A` }]}>
+          <Text style={[styles.sheadPillTxt, { color: tone }]} numberOfLines={1}
+            maxFontSizeMultiplier={1.1}>{status}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 /* The three control positions. 'follow' is the normal case and the reason this
    is not a two-position switch. */
 const CONTROL_OPTIONS = [
@@ -870,7 +895,8 @@ export default function SectionDetailScreen({ route, navigation }) {
                 <Text style={[styles.tileVal, { color: live ? c : COLORS.textTertiary }]}>
                   {v}<Text style={styles.tileUnit}>{u}</Text>
                 </Text>
-                <Text style={styles.tileLbl}>{l}</Text>
+                <Text style={styles.tileLbl} numberOfLines={1}
+                adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{l}</Text>
               </View>
             ))}
           </View>
@@ -878,7 +904,8 @@ export default function SectionDetailScreen({ route, navigation }) {
           {/* Directly under the numbers, because it is the caveat on them: how
               old they are, and whether there is a node behind them at all. */}
           <View style={styles.freshRow}>
-            <Text style={[styles.freshLbl, !live && { color: COLORS.warning }]}>
+            <Text style={[styles.freshLbl, !live && { color: COLORS.warning }]}
+            numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>
               {noNode ? 'No sensor node detected'
                       : live ? 'Last read'
                              : 'No signal — last read'}
@@ -991,7 +1018,14 @@ export default function SectionDetailScreen({ route, navigation }) {
           )}
 
           {/* controls */}
-          <Text style={styles.h}>Control</Text>
+          <SectionHead icon="options-outline" title="How this section runs"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim}
+            status={(CONTROL_OPTIONS.find((o) => o.override === override) || CONTROL_OPTIONS[0])
+                      .label.replace('Follow the farm', farmAuto ? 'Auto' : 'Manual')
+                      .replace('Always automatic', 'Auto')
+                      .replace('Always manual', 'Manual')}
+            statusTone={override === 'manual' || (!override && !farmAuto)
+                          ? COLORS.warning : COLORS.primary} />
           <View style={[styles.card, SHADOW.sm]}>
             <View style={styles.tRow}>
               <View style={{ flex: 1 }}>
@@ -1018,7 +1052,10 @@ export default function SectionDetailScreen({ route, navigation }) {
           </View>
 
           {/* today's plan */}
-          <Text style={styles.h}>Today's Watering Plan</Text>
+          <SectionHead icon="rainy-outline" title="Today's watering"
+            tint={COLORS.info} tintDim={COLORS.infoDim}
+            status={plan.waterTime || 'no plan'}
+            statusTone={plan.waterTime ? COLORS.info : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
             {plan.waterTime ? (
               <>
@@ -1044,7 +1081,13 @@ export default function SectionDetailScreen({ route, navigation }) {
           </View>
 
           {/* humidity tray */}
-          <Text style={styles.h}>Humidity Tray</Text>
+          <SectionHead icon="water-outline" title="Humidity tray"
+            tint={COLORS.humidity} tintDim={COLORS.humidityDim}
+            status={tray.status === 'fill' ? 'needs water'
+                  : tray.status === 'cooldown' ? 'resting'
+                  : tray.status ? 'ok' : '\u2014'}
+            statusTone={tray.status === 'fill' ? COLORS.warning
+                      : tray.status === 'cooldown' ? COLORS.info : COLORS.success} />
           <View style={[styles.card, SHADOW.sm]}>
             <View style={styles.trayTop}>
               <Ionicons
@@ -1108,7 +1151,10 @@ export default function SectionDetailScreen({ route, navigation }) {
             const left = Math.max(0, Math.round(every - (since ?? 0)));
             return (
               <>
-                <Text style={styles.h}>Plant food</Text>
+                <SectionHead icon="flask-outline" title="Plant food"
+                  tint={COLORS.fertilizer} tintDim={COLORS.fertilizerDim}
+                  status={due ? 'due now' : `in ${left}d`}
+                  statusTone={due ? COLORS.fertilizer : COLORS.textTertiary} />
                 <View style={[styles.card, SHADOW.sm,
                               { borderLeftWidth: 3, borderLeftColor: due ? COLORS.fertilizer : COLORS.border }]}>
                   <View style={styles.fertTop}>
@@ -1136,7 +1182,23 @@ export default function SectionDetailScreen({ route, navigation }) {
                     </View>
                   </View>
 
-                  <Text style={styles.fertMsg}>{f.message}</Text>
+                  {/* How far through the feeding cycle this section is. A date
+                    alone does not answer "is it nearly due"; a bar does, at a
+                    glance, without arithmetic. */}
+                <View style={styles.fertBarWrap}>
+                  <View style={styles.fertBarTrack}>
+                    <View style={[styles.fertBarFill, {
+                      width: `${Math.max(3, Math.min(100,
+                        ((since ?? 0) / Math.max(1, every)) * 100))}%`,
+                      backgroundColor: due ? COLORS.fertilizer : `${COLORS.fertilizer}66`,
+                    }]} />
+                  </View>
+                  <Text style={styles.fertBarTxt}>
+                    {due ? 'due' : `${left}d`}
+                  </Text>
+                </View>
+
+                <Text style={styles.fertMsg}>{f.message}</Text>
 
                   {!f.everFertilized && (
                     <Text style={styles.fertHint}>
@@ -1153,7 +1215,9 @@ export default function SectionDetailScreen({ route, navigation }) {
         {tab === 'history' && (<>
           {/* history, over a range the farmer chooses */}
           <View style={styles.chartHead}>
-            <Text style={[styles.h, { marginTop: 0, marginBottom: 0 }]}>Conditions over time</Text>
+            <SectionHead first style={{ flex: 1, marginBottom: 0 }}
+              icon="analytics-outline" title="Conditions over time"
+              tint={COLORS.temperature} tintDim={COLORS.temperatureDim} />
             <RangePicker
               options={HISTORY_RANGES}
               value={range.hours}
@@ -1169,7 +1233,9 @@ export default function SectionDetailScreen({ route, navigation }) {
           {fcast?.hours?.length > 1 && (
             <>
               <View style={styles.chartHead}>
-                <Text style={[styles.h, { marginTop: 0, marginBottom: 0 }]}>Expected today</Text>
+                <SectionHead first style={{ flex: 1, marginBottom: 0 }}
+                  icon="partly-sunny-outline" title="Expected today"
+                  tint={COLORS.light} tintDim={COLORS.lightDim} />
                 {fcast.hotDay && (
                   <View style={styles.hotPill}>
                     <Ionicons name="flame" size={13} color={COLORS.danger} />
@@ -1198,7 +1264,9 @@ export default function SectionDetailScreen({ route, navigation }) {
           )}
 
           {/* What actually happened, from the node's own acknowledgements. */}
-          <Text style={styles.h}>Watering and feeding</Text>
+          <SectionHead first icon="list-outline" title="Watering and feeding"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim}
+            status={events?.counts ? `${events.counts.waterings} runs` : undefined} />
           {evLoading && !events ? (
             <View style={[styles.card, SHADOW.sm, { alignItems: 'center', paddingVertical: SPACE.xl }]}>
               <ActivityIndicator color={COLORS.primary} />
@@ -1267,7 +1335,10 @@ export default function SectionDetailScreen({ route, navigation }) {
           {/* Which physical node reports for this section. A section with no node
               is a normal state, not an error, so it gets an explanation rather
               than a warning. */}
-          <Text style={styles.h}>Sensor node</Text>
+          <SectionHead first icon="hardware-chip-outline" title="Sensor node"
+            tint={COLORS.textSecondary} tintDim={COLORS.bgCardAlt}
+            status={device ? (device.online ? 'online' : 'offline') : 'none linked'}
+            statusTone={device?.online ? COLORS.success : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
             {device ? (
               <>
@@ -1390,6 +1461,24 @@ const styles = StyleSheet.create({
   h:         { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.md, marginTop: SPACE.lg },
 
   tileDead: { backgroundColor: COLORS.bgCardAlt },
+  shead:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+             marginTop: SPACE.xl, marginBottom: SPACE.sm },
+  sheadIcon: { width: 26, height: 26, borderRadius: 8,
+               alignItems: 'center', justifyContent: 'center' },
+  sheadTitle: { flex: 1, color: COLORS.text, fontSize: 15.5, fontWeight: '800',
+                letterSpacing: -0.2 },
+  sheadPill: { borderRadius: RADIUS.full, paddingHorizontal: 9, paddingVertical: 3 },
+  sheadPillTxt: { fontSize: 11, fontWeight: '800', letterSpacing: 0.2,
+                  textTransform: 'lowercase' },
+
+  fertBarWrap: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+                 marginTop: SPACE.md },
+  fertBarTrack: { flex: 1, height: 6, borderRadius: 3,
+                  backgroundColor: COLORS.border, overflow: 'hidden' },
+  fertBarFill: { height: '100%', borderRadius: 3 },
+  fertBarTxt: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700',
+                minWidth: 30, textAlign: 'right' },
+
   tabs:    { flexDirection: 'row', gap: 4, backgroundColor: COLORS.bgCardAlt,
              borderRadius: RADIUS.md, padding: 4, marginBottom: SPACE.lg },
   tab:     { flex: 1, flexDirection: 'row', alignItems: 'center',
