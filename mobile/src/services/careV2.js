@@ -126,6 +126,15 @@ export const fillTray = (h, s, fillSeconds = 15) =>
  * Safe to send when nothing is running - the node acknowledges it as idle
  * rather than leaving the app waiting for a confirmation that never comes.
  */
+/**
+ * Everything that moved water in this section, newest first.
+ *
+ * Includes whether the NODE confirmed it — a command the server accepted and a
+ * pour the hardware ran are different claims, and the history says which it is.
+ */
+export const getSectionEvents = (h, s, limit = 40) =>
+  req(`/houses/${h}/sections/${s}/events?limit=${limit}`);
+
 export const stopSection = (h, s) =>
   req(`/houses/${h}/sections/${s}/stop`, { method: 'POST' });
 

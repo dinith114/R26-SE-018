@@ -1089,6 +1089,44 @@ def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
             to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"))
 
 
+# How many events are kept per section. Events are written a handful of times a
+# day, so this is roughly a month of history - enough to answer "when was this
+# last watered and fed" without the document growing without bound.
+EVENT_KEEP = 60
+
+
+def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optional[str]:
+    """Record something that MOVED WATER, so it can be shown as history.
+
+    The only record before this was `watering/log/{day}-{tag}`, holding `{at,
+    by}`. It was written by the automatic path only, carried no duration and no
+    fertilizer detail, and was keyed by day so at most two entries survived per
+    day. There was no way to answer "when was this section last fed", which is
+    the question the fertilizer schedule depends on.
+
+    Keyed by epoch milliseconds so the keys sort chronologically.
+    """
+    now_ms = int(_device_now_ms(section))
+    ev = {"at": now_ms,
+          "atLocal": to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"),
+          **fields}
+    key = str(now_ms)
+    base = f"/farm/houses/{house_id}/sections/{section_id}/events"
+    if not _fb_put(f"{base}/{key}.json", ev):
+        return None
+
+    # Prune oldest beyond EVENT_KEEP. `shallow=true` returns keys only, so this
+    # costs a few hundred bytes rather than the whole log.
+    try:
+        keys = _fb_get(f"{base}.json?shallow=true") or {}
+        if len(keys) > EVENT_KEEP:
+            for old_key in sorted(keys, key=lambda k: int(k) if k.isdigit() else 0)[:len(keys) - EVENT_KEEP]:
+                _fb_delete(f"{base}/{old_key}.json")
+    except Exception:
+        pass          # a failed prune must never fail the watering
+    return key
+
+
 def _fert_decision(section: dict) -> dict:
     latest = _clean((section or {}).get("latest") or {})
     # Growth stage decides WHICH fertilizer — take it from Component 2 if it has
@@ -1129,6 +1167,10 @@ def _fert_decision(section: dict) -> dict:
     npk = _fert["npk_encoder"].inverse_transform(_fert["model_npk"].predict(Xs))[0]
     strength = 0.5 if now.month not in (11, 12, 1, 2) and stage != "Dormant" else 0.25
 
+    # What this stage takes, regardless of whether a feed is due right now. The
+    # history needs it: a farmer who feeds early still mixed something, and
+    # recording "None" against a feed that happened is simply wrong.
+    npk_for_stage = npk
     if not due:
         npk = "None"
         nxt = _fert["schedule_days"].get(stage, 7) - days
@@ -1142,6 +1184,7 @@ def _fert_decision(section: dict) -> dict:
             "daysSinceFertilize": days,
             # None until the first recorded feed, which the app shows as
             # "not recorded yet" rather than inventing a date.
+            "npkForStage": npk_for_stage,
             "lastFertilizedAt": fert_rec.get("lastFertilizedAt"),
             "everFertilized": bool(fert_rec.get("lastFertilizedTs")),
             "intervalDays": int(_fert["schedule_days"].get(stage, 7)),
@@ -1475,13 +1518,50 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
     # Start the fertilizer clock. Without this the counter never moves, so every
     # subsequent watering claims to mix in plant food and the "due" alert can
     # never be cleared.
+    fert_now = _fert_decision(s) if command["withFertilizer"] else None
     if command["withFertilizer"]:
         _record_fertilized(house_id, section_id, s)
+    _log_event(house_id, section_id, s,
+               action="water",
+               durationSec=command["durationSec"],
+               withFertilizer=bool(command["withFertilizer"]),
+               npkType=((fert_now or {}).get("npkForStage")
+                        if command["withFertilizer"] else None),
+               strength=(fert_now or {}).get("strength") if command["withFertilizer"] else None,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),
             "message": (f"Watering for {command['durationSec']}s. The node picks "
                         "this up within about 15 seconds.")}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/events")
+def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
+    """Everything that moved water in this section, newest first.
+
+    Includes whether the node confirmed it. A command the server accepted and a
+    pour the hardware actually ran are different claims, and the history has to
+    show which one it is holding.
+    """
+    raw = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/events.json") or {}
+    items = []
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            items.append({"id": k, **v})
+    items.sort(key=lambda x: x.get("at") or 0, reverse=True)
+
+    waters = [x for x in items if x.get("action") == "water"]
+    feeds  = [x for x in waters if x.get("withFertilizer")]
+    return {"status": "success",
+            "events": items[:max(1, min(limit, 200))],
+            "counts": {"total": len(items),
+                       "waterings": len(waters),
+                       "feeds": len(feeds)},
+            "lastWatered": waters[0]["atLocal"] if waters else None,
+            "lastFed": feeds[0]["atLocal"] if feeds else None}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/command-status")
@@ -1529,6 +1609,20 @@ def command_status(house_id: str, section_id: str,
     remaining = None
     if running and started_at:
         remaining = max(0, int(started_at) + int(secs) - int(time.time()))
+
+    # Stamp the outcome onto the event that started it. The app polls this
+    # throughout every manual run, so the history learns whether the node
+    # actually did the work without any extra request.
+    if matches and bool(ack.get("done")) and want:
+        try:
+            evs = _fb_get(f"{base}/events.json") or {}
+            for k, v in evs.items():
+                if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
+                    _fb_put(f"{base}/events/{k}/confirmed.json", True)
+                    _fb_put(f"{base}/events/{k}/stoppedEarly.json", bool(ack.get("stopped")))
+                    break
+        except Exception:
+            pass
 
     return {
         "status": "success",
