@@ -28,6 +28,17 @@ export const BASE_URL = Platform.OS === 'web' ? WEB_HOST : HOST;
 /** True once the backend is reached over TLS. The native manifest still carries
  *  `android:usesCleartextTraffic` purely because HOST is plain http on a LAN
  *  address; when this is true that exception can be removed. */
+/* Sent as X-API-Key on every request that CHANGES something.
+ *
+ * The backend is on a public host, and its POST/PUT/DELETE endpoints can start
+ * a pump or move a node onto another Wi-Fi network. Reads are left open; only
+ * writes are checked, and only on /api/v2.
+ *
+ * This is a shared secret compiled into the app, so it is not a real identity
+ * system - it stops a stranger who finds the hostname, not a determined
+ * attacker with the APK. Proper per-user auth is the next step. */
+export const API_KEY = 'WIXrGQxyl4Ng4q0xUeRoy-VHFpgZR4YlAt5ynFAKkbc';
+
 export const IS_SECURE = BASE_URL.startsWith('https://');
 
 export default BASE_URL;
