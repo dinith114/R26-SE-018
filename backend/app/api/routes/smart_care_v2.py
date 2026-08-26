@@ -1111,7 +1111,15 @@ def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optio
           "atLocal": to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"),
           **fields}
     key = str(now_ms)
-    base = f"/farm/houses/{house_id}/sections/{section_id}/events"
+    # OUTSIDE the section subtree, on its own branch.
+    #
+    # /farm/houses.json is the engine's hot path - fetched every 60 seconds, so
+    # 1,440 times a day. Anything stored inside a section is paid for on every
+    # one of those fetches. At 60 events per section this log would have added
+    # ~84 KB to a 23 KB document and taken the engine alone from 29 MB/day to
+    # about 147 MB. History was moved out of the section subtree for exactly
+    # this reason once already.
+    base = f"/farm/events/{house_id}/{section_id}"
     if not _fb_put(f"{base}/{key}.json", ev):
         return None
 
@@ -1546,7 +1554,7 @@ def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
     pour the hardware actually ran are different claims, and the history has to
     show which one it is holding.
     """
-    raw = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/events.json") or {}
+    raw = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
     items = []
     for k, v in raw.items():
         if isinstance(v, dict):
@@ -1615,11 +1623,12 @@ def command_status(house_id: str, section_id: str,
     # actually did the work without any extra request.
     if matches and bool(ack.get("done")) and want:
         try:
-            evs = _fb_get(f"{base}/events.json") or {}
+            evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
             for k, v in evs.items():
                 if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
-                    _fb_put(f"{base}/events/{k}/confirmed.json", True)
-                    _fb_put(f"{base}/events/{k}/stoppedEarly.json", bool(ack.get("stopped")))
+                    ev = f"/farm/events/{house_id}/{section_id}/{k}"
+                    _fb_put(f"{ev}/confirmed.json", True)
+                    _fb_put(f"{ev}/stoppedEarly.json", bool(ack.get("stopped")))
                     break
         except Exception:
             pass
