@@ -1013,7 +1013,11 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
         cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
         _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
-        _issue_node_command(house_id, section_id, "tray", secs)
+        node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
+        _log_event(house_id, section_id, section,
+                   action="tray", durationSec=secs, withFertilizer=False,
+                   by="auto", commandId=(node_cmd or {}).get("id"),
+                   confirmed=False)
         commanded = True
         msg += " Auto mode: filling now."
 
@@ -1759,6 +1763,16 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
 
     node_cmd = _issue_node_command(house_id, section_id, "tray",
                                    command["fillSeconds"])
+    # Tray fills belong in the history too. Watering was logged and this was
+    # not, so the record answered "when was it watered" but never "when was the
+    # tray last topped up" - which is the other half of humidity control.
+    _log_event(house_id, section_id, s,
+               action="tray",
+               durationSec=command["fillSeconds"],
+               withFertilizer=False,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),
