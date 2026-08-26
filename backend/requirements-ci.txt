@@ -1,0 +1,28 @@
+# Dependencies for the CI test run only.
+#
+# Deliberately NOT requirements.txt. That file pulls TensorFlow and Torch -
+# roughly 7 GB including CUDA wheels the runner has no GPU for - which would
+# make every pull request take ten minutes to tell you about a typo.
+#
+# The tests exercise pure decision logic: freshness windows, the farm clock, the
+# auto/manual switch and the alarm repeat rule. None of them run a model, so
+# none of them need the ML stack. What they DO need is whatever
+# smart_care_v2.py and automation.py touch at import time.
+#
+# The full dependency set is still checked, by the `deps` job, which resolves
+# requirements.txt without downloading it. That is what catches a conflict like
+# the duplicate tensorflow pin.
+
+fastapi==0.115.0
+pydantic==2.9.0
+pydantic-settings==2.5.0
+numpy==1.26.4
+joblib==1.4.2
+scikit-learn==1.5.0
+requests==2.32.3
+pytest==8.3.0
+# smart_care_v2 imports its Firebase helpers from smart_watering, which uses
+# pandas and declares a Form/File upload route - so both are needed to reach
+# the first assert, even though no test uploads anything.
+pandas==2.2.2
+python-multipart==0.0.9
