@@ -105,6 +105,11 @@ SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
 # refuse to refill and avoid a wasteful overflow loop.
 COOLDOWN_HOURS = 6.0
 
+# What "days since fertilized" means for a section that has never been fed
+# through the system. Deliberately at the Active-stage interval so it reads as
+# due once, is acted on, and then runs on real timestamps from that point.
+FERT_UNKNOWN_DAYS = 7.0
+
 
 # Physically possible ranges. A reading outside these means the sensor is
 # faulty (stuck, disconnected, garbage on the wire) — not a real measurement.
@@ -827,8 +832,12 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     # fertilization was invisible unless the user tapped that one button.)
     fert = _fert_decision(section)
     existing = (section or {}).get("fertilizer") or {}
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer.json",
-            {**existing, **fert, "updatedAt": plan["generatedAt"]})
+    # Nulls from the decision must not clobber what is already recorded. The
+    # decision is computed from a snapshot taken BEFORE this pass, so a feed
+    # recorded moments ago reads back as None here and would erase itself.
+    merged = {**existing, **{k: v for k, v in fert.items() if v is not None},
+              "updatedAt": plan["generatedAt"]}
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer.json", merged)
     plan["fertilizer"] = fert
     return plan
 
@@ -1029,13 +1038,61 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
 
 # ═══════════════════════ ML: fertilizer ═══════════════════════════════════════
 
+def _days_since_fertilized(section: dict) -> float:
+    """How long since this section was actually fed, in days.
+
+    Derived from a TIMESTAMP, not from a stored number.
+
+    The previous version read a plain `daysSince` integer that nothing ever
+    wrote. Three faults compounded:
+      * a number cannot advance with time, so it never grew;
+      * nothing reset it after a feed, so it never shrank;
+      * its default (7) equalled the Active-stage interval (7), so any section
+        created through the app was born "due" and stayed due forever.
+    The visible result was every single watering claiming to mix in plant food,
+    and a "Fertilizer due" alert that could never be cleared.
+    """
+    fert = (section or {}).get("fertilizer") or {}
+    now_ms = _device_now_ms(section)
+
+    ts = fert.get("lastFertilizedTs")
+    if ts:
+        hrs = _hours_since(ts, now_ms)
+        if hrs is not None:
+            return round(hrs / 24.0, 2)
+
+    # Never fed through the system. Fall back to whatever was seeded, and treat
+    # an absent value as "due now" rather than inventing a history - a section
+    # whose feeding is unknown SHOULD be flagged once, and recording the first
+    # feed then starts the clock properly.
+    try:
+        return float(fert.get("daysSince"))
+    except (TypeError, ValueError):
+        return float(FERT_UNKNOWN_DAYS)
+
+
+def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
+    """Start the clock. Called when a watering that CARRIES fertilizer is issued.
+
+    Recorded at issue rather than at the node's acknowledgement: an ack can be
+    lost, and feeding twice because a confirmation went missing is worse than
+    the small risk of counting a feed the pump never delivered. The farmer can
+    correct it from the section screen.
+    """
+    now_ms = _device_now_ms(section)
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedTs.json",
+            now_ms)
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedAt.json",
+            to_farm_time(datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M"))
+
+
 def _fert_decision(section: dict) -> dict:
     latest = _clean((section or {}).get("latest") or {})
     # Growth stage decides WHICH fertilizer — take it from Component 2 if it has
     # reported, else the farmer's setting, else a seasonal guess (and say so).
     gs     = _resolve_growth_stage(section)
     stage  = gs["stage"]
-    days   = float((section or {}).get("fertilizer", {}).get("daysSince", 7))
+    days   = _days_since_fertilized(section)
     now    = datetime.now(timezone.utc)
 
     # The farmer can switch plant food off entirely (e.g. they feed by hand).
@@ -1077,8 +1134,15 @@ def _fert_decision(section: dict) -> dict:
         msg = (f"Due now: {npk} at {int(strength*100)}% strength, "
                f"mixed into the next watering (never on dry roots).")
 
+    fert_rec = (section or {}).get("fertilizer") or {}
     return {"due": due, "npkType": npk, "strength": strength,
-            "daysSinceFertilize": days, "growthStage": stage,
+            "daysSinceFertilize": days,
+            # None until the first recorded feed, which the app shows as
+            # "not recorded yet" rather than inventing a date.
+            "lastFertilizedAt": fert_rec.get("lastFertilizedAt"),
+            "everFertilized": bool(fert_rec.get("lastFertilizedTs")),
+            "intervalDays": int(_fert["schedule_days"].get(stage, 7)),
+            "growthStage": stage,
             "growthSource": gs["source"], "growthMessage": gs["message"],
             "growthNeedsAttention": gs["needsAttention"],
             "growthConfidence": gs["confidence"],
@@ -1405,6 +1469,11 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
     node_cmd = _issue_node_command(house_id, section_id, "water",
                                    command["durationSec"],
                                    withFertilizer=command["withFertilizer"])
+    # Start the fertilizer clock. Without this the counter never moves, so every
+    # subsequent watering claims to mix in plant food and the "due" alert can
+    # never be cleared.
+    if command["withFertilizer"]:
+        _record_fertilized(house_id, section_id, s)
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),

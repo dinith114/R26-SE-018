@@ -1041,19 +1041,67 @@ export default function SectionDetailScreen({ route, navigation }) {
           <Text style={styles.barLbl}>0%     ideal band {RH_LOW}–{RH_HIGH}%     100%</Text>
         </View>
 
-        {/* fertilizer */}
-        {(fert || sec?.fertilizer) && (
-          <>
-            <Text style={styles.h}>Fertilizer</Text>
-            <View style={[styles.card, SHADOW.sm, { borderLeftWidth: 3, borderLeftColor: fert.due ? COLORS.fertilizer : COLORS.border }]}>
-              <View style={styles.fertTop}>
-                <Ionicons name="flask-outline" size={18} color={fert.due ? COLORS.fertilizer : COLORS.textTertiary} />
-                <Text style={styles.fertNpk}>{fert.due ? `${fert.npkType} @ ${Math.round(fert.strength * 100)}% strength` : 'Not due'}</Text>
+        {/* Plant food.
+
+            Read through one resolved object: the guard used to allow `fert` to
+            be null while `sec.fertilizer` existed, and then read `fert.due`
+            straight after - a crash waiting for the first section whose plan
+            had not run yet.
+
+            The card now shows WHEN it was last fed and when the next feed is
+            due, because "due / not due" alone gave the farmer nothing to check
+            against and no way to tell whether a feed had been recorded at
+            all. */}
+        {(() => {
+          const f = fert || sec?.fertilizer;
+          if (!f) return null;
+          const due = !!f.due;
+          const tone = due ? COLORS.fertilizer : COLORS.textTertiary;
+          const every = f.intervalDays || 7;
+          const since = f.daysSinceFertilize;
+          const left = Math.max(0, Math.round(every - (since ?? 0)));
+          return (
+            <>
+              <Text style={styles.h}>Plant food</Text>
+              <View style={[styles.card, SHADOW.sm,
+                            { borderLeftWidth: 3, borderLeftColor: due ? COLORS.fertilizer : COLORS.border }]}>
+                <View style={styles.fertTop}>
+                  <Ionicons name="flask-outline" size={18} color={tone} />
+                  <Text style={[styles.fertNpk, { color: tone }]}>
+                    {due ? `Due now \u00b7 ${f.npkType} at ${Math.round((f.strength || 0.5) * 100)}% strength`
+                         : `Next feed in about ${left} day${left === 1 ? '' : 's'}`}
+                  </Text>
+                </View>
+
+                <View style={styles.fertRows}>
+                  <View style={styles.fertRow}>
+                    <Text style={styles.fertKey}>Last fed</Text>
+                    <Text style={styles.fertVal}>
+                      {f.everFertilized
+                        ? (f.lastFertilizedAt || `${Math.round(since ?? 0)} days ago`)
+                        : 'Not recorded yet'}
+                    </Text>
+                  </View>
+                  <View style={styles.fertRow}>
+                    <Text style={styles.fertKey}>Feeds every</Text>
+                    <Text style={styles.fertVal}>
+                      {every} days \u00b7 {f.growthStage || 'Active'}
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={styles.fertMsg}>{f.message}</Text>
+
+                {!f.everFertilized && (
+                  <Text style={styles.fertHint}>
+                    No feed has been recorded for this section yet, so it is shown as due once.
+                    Watering it with plant food starts the schedule.
+                  </Text>
+                )}
               </View>
-              <Text style={styles.fertMsg}>{fert.message}</Text>
-            </View>
-          </>
-        )}
+            </>
+          );
+        })()}
 
         {/* Which physical node reports for this section. A section with no node
             is a normal state, not an error, so it gets an explanation rather
@@ -1179,6 +1227,14 @@ const styles = StyleSheet.create({
   h:         { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.md, marginTop: SPACE.lg },
 
   tileDead: { backgroundColor: COLORS.bgCardAlt },
+  fertRows: { borderTopWidth: 1, borderTopColor: COLORS.border,
+              marginTop: SPACE.md, paddingTop: SPACE.md, gap: 6 },
+  fertRow:  { flexDirection: 'row', alignItems: 'baseline',
+              justifyContent: 'space-between', gap: SPACE.md },
+  fertKey:  { color: COLORS.textTertiary, fontSize: FONT.sm },
+  fertVal:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
+  fertHint: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
+              marginTop: SPACE.sm },
   wLbl:   { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700',
             marginTop: SPACE.md, marginBottom: SPACE.xs },
   wHead:  { flexDirection: 'row', alignItems: 'center',
