@@ -6,6 +6,11 @@ import { Platform } from 'react-native';
 
 // Single source of truth for the backend address - see config/backend.js.
 export { BASE_URL } from '../config/backend';
+import { API_KEY } from '../config/backend';
+
+/* Content-Type plus the write key. Spread FIRST so an explicit
+   headers option could still override it. */
+const H = { 'Content-Type': 'application/json', 'X-API-Key': API_KEY };
 import BASE_URL_VALUE from '../config/backend';
 const BASE_URL = BASE_URL_VALUE;
 
@@ -13,7 +18,7 @@ const API = `${BASE_URL}/api/v2/care`;
 
 async function req(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: H,
     ...options,
   });
   if (!res.ok) {
@@ -140,7 +145,7 @@ const AUTO = `${BASE_URL}/api/v2/auto`;
 
 async function autoReq(path, options = {}) {
   const res = await fetch(`${AUTO}${path}`, {
-    headers: { 'Content-Type': 'application/json' }, ...options,
+    headers: H, ...options,
   });
   if (!res.ok) {
     let detail = `Server error ${res.status}`;
@@ -178,7 +183,7 @@ const DEV = `${BASE_URL}/api/v2/devices`;
 
 async function devReq(path, options = {}) {
   const res = await fetch(`${DEV}${path}`, {
-    headers: { 'Content-Type': 'application/json' }, ...options,
+    headers: H, ...options,
   });
   if (!res.ok) {
     let detail = `Server error ${res.status}`;

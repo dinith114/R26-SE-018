@@ -21,6 +21,44 @@ app = FastAPI(
 )
 
 # CORS middleware for React Native mobile app
+# ── Write protection ──────────────────────────────────────────────────────────
+#
+# The backend is on a public host now, and the endpoints below can start a pump,
+# open a valve, or move a node onto a different Wi-Fi network. Scanners find a
+# new address within minutes, so anything that CHANGES state needs a key.
+#
+# Deliberately narrow:
+#   * GET is left open. The worst a reader gets is farm telemetry, and keeping
+#     reads open means Components 1, 2 and 4 - which use their own fetch code -
+#     are not broken by this.
+#   * Only /api/v2/* is covered. That is where every water and hardware command
+#     lives; the v1 routes are prediction endpoints that touch no hardware.
+#
+# The key is read from the environment. If ORCHID_API_KEY is unset the check is
+# skipped entirely, so a laptop run stays exactly as it was.
+import os as _os
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+
+ORCHID_API_KEY = _os.environ.get("ORCHID_API_KEY", "").strip()
+_GUARDED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_GUARDED_PREFIX = "/api/v2/"
+
+
+@app.middleware("http")
+async def _require_api_key(request: _Request, call_next):
+    if (ORCHID_API_KEY
+            and request.method in _GUARDED_METHODS
+            and request.url.path.startswith(_GUARDED_PREFIX)):
+        if request.headers.get("x-api-key", "") != ORCHID_API_KEY:
+            return _JSONResponse(
+                status_code=401,
+                content={"detail": "This action needs an API key. The app sends one "
+                                   "automatically; if you are seeing this in the app, "
+                                   "it is out of date and needs rebuilding."})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
