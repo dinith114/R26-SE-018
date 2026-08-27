@@ -69,6 +69,18 @@ export default function FarmDashboardScreen({ navigation }) {
 
   const flowHouse = (data?.houses || []).find((h) => h.houseId === flow?.houseId);
   const flowSections = flowHouse?.sections || [];
+
+  /* A tray in cooldown cannot take water - the backend refuses the fill - so a
+     TRAY flow must not offer it, exactly as neither flow offers a section whose
+     node has gone quiet. Watering the roots is a separate loop and is never
+     blocked by this. Sections removed for cooldown are counted so the sheet can
+     say why they are missing; a section that simply vanishes reads as a bug. */
+  const isTrayFlow = flow?.kind !== 'water';
+  const trayCooling = (x) =>
+    x?.tray?.status === 'cooldown' && Number(x?.tray?.hoursUntilNextFill) > 0;
+  const flowLive = flowSections.filter((x) => x.freshness?.state === 'live');
+  const flowPickable = flowLive.filter((x) => !(isTrayFlow && trayCooling(x)));
+  const coolingHidden = flowLive.length - flowPickable.length;
   const chosen = flowSections.filter((x) => (flow?.sectionIds || []).includes(x.sectionId));
 
   const launch = () => {
@@ -392,9 +404,13 @@ export default function FarmDashboardScreen({ navigation }) {
         visible={flow?.step === 'sections'}
         multi
         title={flow?.kind === 'water' ? 'Water which sections?' : 'Fill which trays?'}
-        subtitle={flowHouse ? (flowHouse.meta?.name || flowHouse.houseId) : undefined}
-        options={flowSections
-          .filter((x) => x.freshness?.state === 'live')
+        subtitle={flowHouse
+          ? (flowHouse.meta?.name || flowHouse.houseId)
+            + (coolingHidden > 0
+                ? ` · ${coolingHidden} tray${coolingHidden === 1 ? '' : 's'} still resting`
+                : '')
+          : undefined}
+        options={flowPickable
           .map((x) => {
             const rh = humidityStatus(x.latest?.humidity);
             return {
@@ -405,7 +421,11 @@ export default function FarmDashboardScreen({ navigation }) {
             };
           })}
         emptyText={
-          flowSections.length
+          coolingHidden > 0 && flowPickable.length === 0
+            ? 'Every tray here was filled recently and is still resting, so none can '
+              + 'take more water yet. A tray cannot dry out faster than its cooldown, '
+              + 'so refilling now would overflow it rather than raise humidity.'
+            : flowSections.length
             ? `None of the ${flowSections.length} section`
               + `${flowSections.length === 1 ? '' : 's'} here is reporting right now, so `
               + 'there is nothing that can be watered. Check the nodes are powered '
