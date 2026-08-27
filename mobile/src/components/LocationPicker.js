@@ -36,7 +36,12 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
    prevent. A pin the farmer placed is the only pin worth trusting. */
 const FALLBACK = { lat: 7.8731, lon: 80.7718, zoom: 7 };
 
-const mapHtml = (lat, lon, zoom) => `<!DOCTYPE html>
+/* `lat`/`lon` are ALWAYS real numbers - they centre the map. `pin` decides
+   whether a marker starts on it. Passing null for lat to mean "no pin yet" made
+   Leaflet throw `Invalid LatLng object: (null, ...)` on the very first call, so
+   the map died before drawing anything - in exactly the case that matters, a
+   farm whose location has never been set. */
+const mapHtml = (lat, lon, zoom, pin) => `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -56,12 +61,21 @@ const mapHtml = (lat, lon, zoom) => `<!DOCTYPE html>
     if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify(o));
   };
   try {
-    if (typeof L === 'undefined') { document.getElementById('err').style.display = 'block'; }
+    if (typeof L === 'undefined') {
+      document.getElementById('err').style.display = 'block';
+      post({ type: 'fail', why: 'Leaflet did not load' });
+    }
     else {
       var map = L.map('map').setView([${lat}, ${lon}], ${zoom});
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      var tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '(c) OpenStreetMap'
-      }).addTo(map);
+      });
+      // Say so if the tiles themselves fail, rather than showing a blank square
+      // and letting it be mistaken for "the map is broken".
+      tiles.on('tileerror', function () { post({ type: 'tileerror' }); });
+      tiles.on('load', function () { post({ type: 'tilesok' }); });
+      tiles.addTo(map);
+      post({ type: 'ready' });
 
       var marker = null;
       var place = function (la, lo) {
@@ -74,7 +88,7 @@ const mapHtml = (lat, lon, zoom) => `<!DOCTYPE html>
         post({ type: 'pick', lat: la, lon: lo });
       };
 
-      ${lat !== null ? `place(${lat}, ${lon});` : ''}
+      ${pin ? `place(${lat}, ${lon});` : ''}
       map.on('click', function (e) { place(e.latlng.lat, e.latlng.lng); });
 
       // Name search, so "Peradeniya" is a valid answer and coordinates are not.
@@ -92,7 +106,11 @@ const mapHtml = (lat, lon, zoom) => `<!DOCTYPE html>
           .catch(function () { post({ type: 'noresult' }); });
       };
     }
-  } catch (e) { document.getElementById('err').style.display = 'block'; }
+  } catch (e) {
+    document.getElementById('err').style.display = 'block';
+    post({ type: 'fail', why: String(e && e.message || e) });
+  }
+  window.onerror = function (m) { post({ type: 'fail', why: String(m) }); };
 </script>
 </body></html>`;
 
@@ -104,7 +122,8 @@ export default function LocationPicker({ visible, initial, onCancel, onPick }) {
   const web = useRef(null);
   const [picked, setPicked] = useState(hasInitial ? { lat: startLat, lon: startLon } : null);
   const [query, setQuery] = useState('');
-  const [status, setStatus] = useState(null);      // 'searching' | 'noresult' | place name
+  const [status, setStatus] = useState(null);      // 'searching' | 'noresult' | 'fail:…' | place name
+  const [loaded, setLoaded] = useState(false);    // the map reported itself alive
   const [manual, setManual] = useState(null);      // { lat, lon } when typing instead
 
   const onMessage = (e) => {
@@ -114,6 +133,10 @@ export default function LocationPicker({ visible, initial, onCancel, onPick }) {
     else if (m.type === 'searching') setStatus('searching');
     else if (m.type === 'noresult') setStatus('noresult');
     else if (m.type === 'found') setStatus(m.name);
+    else if (m.type === 'ready') setLoaded(true);
+    else if (m.type === 'tilesok') { setLoaded(true); setStatus((st) => (st || '').startsWith('fail') ? null : st); }
+    else if (m.type === 'tileerror') setStatus('fail:Map tiles could not be downloaded. Check the internet connection.');
+    else if (m.type === 'fail') setStatus('fail:' + m.why);
   };
 
   const search = () => {
@@ -197,17 +220,37 @@ export default function LocationPicker({ visible, initial, onCancel, onPick }) {
               <WebView
                 ref={web}
                 originWhitelist={['*']}
-                source={{ html: mapHtml(hasInitial ? startLat : null, startLon, hasInitial ? 14 : FALLBACK.zoom) }}
+                /* baseUrl gives the page a real origin. Without it Android
+                   serves the HTML from about:blank, and the place-name lookup
+                   becomes a null-origin cross-site request that is refused. */
+                source={{
+                  html: mapHtml(startLat, startLon, hasInitial ? 14 : FALLBACK.zoom, hasInitial),
+                  baseUrl: 'https://www.openstreetmap.org',
+                }}
                 onMessage={onMessage}
                 javaScriptEnabled
                 domStorageEnabled
-                style={{ backgroundColor: COLORS.bg }}
+                /* flex:1 is not optional here. Without it the WebView collapses
+                   to zero height inside a flex parent and the map appears not to
+                   load at all - it is drawing correctly into nothing. */
+                style={s.web}
+                onError={(e) => setStatus('fail:' + (e.nativeEvent?.description || 'load error'))}
+                onHttpError={(e) => setStatus('fail:HTTP ' + e.nativeEvent?.statusCode)}
                 {...(Platform.OS === 'android' ? { mixedContentMode: 'always' } : {})}
               />
             </View>
 
             <View style={s.foot}>
-              {status === 'searching' ? (
+              {typeof status === 'string' && status.startsWith('fail:') ? (
+                <Text style={[s.status, { color: COLORS.danger }]}>
+                  {status.slice(5)}{'\n'}Use “I already know the coordinates” below if this persists.
+                </Text>
+              ) : !loaded ? (
+                <View style={s.statusRow}>
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                  <Text style={s.status}>Loading the map…</Text>
+                </View>
+              ) : status === 'searching' ? (
                 <View style={s.statusRow}>
                   <ActivityIndicator size="small" color={COLORS.primary} />
                   <Text style={s.status}>Looking that up…</Text>
@@ -260,6 +303,7 @@ const s = StyleSheet.create({
   searchBtn:{ paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
   searchBtnTxt: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
 
+  web:      { flex: 1, backgroundColor: 'transparent' },
   mapWrap:  { flex: 1, margin: SPACE.lg, borderRadius: RADIUS.md, overflow: 'hidden',
               borderWidth: 1, borderColor: COLORS.border, ...SHADOW.sm },
 
