@@ -127,8 +127,39 @@ COOLDOWN_HOURS = 6.0
 # The dose that actually fills the tray, and so earns the FULL cooldown.
 # Reactive doses land around 30-40 s; an anticipatory top-up is 6-15 s.
 TRAY_FULL_FILL_SEC = 30.0
-# Even a splash needs a moment before the next assessment means anything.
+# Even a splash needs a moment before the next assessment means anything. This
+# one is never waived, including for a refill, so a probe stuck at "dry" cannot
+# make the valve open every fifteen minutes for ever.
 TRAY_MIN_HOLD_HOURS = 0.5
+
+# Below this the tray cannot buffer anything - there is nothing left to
+# evaporate - and it is refilled regardless of what the air is doing.
+TRAY_LOW_PCT = 20.0
+TRAY_REFILL_SEC = 25
+
+
+def _tray_level(latest: dict):
+    """Measured water level in the tray, or None when there is no usable probe.
+
+    The capacitive probe sits IN the humidity tray - Vanda grow bare-root, so
+    there is no medium to measure and the probe was repurposed to report the
+    tray. The firmware maps it to a percentage against a calibration measured on
+    this exact probe: 2600 counts in open air, 1100 with the blade in water.
+
+    None rather than a guess when the probe is absent or faulty. A section
+    without one keeps the older air-humidity behaviour instead of being told its
+    tray is empty on no evidence.
+    """
+    v = (latest or {}).get("sampleMoisture")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f < -5.0 or f > 105.0:          # outside anything the mapping can produce
+        return None
+    return max(0.0, min(100.0, f))
 
 
 def _effective_cooldown(last_secs) -> float:
@@ -1159,11 +1190,34 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                    f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
                    f"while there is still heat to evaporate it.")
 
+    # ── KEEP THE RESERVOIR CHARGED ───────────────────────────────────────────
+    # A humidity tray raises humidity by evaporating. An empty one cannot, so
+    # waiting for the air to dry before filling charges the buffer exactly when
+    # it is already too late.
+    #
+    # Every other rule here infers the tray's state - from air humidity, or from
+    # a clock. The probe MEASURES it, and a measurement beats an inference. On
+    # the live farm this was found reading 0 % for thirty hours while the system
+    # reported "ok, no fill needed", because the air happened to be humid at the
+    # time it was asked.
+    level = _tray_level(latest)
+    dry = level is not None and level < TRAY_LOW_PCT
+    if dry and TRAY_DAY_START <= hour <= TRAY_DAY_END and secs < TRAY_REFILL_SEC:
+        secs = TRAY_REFILL_SEC
+        status = "refill"
+        msg = (f"The tray is empty (level {level:.0f}%). Refilling {secs}s so there is "
+               f"water to evaporate when humidity falls. An empty tray cannot hold "
+               f"humidity up, however good the air looks right now.")
+
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
     # Overfilling a 3 cm tray into already damp air risks mould on the roots,
     # so this one stays hard.
-    if secs > 0 and rh >= hi:
+    # `not dry` matters: this ceiling exists to stop water being added to a tray
+    # that already has some, into air that is already damp. Putting water into an
+    # EMPTY tray is not over-humidifying - it is stocking a reservoir, and
+    # evaporation self-limits at high humidity anyway.
+    if secs > 0 and rh >= hi and not dry:
         msg = (f"Model asked for {secs}s but humidity is {rh}%, at or above the "
                f"{hi:.0f}% ceiling. Fill blocked to avoid over-humidifying.")
         secs, status = 0, "ok"
@@ -1178,8 +1232,13 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # "prefill" belongs in this list. It was missing, so the anticipatory path
     # skipped the cooldown entirely and could refill a tray filled minutes
     # earlier - the exact overflow the guard exists to prevent.
+    # The cooldown answers "does the tray still have water?" by inference. When
+    # the probe answers it directly, believe the probe - but never drop below the
+    # minimum hold, so a probe stuck at dry cannot cycle the valve for ever.
     hold = _effective_cooldown(prev.get("lastFillSeconds"))
-    if status in ("fill", "topup", "prefill") and since is not None and since < hold:
+    if dry:
+        hold = TRAY_MIN_HOLD_HOURS
+    if status in ("fill", "topup", "prefill", "refill") and since is not None and since < hold:
         cooling  = True
         wait     = round(hold - since, 1)
         at_limit = status == "fill"
@@ -1202,7 +1261,7 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # Acts on ANY dose the model asks for, not just a full "fill". Top-ups were
     # previously computed and then silently dropped, so the small maintenance
     # doses the model is best at never actually reached the valve.
-    if auto and status in ("fill", "topup", "prefill") and secs > 0:
+    if auto and status in ("fill", "topup", "prefill", "refill") and secs > 0:
         cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
         _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
@@ -1225,6 +1284,10 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            # Remembered so the NEXT check can size the hold to what actually
            # went in, rather than charging a splash the same six hours as a fill.
            "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
+           # What the probe actually reads, so the app can show an empty tray
+           # instead of only ever showing the air.
+           "trayLevel": level,
+           "trayEmpty": bool(dry),
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
            "cooldownHours": round(hold, 1),
