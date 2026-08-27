@@ -124,6 +124,39 @@ SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
 # refuse to refill and avoid a wasteful overflow loop.
 COOLDOWN_HOURS = 6.0
 
+# The dose that actually fills the tray, and so earns the FULL cooldown.
+# Reactive doses land around 30-40 s; an anticipatory top-up is 6-15 s.
+TRAY_FULL_FILL_SEC = 30.0
+# Even a splash needs a moment before the next assessment means anything.
+TRAY_MIN_HOLD_HOURS = 0.5
+
+
+def _effective_cooldown(last_secs) -> float:
+    """How long to hold off, scaled by how much water actually went in.
+
+    The cooldown exists for a physical reason: a 3 cm tray cannot dry out within
+    six hours, so low humidity soon after a fill means the AIR is dry, not the
+    tray. That reasoning holds for a fill that filled the tray. It does not hold
+    for a 6 second anticipatory top-up, which does not.
+
+    Charging both the same six hours was a real regression. Traced on a real
+    Jaffna morning: a 6 s top-up at 08:00 blocked the 35 s fill the model asked
+    for at 10:00, and the section then went through the whole dry spell - 53 to
+    57 % humidity - on six seconds of water, where the old reactive-only model
+    would have given it thirty-five.
+
+    Missing seconds means old data written before this existed; assume a full
+    fill, because under-watering is the safer way to be wrong about a tray.
+    """
+    try:
+        secs = float(last_secs)
+    except (TypeError, ValueError):
+        return COOLDOWN_HOURS
+    if secs <= 0:
+        return COOLDOWN_HOURS
+    share = min(1.0, secs / TRAY_FULL_FILL_SEC)
+    return max(TRAY_MIN_HOLD_HOURS, COOLDOWN_HOURS * share)
+
 # What "days since fertilized" means for a section that has never been fed
 # through the system. Deliberately at the Active-stage interval so it reads as
 # due once, is acted on, and then runs on real timestamps from that point.
@@ -1145,9 +1178,10 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # "prefill" belongs in this list. It was missing, so the anticipatory path
     # skipped the cooldown entirely and could refill a tray filled minutes
     # earlier - the exact overflow the guard exists to prevent.
-    if status in ("fill", "topup", "prefill") and since is not None and since < COOLDOWN_HOURS:
+    hold = _effective_cooldown(prev.get("lastFillSeconds"))
+    if status in ("fill", "topup", "prefill") and since is not None and since < hold:
         cooling  = True
-        wait     = round(COOLDOWN_HOURS - since, 1)
+        wait     = round(hold - since, 1)
         at_limit = status == "fill"
         status, secs = "cooldown", 0
         msg = (f"Tray was filled {since:.1f} h ago, so it still has water. "
@@ -1188,11 +1222,14 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            "decidedBy": "model" if secs == model_secs else "safety-override",
            "autoCommanded": commanded,
            "lastFillTs": (dev_now if commanded else prev.get("lastFillTs")),
+           # Remembered so the NEXT check can size the hold to what actually
+           # went in, rather than charging a splash the same six hours as a fill.
+           "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
-           "cooldownHours": COOLDOWN_HOURS,
+           "cooldownHours": round(hold, 1),
            "hoursSinceFill": round(since, 1) if since is not None else None,
-           "hoursUntilNextFill": round(max(0.0, COOLDOWN_HOURS - since), 1) if cooling else 0,
+           "hoursUntilNextFill": round(max(0.0, hold - since), 1) if cooling else 0,
            "trayAtLimit": bool(cooling and rh < lo),
            "checkedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", out)
