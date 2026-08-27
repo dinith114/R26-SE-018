@@ -73,6 +73,7 @@ export default function FarmResultsScreen({ route, navigation }) {
       form.append('plant_rows_json', '[]');
 
       const res  = await fetch(`${BASE_URL}/api/v1/farm/pipeline-route`, { method: 'POST', body: form });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
       setPipeline(data);
       setTab('pipeline');
