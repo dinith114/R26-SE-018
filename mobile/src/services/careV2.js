@@ -218,6 +218,25 @@ export const unassignDevice = (mac) => devReq(`/${mac}/assign`, { method: 'DELET
 export const identifyDevice = (mac) => devReq(`/${mac}/identify`, { method: 'POST' });
 
 /**
+ * Ask the node to prove it is there, right now.
+ *
+ * Passive liveness takes a heartbeat interval to notice - fine for a status dot,
+ * too slow for someone standing in front of a board asking "is this thing on?".
+ * The node re-reads its device record every ~5s, so an answer comes back in
+ * single-digit seconds.
+ *
+ * Asynchronous like the scan: this only ASKS. Poll `getPingResult` with the
+ * token it returns until `answered` goes true, and give up only after ~30s -
+ * measured worst case is 18.5s, when the ping lands mid-reading-cycle. The
+ * token is what
+ * makes the answer honest - it is matched against the same token echoed back by
+ * the board, so a stale reply from an earlier ping can never be read as proof
+ * that the node is alive now.
+ */
+export const pingDevice = (mac) => devReq(`/${mac}/ping`, { method: 'POST' });
+export const getPingResult = (mac, token) => devReq(`/${mac}/ping?token=${token}`);
+
+/**
  * Ask the NODE which Wi-Fi networks it can see.
  *
  * The board scans, not the phone. They are in different places - the node is in

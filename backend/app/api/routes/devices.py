@@ -9,6 +9,7 @@ could otherwise assign two boards to the same section at the same moment. The
 device records are the single source of truth for who owns what: a `deviceMac`
 copied onto the section is a convenience for the app, never the authority.
 """
+import re
 import time
 from typing import Dict, List, Optional
 
@@ -21,10 +22,52 @@ from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
 
 router = APIRouter()
 
-# A node announces every 30s. Two missed heartbeats is a generous margin for a
-# slow network before we call it offline, and short enough that a farmer
+# A node announces every HEARTBEAT_SEC. Three missed beats is a generous margin
+# for a slow network before we call it offline, and short enough that a farmer
 # unplugging a board sees it go grey while they are still standing there.
-ONLINE_WINDOW_SEC = 120
+#
+# This comment described the intent long before the firmware did it: until
+# validation-1.6 the node only announced INSIDE its reading cycle, so `lastSeen`
+# moved once every read interval and a healthy 5-minute node spent most of its
+# life looking offline against a 120 s window. Hence the split below - a board
+# that actually heartbeats is judged on 90 s, an older one on its read interval.
+HEARTBEAT_SEC = 30
+HEARTBEAT_MISSES = 3
+ONLINE_WINDOW_SEC = HEARTBEAT_SEC * HEARTBEAT_MISSES        # 90 s
+
+# Same shape as the reading-freshness margin in smart_care_v2: two missed cycles
+# plus the overhead of doing the HTTP work.
+LEGACY_CYCLE_MISSES = 2
+LEGACY_OVERHEAD_SEC = 12
+
+
+def sends_heartbeat(rec: dict) -> bool:
+    """True if this board's firmware announces on its own clock."""
+    m = re.search(r"validation-(\d+)\.(\d+)", str((rec or {}).get("fw") or ""))
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (1, 6)
+
+
+def device_liveness(rec: dict) -> dict:
+    """Is the BOARD there? A different question from whether its readings are fresh.
+
+    A node can be answering commands in two seconds while its last reading is
+    minutes old - that is normal between cycles, and it is the whole point of
+    heartbeating separately. Keeping the two apart stops a mid-cycle node being
+    reported dead, and lets the app say which of the two has actually failed.
+    """
+    rec = rec or {}
+    beats = sends_heartbeat(rec)
+    if beats:
+        window = ONLINE_WINDOW_SEC
+    else:
+        ms = rec.get("readIntervalMs") or READ_INTERVAL_DEFAULT_MS
+        window = int(ms / 1000.0 * LEGACY_CYCLE_MISSES + LEGACY_OVERHEAD_SEC)
+    last = rec.get("lastSeen") or 0
+    age = max(0, int(time.time()) - int(last))
+    return {"lastSeenSec": age if last else None,
+            "online": bool(last) and age <= window,
+            "onlineWindowSec": window,
+            "heartbeat": beats}
 
 
 # Clearing a key needs DELETE, not PUT with None: requests treats json=None as
@@ -68,8 +111,8 @@ def _all_devices() -> Dict[str, dict]:
 
 def _decorate(mac: str, rec: dict) -> dict:
     """Adds derived fields the app needs but the node should not have to compute."""
-    last = rec.get("lastSeen") or 0
-    age = max(0, int(time.time()) - int(last))
+    live = device_liveness(rec)
+    age = live["lastSeenSec"]
     assigned = rec.get("assignedTo") or None
     house, section = (assigned.split("/", 1) + [None])[:2] if assigned else (None, None)
     return {
@@ -79,7 +122,9 @@ def _decorate(mac: str, rec: dict) -> dict:
         "rssi": rec.get("rssi"),
         "firmware": rec.get("fw"),
         "lastSeenSec": age,
-        "online": age <= ONLINE_WINDOW_SEC,
+        "online": live["online"],
+        "onlineWindowSec": live["onlineWindowSec"],
+        "heartbeat": live["heartbeat"],
         "assignedTo": assigned,
         "house": house,
         "section": section,
@@ -214,6 +259,67 @@ def identify_device(mac: str) -> dict:
         raise HTTPException(502, "Could not send the identify request.")
     return {"status": "success", "mac": mac,
             "message": "The node's blue LED will blink for about 10 seconds."}
+
+
+@router.post("/{mac}/ping")
+def ping_device(mac: str) -> dict:
+    """Ask the node to prove it is there, right now.
+
+    Passive liveness costs a heartbeat interval to notice - fine for a status
+    dot, too slow for a farmer standing in front of a board asking "is this
+    thing on?". The node polls its device record every 5 s, so an explicit ping
+    comes back in single-digit seconds.
+
+    `pingRequest` carries a TOKEN rather than `true`, and the node echoes it into
+    `pingAck`. Both values are minted here, so matching them never compares the
+    server clock against the node clock - two clocks that are allowed to
+    disagree, and whose conflation produced the "161 days ago" bug.
+
+    The previous ack is cleared FIRST. Without that, a ping issued in the same
+    second as an earlier one could match a stale ack and report a dead node as
+    alive - the exact false confidence this endpoint exists to remove.
+    """
+    if mac not in _all_devices():
+        raise HTTPException(404, f"No device {mac}.")
+    token = int(time.time())
+    _fb_delete(f"/devices/{mac}/pingAck.json")
+    if not _fb_put(f"/devices/{mac}/pingRequest.json", token):
+        raise HTTPException(502, "Could not send the ping.")
+    # Measured on real hardware: 6-8 s normally, but 18.5 s when the ping lands
+    # while the board is mid-reading-cycle - pollDeviceFlags() cannot run until
+    # the DHT read and its several HTTPS calls finish. Callers must budget for
+    # the slow case or they will call a live node dead.
+    return {"status": "success", "mac": mac, "token": token,
+            "expectWithinSec": 15,
+            "message": "Waiting for the node to answer."}
+
+
+@router.get("/{mac}/ping")
+def ping_result(mac: str, token: int) -> dict:
+    """Has the node answered the ping with this token yet?
+
+    Deliberately a poll rather than a wait: holding the request open would tie up
+    a worker for the whole timeout, and the app already polls this way for a
+    running pour.
+    """
+    # ONE device, not the whole registry. The app polls this every second while a
+    # ping is in flight, and _all_devices() would download every board's record
+    # on each of those polls - the same needless egress that pushed
+    # /farm/houses.json to 29 MB/day before history was moved out of it.
+    rec = _fb_get(f"/devices/{mac}.json")
+    if not rec:
+        raise HTTPException(404, f"No device {mac}.")
+    try:
+        answered = int(rec.get("pingAck")) == int(token)
+    except (TypeError, ValueError):
+        answered = False
+    live = device_liveness(rec)
+    return {"status": "success", "mac": mac, "token": token,
+            "answered": answered,
+            "lastSeenSec": live["lastSeenSec"],
+            "online": live["online"],
+            "message": ("The node answered." if answered
+                        else "No answer yet.")}
 
 
 @router.post("/{mac}/scan")

@@ -168,6 +168,15 @@ const uint32_t COMMAND_POLL_MS = 2000UL;
    ~250 bytes, so 5 s is roughly 8 MB of egress a day per node. */
 const uint32_t DEVICE_POLL_MS = 5000UL;
 
+/* How often the node says "I am here", independent of any reading.
+
+   Before this existed the only proof a node was alive was a posted reading, so
+   the backend could not call a node offline until it had missed two of them -
+   ten minutes at a 5-minute interval. The node was in fact talking to Firebase
+   every 2 seconds the whole time to poll for commands; it simply never said so.
+   At 30 s the backend can decide after three missed beats instead. */
+const uint32_t HEARTBEAT_MS = 30000UL;
+
 // While a pour is running: checked so a second command cannot start one on top
 // of it, and so a stop can be recognised as belonging to this run.
 bool     pouring     = false;
@@ -719,7 +728,7 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.5\"" +
+                ",\"fw\":\"validation-1.6\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node
@@ -1218,6 +1227,53 @@ void takeReading() {
 
    Nothing here blocks for longer than one slice, so servePortal() keeps
    answering and a running pour can still be stopped. */
+/* Say "I am here". Deliberately a tiny PATCH of two fields: announceDevice()
+   also sends ip, ssid and fw, which is right once per reading cycle and
+   wasteful every 30 seconds.
+
+   Gated on clockOK because nowMs() returns 0 until the clock syncs, and a
+   lastSeen of 0 reads as 1970 - far worse than sending no heartbeat at all. */
+void sendHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED || !clockOK) return;
+  String body = "{\"lastSeen\":" + String((long long)(nowMs() / 1000)) +
+                ",\"rssi\":" + String(WiFi.RSSI()) + "}";
+  HTTPClient http;
+  http.setTimeout(6000);
+  http.begin(String(FB_HOST) + "/devices/" + macKey() + ".json");
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PATCH(body);
+  http.end();
+  if (code != 200) Serial.printf("[HB] heartbeat failed (%d)\n", code);
+}
+
+/* Answer a ping, so a farmer can ask "is this node there?" and get an answer in
+   seconds instead of waiting for the next reading.
+
+   `pingRequest` carries a TOKEN minted by the backend rather than `true`, and
+   the node echoes it back as `pingAck`. That is what makes the answer
+   unambiguous: the backend compares a token it minted against the same token
+   returned, entirely within its own clock domain. Comparing lastSeen (node
+   clock) against a request time (server clock) would be comparing two clocks
+   that are allowed to disagree - the mistake behind the "161 days ago" bug.
+
+   The ack and the flag clear are ONE patch, so a ping cannot be answered twice
+   or left half-consumed if Wi-Fi drops mid-write. */
+void answerPing(const String& body) {
+  long token = jsonNum(body, "pingRequest", 0);
+  if (token <= 0) return;
+  Serial.printf("[PING] answering token %ld\n", token);
+  String ack = "{\"pingAck\":" + String(token) + ",\"pingRequest\":0";
+  if (clockOK) ack += ",\"lastSeen\":" + String((long long)(nowMs() / 1000));
+  ack += "}";
+  HTTPClient http;
+  http.setTimeout(6000);
+  http.begin(String(FB_HOST) + "/devices/" + macKey() + ".json");
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PATCH(ack);
+  http.end();
+  if (code != 200) Serial.printf("[PING] ack failed (%d)\n", code);
+}
+
 /* Identify and Wi-Fi scan, on their own clock.
    One GET of the device record answers both, rather than two requests. */
 void pollDeviceFlags() {
@@ -1230,6 +1286,9 @@ void pollDeviceFlags() {
   http.end();
   if (code != 200 || body.length() < 5 || body == "null") return;
 
+  // Ping first: handleIdentify() blocks ~10 s blinking the LED, and a ping is
+  // supposed to feel instant.
+  if (body.indexOf("\"pingRequest\":") >= 0) answerPing(body);
   if (body.indexOf("\"identify\":true") >= 0) handleIdentify();
   if (body.indexOf("\"scanRequest\":true") >= 0) scanNetworks();
 }
@@ -1274,6 +1333,13 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastDevAt >= DEVICE_POLL_MS) {
     lastDevAt = millis();
     pollDeviceFlags();
+  }
+
+  // "I am here", on a clock of its own - not the reading clock.
+  static uint32_t lastBeatAt = 0;
+  if (WiFi.status() == WL_CONNECTED && millis() - lastBeatAt >= HEARTBEAT_MS) {
+    lastBeatAt = millis();
+    sendHeartbeat();
   }
 
   delay(50);

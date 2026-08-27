@@ -22,7 +22,8 @@ import {
   getHouse, waterSection, fillTray, setMode,
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
-  getSectionDevice, unassignDevice, assignDevice, identifyDevice, lastSeenLabel, signalLabel,
+  getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
+  getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
 } from '../services/careV2';
@@ -84,6 +85,20 @@ const CONTROL_OPTIONS = [
 // screen width minus the page padding and the card padding on both sides
 const CHART_W = Dimensions.get('window').width - (24 * 2) - (16 * 2);
 
+/* How a ping is chased.
+
+   The node re-reads its device record every ~5s, so an answer usually lands
+   inside two polls. Measured on real hardware: 6.2s and 8.3s on quiet trials,
+   but 18.5s when the ping arrived while the board was mid-reading-cycle and
+   could not poll until its sensor read and uploads finished.
+
+   30s is set from that worst case, not from the happy path. An earlier 12s
+   guess would have declared a perfectly healthy node unreachable. Whatever
+   happens the button reaches a definite state - answered, or no answer - and
+   never leaves the farmer watching a spinner that means nothing. */
+const PING_POLL_MS = 1000;
+const PING_TIMEOUT_MS = 30000;
+
 export default function SectionDetailScreen({ route, navigation }) {
   const { houseId, sectionId, houseName } = route.params;
 
@@ -130,6 +145,7 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [events,   setEvents]   = useState(null);
   const [evLoading, setEvLoading] = useState(false);
   const [blinking,  setBlinking]  = useState(false);
+  const [ping,      setPing]      = useState(null);   // { state: asking|ok|timeout }
   const [savingIv,  setSavingIv]  = useState(null);
   // One sheet at a time: 'water' | 'fill' | 'interval' | 'control' | 'unlink'
   const [sheet, setSheet] = useState(null);
@@ -284,6 +300,44 @@ export default function SectionDetailScreen({ route, navigation }) {
       await identifyDevice(device.mac);
       setTimeout(() => setBlinking(false), 10000);   // matches the firmware's ~10s
     } catch (e) { setBlinking(false); setToast({ text: e.message, kind: 'error' }); }
+  };
+
+  /* "Is this node there?", answered in seconds rather than a heartbeat interval.
+
+     The status dot on this card comes from the node's heartbeat, so it can be up
+     to ~90s behind. That is fine for a dot and useless for someone standing at
+     the box with the lid open. This asks the board directly and waits for it to
+     answer, the same request-and-acknowledge shape as Water Now.
+
+     A token comes back from the POST and is matched against the token the board
+     echoes. That is what makes the answer trustworthy: without it, an ack left
+     over from an earlier ping would report a dead node as alive - which is
+     precisely the false confidence this button exists to remove. */
+  const checkNode = async () => {
+    if (!device || ping?.state === 'asking') return;
+    setPing({ state: 'asking' });
+    try {
+      const { token } = await pingDevice(device.mac);
+      const deadline = Date.now() + PING_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, PING_POLL_MS));
+        let res = null;
+        // A dropped poll is not a dead node - keep asking until the deadline.
+        try { res = await getPingResult(device.mac, token); } catch { continue; }
+        if (res?.answered) {
+          setPing({ state: 'ok' });
+          load();                        // pull the fresher lastSeen into the card
+          setTimeout(() => setPing(null), 4000);
+          return;
+        }
+      }
+      setPing({ state: 'timeout' });
+      setTimeout(() => setPing(null), 6000);
+    } catch (e) {
+      setPing({ state: 'timeout' });
+      setToast({ text: e.message, kind: 'error' });
+      setTimeout(() => setPing(null), 6000);
+    }
   };
 
   useFocusEffect(useCallback(() => {
@@ -1385,6 +1439,37 @@ export default function SectionDetailScreen({ route, navigation }) {
                     </Text>
                   </TouchableOpacity>
 
+                  <TouchableOpacity
+                    style={[styles.nodeBtn,
+                            ping?.state === 'ok' && styles.nodeBtnOk,
+                            ping?.state === 'timeout' && styles.nodeBtnBad]}
+                    onPress={checkNode} disabled={ping?.state === 'asking'} activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Check whether node ${device.shortId} is responding now`}>
+                    {ping?.state === 'asking'
+                      ? <ActivityIndicator size="small" color={COLORS.primary} />
+                      : <Ionicons
+                          name={ping?.state === 'ok' ? 'checkmark-circle-outline'
+                                : ping?.state === 'timeout' ? 'alert-circle-outline'
+                                : 'pulse-outline'}
+                          size={15}
+                          color={ping?.state === 'ok' ? '#FFF'
+                                 : ping?.state === 'timeout' ? COLORS.danger : COLORS.primary} />}
+                    <Text
+                      style={[styles.nodeBtnTxt,
+                              ping?.state === 'ok' && { color: '#FFF' },
+                              ping?.state === 'timeout' && { color: COLORS.danger }]}
+                      numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                      {ping?.state === 'asking' ? 'Checking…'
+                       : ping?.state === 'ok' ? 'Answered'
+                       : ping?.state === 'timeout' ? 'No answer' : 'Check'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Unlink gets its own row. Three buttons abreast clipped their
+                    labels at large system font sizes. */}
+                <View style={[styles.nodeBtns, { marginTop: SPACE.sm }]}>
                   <TouchableOpacity style={styles.unlinkBtn}
                     onPress={() => setSheet('unlink')} disabled={unlinking} activeOpacity={0.8}
                     accessibilityRole="button"
@@ -1643,6 +1728,8 @@ const styles = StyleSheet.create({
                gap: 6, paddingVertical: SPACE.md - 2, borderRadius: RADIUS.md,
                borderWidth: 1, borderColor: COLORS.primary },
   nodeBtnOn: { backgroundColor: COLORS.primary },
+  nodeBtnOk: { backgroundColor: COLORS.success, borderColor: COLORS.success },
+  nodeBtnBad:{ borderColor: COLORS.danger },
   nodeBtnTxt:{ color: COLORS.primary, fontSize: FONT.sm, fontWeight: '700' },
   unlinkBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
                gap: 6, paddingVertical: SPACE.md - 2, borderRadius: RADIUS.md,
