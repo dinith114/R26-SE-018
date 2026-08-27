@@ -567,6 +567,17 @@ export default function SectionDetailScreen({ route, navigation }) {
     ? 'No sensor node is linked to this section, so there is nothing to send the command to.'
     : `This node last reported ${fresh?.label || 'a while ago'} and has missed readings since. `
       + 'Watering on numbers this old could soak plants that do not need it.';
+  /* The tray is on a cooldown of its own, separate from node health.
+     A 3 cm tray physically cannot dry out inside the cooldown, so a second fill
+     would overflow rather than help - which is why the backend refuses one and
+     why the button must not invite it. Only Fill Tray is affected; watering the
+     roots is a different loop and stays available. */
+  const trayCoolingDown = tray?.status === 'cooldown' && Number(tray?.hoursUntilNextFill) > 0;
+  const trayCoolReason  =
+    `The tray was filled ${tray?.hoursSinceFill != null ? `${tray.hoursSinceFill}h ago` : 'recently'}`
+    + ` and cannot take more for another ${tray?.hoursUntilNextFill}h.`
+    + ' Refilling now would overflow it rather than raise humidity.';
+
   // A missing value prints as -- rather than as a plausible-looking number.
   const fmt = (v, d) => (v == null || Number.isNaN(Number(v)) ? '--' : Number(v).toFixed(d));
 
@@ -1033,24 +1044,42 @@ export default function SectionDetailScreen({ route, navigation }) {
                 ['water', 'Water Now',   'rainy-outline',      COLORS.primary,
                () => { setAddFert(!!fert?.due); setSheet('water'); }],
                 ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill')],
-              ].map(([k, label, ic, c, fn]) => (
+              ].map(([k, label, ic, c, fn]) => {
+                // Fill Tray carries one extra block the other button does not.
+                const cooling = k === 'fill' && trayCoolingDown;
+                const off = actionsOff || cooling;
+                const why = cooling ? trayCoolReason : blockReason;
+                return (
                 <TouchableOpacity key={k}
-                  style={[styles.btn, { backgroundColor: actionsOff ? COLORS.bgCardAlt : c },
-                          !actionsOff && SHADOW.md, busy && { opacity: 0.6 }]}
-                  onPress={fn} disabled={!!busy || actionsOff} activeOpacity={0.85}
+                  style={[styles.btn, { backgroundColor: off ? COLORS.bgCardAlt : c },
+                          !off && SHADOW.md, busy && { opacity: 0.6 }]}
+                  onPress={fn} disabled={!!busy || off} activeOpacity={0.85}
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: actionsOff }}
-                  accessibilityLabel={actionsOff ? `${label}, unavailable. ${blockReason}` : label}>
+                  accessibilityState={{ disabled: off }}
+                  accessibilityLabel={off ? `${label}, unavailable. ${why}` : label}>
                   {busy === k
                     ? <ActivityIndicator color="#FFF" size="small" />
                     : <Ionicons name={ic} size={17}
-                        color={actionsOff ? COLORS.textTertiary : '#FFF'} />}
-                  <Text style={[styles.btnText, actionsOff && { color: COLORS.textTertiary }]}>
+                        color={off ? COLORS.textTertiary : '#FFF'} />}
+                  <Text style={[styles.btnText, off && { color: COLORS.textTertiary }]}>
                     {label}
                   </Text>
                 </TouchableOpacity>
-              ))}
+                );
+              })}
             </View>
+
+            {/* Same rule as below: a greyed button needs its reason beside it.
+                Shown only when the node is otherwise fine, so the two notes
+                never stack and contradict each other. */}
+            {!actionsOff && trayCoolingDown && (
+              <View style={styles.blockNote}>
+                <Ionicons name="time-outline" size={14} color={COLORS.info} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.blockTxt}>{trayCoolReason}</Text>
+                </View>
+              </View>
+            )}
 
             {/* A disabled button with no reason next to it reads as a broken app. */}
             {actionsOff && (
