@@ -1280,6 +1280,11 @@ class FarmSetup(BaseModel):
     # everywhere it is shown. Renaming the farm is still available on the
     # dashboard for anyone who wants one.
     farmName: str = "My Farm"
+    # Where the farm is. Optional so an older client still sets up fine, but the
+    # wizard asks for it, because the alternative is what happened before: the
+    # forecast quietly used Peradeniya for every farm on earth.
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     houses: List[HouseIn] = []
 
 
@@ -1287,8 +1292,13 @@ class FarmSetup(BaseModel):
 async def setup_farm(cfg: FarmSetup):
     """First-time setup wizard: farm -> houses -> sections."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    _fb_put("/farm/meta.json", {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
-                                "createdAt": now, "version": 2})
+    meta = {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
+            "createdAt": now, "version": 2}
+    if (cfg.latitude is not None and cfg.longitude is not None
+            and -90.0 <= cfg.latitude <= 90.0 and -180.0 <= cfg.longitude <= 180.0):
+        meta["latitude"] = round(float(cfg.latitude), 6)
+        meta["longitude"] = round(float(cfg.longitude), 6)
+    _fb_put("/farm/meta.json", meta)
     made = []
     for hi, h in enumerate(cfg.houses, 1):
         hid = h.id or f"H{hi}"
