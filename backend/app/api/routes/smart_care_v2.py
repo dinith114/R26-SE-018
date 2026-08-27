@@ -544,6 +544,45 @@ DEFAULT_READ_INTERVAL_MS = 15000
 CYCLE_OVERHEAD_SEC = 12
 
 
+def _apply_link_state(fresh: dict, node: dict) -> dict:
+    """Let a heartbeat overrule reading age when it says the board is GONE.
+
+    Reading freshness and node liveness answer different questions, and both are
+    reported separately. But the UI has to gate on one of them, and gating on
+    reading age alone is wrong in a way a farmer sees immediately: unplug a node
+    reading every 5 minutes and the app keeps saying "live, 6 min ago" for
+    another eight minutes, offering Water Now buttons whose commands nothing
+    will ever collect.
+
+    A board on validation-1.6+ promises a heartbeat every 30 s, so 90 s of
+    silence means it is not there - regardless of how recent its last reading
+    happens to be. This downgrades ONLY in that direction:
+
+      * only when the board actually heartbeats (older firmware keeps the
+        interval-based judgement, or every un-reflashed node would read dead)
+      * only downwards - fresh readings never resurrect a silent node, and a
+        genuinely stale reading is never promoted because the board is awake
+
+    'stale' rather than a new state name: it already renders as a red "No
+    signal" with a battery icon and already makes isLive() false, so phones
+    carrying an older build behave correctly without being rebuilt.
+    """
+    if not node or not node.get("heartbeat") or node.get("online"):
+        return fresh
+    if fresh.get("state") in ("never", "nonode"):
+        return fresh
+    secs = node.get("lastSeenSec")
+    ago = (f"{int(secs) // 60} min" if isinstance(secs, (int, float)) and secs >= 120
+           else f"{int(secs)} s" if isinstance(secs, (int, float)) else "a moment")
+    return {**fresh,
+            "state": "stale",
+            "trusted": False,
+            "link": "offline",
+            "message": (f"This node stopped answering {ago} ago. It is expected to "
+                        "check in every 30 seconds, so it has lost power or Wi-Fi. "
+                        "The readings below are the last ones it managed to send.")}
+
+
 def _freshness_limits(read_interval_ms=None):
     """(live_minutes, delayed_minutes) for a node reporting at this interval."""
     ms = read_interval_ms or DEFAULT_READ_INTERVAL_MS
@@ -1380,6 +1419,9 @@ async def overview():
                          "message": "No sensor node is linked to this section, so "
                                     "there are no readings. Link one from Add Section."}
 
+            # A heartbeat is a faster and more direct answer than reading age.
+            fresh = _apply_link_state(fresh, node)
+
             # "online" used to mean "has ever reported", so a node that died days
             # ago still read as online. It now means "reported recently enough".
             online = fresh["state"] in ("live", "delayed")
@@ -1457,7 +1499,7 @@ async def get_house(house_id: str):
                      "label": "No sensor node", "trusted": False,
                      "message": "No sensor node is linked to this section, so there "
                                 "are no readings. Link one from Add Section."}
-        sec["freshness"] = fresh
+        sec["freshness"] = _apply_link_state(fresh, node)
         sec["node"] = node
         sec["latest"] = _display(sec.get("latest") or {})
 
