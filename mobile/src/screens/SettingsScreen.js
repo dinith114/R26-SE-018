@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, Animated, Alert,
+  Switch, Animated, Alert, ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
+import LocationPicker from '../components/LocationPicker';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
-  getDevices, getOverview, getModelInfo, intervalLabel, lastSeenLabel, signalLabel,
+  getDevices, getOverview, getModelInfo, setFarmLocation,
+  intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
@@ -75,11 +77,13 @@ const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
-  const { expert, setExpert } = usePrefs();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
   const [online,  setOnline]  = useState(null);   // is the backend reachable at all
+  const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
+  const [locOpen, setLocOpen] = useState(false);  // the map picker
+  const [locSaving, setLocSaving] = useState(false);
 
   const [alerts, setAlerts] = useState({
     watering:      true,
@@ -95,6 +99,24 @@ export default function SettingsScreen({ navigation }) {
   });
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  /* Save the position the farmer put the pin on.
+
+     No parsing and no range check here any more: a pin dropped on a map cannot
+     be out of range, and cannot be a typo. The backend still validates, because
+     it is a public endpoint and not only this screen calls it. */
+  const saveLocation = async ({ latitude, longitude }) => {
+    try {
+      setLocSaving(true);
+      const res = await setFarmLocation(latitude, longitude);
+      setFarm(res.farm || { ...(farm || {}), latitude, longitude });
+      setLocOpen(false);
+    } catch (e) {
+      Alert.alert('Could not save', e.message);
+    } finally {
+      setLocSaving(false);
+    }
+  };
 
   useEffect(() => {
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
@@ -123,6 +145,7 @@ export default function SettingsScreen({ navigation }) {
           });
         });
         setSection(sec);
+        setFarm(ov.farm || null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -179,28 +202,6 @@ export default function SettingsScreen({ navigation }) {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
 
-          {/* ── Display mode: Simple (default) vs Expert ──────────────── */}
-          <View style={[s.modeCard, SHADOW.sm]}>
-            <View style={s.modeRow}>
-              <Ionicons name={expert ? 'construct-outline' : 'happy-outline'}
-                size={26} color={expert ? COLORS.info : COLORS.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={s.modeTitle}>{expert ? 'Expert view' : 'Simple view'}</Text>
-                <Text style={s.modeDesc}>
-                  {expert
-                    ? 'Showing full technical detail, sensor values, drying power (VPD), charts and every control.'
-                    : 'Big text and plain words. Just what to do today.'}
-                </Text>
-              </View>
-              <Switch
-                value={expert}
-                onValueChange={setExpert}
-                trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
-                thumbColor={expert ? COLORS.info : COLORS.textTertiary}
-              />
-            </View>
-          </View>
-
           {/* ── Orchid Profile card ───────────────────────────────────── */}
           <LinearGradient
             colors={[COLORS.primary, COLORS.primaryDark]}
@@ -238,6 +239,34 @@ export default function SettingsScreen({ navigation }) {
                 {i < arr.length - 1 && <View style={s.snapSep} />}
               </React.Fragment>
             ))}
+          </View>
+
+          {/* ── FARM LOCATION ────────────────────────────────────────────
+              Which place the outdoor weather forecast is downloaded for. Set on
+              first run; this row is for changing it afterwards, so it states
+              the position and nothing else - the explanation of what happens
+              when it is unset belongs in setup, not here. */}
+          <Text style={s.sectionLabel}>FARM LOCATION</Text>
+          <View style={[s.card, SHADOW.sm]}>
+            <TouchableOpacity
+              style={s.locView}
+              onPress={() => setLocOpen(true)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Change where the farm is on the map">
+              <Ionicons name="location" size={22} color={COLORS.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.locValue}>
+                  {farm?.latitude != null
+                    ? `${Number(farm.latitude).toFixed(4)}, ${Number(farm.longitude).toFixed(4)}`
+                    : 'Choose on the map'}
+                </Text>
+                <Text style={s.locSub}>Used for the weather forecast.</Text>
+              </View>
+              {locSaving
+                ? <ActivityIndicator size="small" color={COLORS.primary} />
+                : <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />}
+            </TouchableOpacity>
           </View>
 
           {/* ── HARDWARE ─────────────────────────────────────────────── */}
@@ -338,6 +367,13 @@ export default function SettingsScreen({ navigation }) {
         </Animated.View>
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      <LocationPicker
+        visible={locOpen}
+        initial={farm}
+        onCancel={() => setLocOpen(false)}
+        onPick={saveLocation}
+      />
     </View>
   );
 }
@@ -362,6 +398,9 @@ const s = StyleSheet.create({
   snapSep:  { width: 1, backgroundColor: COLORS.borderLight, marginVertical: 4 },
 
   // Section
+  locView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  locValue:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  locSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
   sectionLabel: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700', letterSpacing: 1.5, marginBottom: SPACE.sm, marginLeft: 2, marginTop: 4 },
   card:         { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, overflow: 'hidden', marginBottom: SPACE.xl },
   divider:      { height: 1, backgroundColor: COLORS.borderLight, marginLeft: 56 },
@@ -377,8 +416,4 @@ const s = StyleSheet.create({
   badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },
   badgeDot: { width: 6, height: 6, borderRadius: 3 },
   badgeText:{ fontSize: FONT.xs, fontWeight: '700' },
-  modeCard:  { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, marginBottom: SPACE.lg },
-  modeRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  modeTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
-  modeDesc:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
 });

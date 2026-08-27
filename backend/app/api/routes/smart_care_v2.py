@@ -75,13 +75,28 @@ _fert:  Optional[dict] = None
 def _load_v2():
     global _water, _tray, _fert
     _water = joblib.load(os.path.join(_MODEL_DIR, "watering_v2.pkl"))
-    _tray  = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
+    # v3 adds an anticipation head trained on the section's own trajectory, so
+    # the tray can act early WITHOUT the outdoor forecast API. v2 stays as the
+    # fallback: its dose head is byte-identical in features and label, so a farm
+    # running either behaves the same reactively.
+    try:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v3.pkl"))
+    except Exception:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
     _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
     m = _water["metrics"]
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
           f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
           f"2nd-session F1={m['second_session']['f1']:.3f}")
-    print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s")
+    if _tray.get("drop_model") is not None:
+        d = _tray["metrics"].get("drop_at_threshold") or {}
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s | "
+              f"drop-risk AUC={_tray['metrics'].get('drop_auc', 0):.3f} "
+              f"(thr {d.get('threshold', 0):.2f}: precision {d.get('precision', 0):.3f}, "
+              f"recall {d.get('recall', 0):.3f}) - no outdoor API")
+    else:
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s "
+              f"(v2 - reactive only)")
     # Deliberately NOT printed as an F1 score. It is 1.0 because the label is a
     # deterministic function of the inputs, so the classifier reproduces a rule
     # the code already holds. Printing "F1=1.000" invites a claim we cannot defend.
@@ -108,6 +123,70 @@ SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
 # sooner than this after a fill is caused by dry air, not an empty tray — so we
 # refuse to refill and avoid a wasteful overflow loop.
 COOLDOWN_HOURS = 6.0
+
+# The dose that actually fills the tray, and so earns the FULL cooldown.
+# Reactive doses land around 30-40 s; an anticipatory top-up is 6-15 s.
+TRAY_FULL_FILL_SEC = 30.0
+# Even a splash needs a moment before the next assessment means anything. This
+# one is never waived, including for a refill, so a probe stuck at "dry" cannot
+# make the valve open every fifteen minutes for ever.
+TRAY_MIN_HOLD_HOURS = 0.5
+
+# Below this the tray cannot buffer anything - there is nothing left to
+# evaporate - and it is refilled regardless of what the air is doing.
+TRAY_LOW_PCT = 20.0
+TRAY_REFILL_SEC = 25
+
+
+def _tray_level(latest: dict):
+    """Measured water level in the tray, or None when there is no usable probe.
+
+    The capacitive probe sits IN the humidity tray - Vanda grow bare-root, so
+    there is no medium to measure and the probe was repurposed to report the
+    tray. The firmware maps it to a percentage against a calibration measured on
+    this exact probe: 2600 counts in open air, 1100 with the blade in water.
+
+    None rather than a guess when the probe is absent or faulty. A section
+    without one keeps the older air-humidity behaviour instead of being told its
+    tray is empty on no evidence.
+    """
+    v = (latest or {}).get("sampleMoisture")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f < -5.0 or f > 105.0:          # outside anything the mapping can produce
+        return None
+    return max(0.0, min(100.0, f))
+
+
+def _effective_cooldown(last_secs) -> float:
+    """How long to hold off, scaled by how much water actually went in.
+
+    The cooldown exists for a physical reason: a 3 cm tray cannot dry out within
+    six hours, so low humidity soon after a fill means the AIR is dry, not the
+    tray. That reasoning holds for a fill that filled the tray. It does not hold
+    for a 6 second anticipatory top-up, which does not.
+
+    Charging both the same six hours was a real regression. Traced on a real
+    Jaffna morning: a 6 s top-up at 08:00 blocked the 35 s fill the model asked
+    for at 10:00, and the section then went through the whole dry spell - 53 to
+    57 % humidity - on six seconds of water, where the old reactive-only model
+    would have given it thirty-five.
+
+    Missing seconds means old data written before this existed; assume a full
+    fill, because under-watering is the safer way to be wrong about a tray.
+    """
+    try:
+        secs = float(last_secs)
+    except (TypeError, ValueError):
+        return COOLDOWN_HOURS
+    if secs <= 0:
+        return COOLDOWN_HOURS
+    share = min(1.0, secs / TRAY_FULL_FILL_SEC)
+    return max(TRAY_MIN_HOLD_HOURS, COOLDOWN_HOURS * share)
 
 # What "days since fertilized" means for a section that has never been fed
 # through the system. Deliberately at the Active-stage interval so it reads as
@@ -941,6 +1020,97 @@ def _run_per_section(houses: dict, fn) -> dict:
     return dict(sorted(results.items()))
 
 
+# The tray is never filled in the dark: there has to be heat and light left to
+# evaporate what goes in. Matches the hours the model was trained on.
+TRAY_DAY_START, TRAY_DAY_END = 6, 18
+
+
+def _recent_window(house_id: str, section_id: str, points: int = 48) -> dict:
+    """The last few hours of this section's own readings.
+
+    Deliberately NOT _history_window(), which pulls 288 records (~50 KB) for the
+    daily plan. The tray runs every 15 minutes; at that rate the big window would
+    add tens of MB a day against a 360 MB budget, to answer a question that only
+    needs about four hours. 48 records is four hours at a 5-minute interval.
+    """
+    return _fb_get(f'/farm/history/{house_id}/{section_id}.json'
+                   f'?orderBy="$key"&limitToLast={points}') or {}
+
+
+def _at_hours_ago(recs: list, now_ms: float, hours: float, tol_min: float = 25.0):
+    """The reading nearest `hours` ago, or None if the gap is too wide.
+
+    A node reporting every 5 minutes gives an exact-ish match; one reporting
+    every 15 does not, hence the tolerance. Returning None rather than the
+    nearest-whatever matters: a "1 hour ago" value that is really 3 hours old
+    would invent a trend that never happened.
+    """
+    target = now_ms - hours * 3600_000.0
+    best, best_gap = None, None
+    for r in recs:
+        ts = r.get("timestamp")
+        if not ts:
+            continue
+        gap = abs(float(ts) - target)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = r, gap
+    if best is None or best_gap is None or best_gap > tol_min * 60_000.0:
+        return None
+    return best
+
+
+def _drop_risk(house_id: str, section_id: str, latest: dict, now: datetime) -> Optional[float]:
+    """Probability this section breaches the humidity band within a few hours.
+
+    Built ONLY from readings the node has already sent. This is what replaces the
+    outdoor forecast for the tray: over a 1-4 hour horizon the section's own
+    trajectory - how fast humidity is falling and drying power rising - carries
+    the signal, and needs no external service that can rate-limit, block or go
+    down. The forecast is still used for the day-level view, where weather that
+    has not arrived yet genuinely cannot be inferred from local sensors.
+
+    Returns None when there is not enough history to be honest about a trend,
+    which is the correct answer for a node that booted twenty minutes ago.
+    """
+    if not _tray or _tray.get("drop_model") is None:
+        return None
+    raw = _recent_window(house_id, section_id)
+    recs = [r for r in (raw or {}).values() if isinstance(r, dict) and r.get("timestamp")]
+    if len(recs) < 12:                      # under an hour of readings
+        return None
+    now_ms = _device_now_ms({"latest": latest}) or _server_now_ms()
+
+    past = {h: _at_hours_ago(recs, now_ms, h) for h in (1, 2, 3)}
+    if any(v is None for v in past.values()):
+        return None
+    p = {h: _clean(v) for h, v in past.items()}
+
+    t0, rh0, li0 = latest["temperature"], latest["humidity"], latest["light"]
+    v0 = vpd_kpa(t0, rh0)
+    pv = {h: vpd_kpa(p[h]["temperature"], p[h]["humidity"]) for h in (1, 2, 3)}
+
+    # Same order as drop_features in the bundle. Built from that list rather than
+    # hardcoded, so a retrain that reorders features cannot silently misalign.
+    vals = {
+        "temperature": t0, "humidity": rh0, "light": li0, "vpd": v0,
+        "hour": float(now.hour), "month": float(now.month),
+        "d_rh_1": rh0 - p[1]["humidity"], "d_rh_2": rh0 - p[2]["humidity"],
+        "d_rh_3": rh0 - p[3]["humidity"],
+        "d_t_1": t0 - p[1]["temperature"], "d_t_2": t0 - p[2]["temperature"],
+        "d_t_3": t0 - p[3]["temperature"],
+        "d_vpd_1": v0 - pv[1], "d_vpd_2": v0 - pv[2], "d_vpd_3": v0 - pv[3],
+        "d_light_1": li0 - p[1]["light"],
+        "rh_min_3": min(rh0, p[1]["humidity"], p[2]["humidity"], p[3]["humidity"]),
+    }
+    try:
+        row = np.array([[vals[k] for k in _tray["drop_features"]]])
+        X = _tray["drop_scaler"].transform(row)
+        return float(_tray["drop_model"].predict_proba(X)[0][1])
+    except Exception as e:
+        print(f"[WARN] drop-risk skipped for {house_id}-{section_id}: {e}")
+        return None
+
+
 def _tray_decision(house_id: str, section_id: str, section: dict,
                    now: Optional[datetime] = None) -> dict:
     latest = _clean((section or {}).get("latest") or {})
@@ -994,30 +1164,60 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
         msg = f"Humidity {rh}% is below {lo:.0f}%, open the valve {secs}s to raise it."
 
     # ── ANTICIPATORY TOP-UP ──────────────────────────────────────────────────
-    # If nothing is needed right now but the forecast says this section is
-    # heading for a hot, dry afternoon, top the tray up while there is still
-    # time for the water to evaporate. Used only to ACT EARLIER, never to skip
-    # a fill: the model's recall is ~0.68, so a miss must cost nothing.
+    # Nothing is needed right now, but the section's own trajectory says the
+    # band is about to be breached. Top up while there is still heat and light
+    # to evaporate it, rather than filling into an afternoon that has already
+    # turned dry.
+    #
+    # This used to be driven by the outdoor forecast API. It is not any more:
+    # over a 1-4 hour horizon the node's own falling humidity and rising drying
+    # power predict the drop at AUC 0.987, and that needs no external service
+    # that can rate-limit, block, or be down when the plants need water.
+    #
+    # The threshold is set for PRECISION, not best F1. A missed anticipation
+    # costs nothing - the reactive path fills an hour later. A WRONG one starts
+    # the six-hour cooldown and can block a fill that was genuinely needed.
     prefill = None
-    if secs == 0:
-        try:
-            from app.api.routes import forecast as _fx
-            fc = (section or {}).get("forecast") or {}
-            if fc.get("date") == now.strftime("%Y-%m-%d"):
-                advice = _fx.prefill_advice(fc, hour + now.minute / 60.0, rh)
-                if advice:
-                    prefill = advice
-                    secs = max(6, min(15, int(round((hi - rh) * 0.6))))
-                    status = "prefill"
-                    msg = advice["reason"]
-        except Exception as e:
-            print(f"[WARN] prefill check skipped: {e}")
+    if secs == 0 and TRAY_DAY_START <= hour <= TRAY_DAY_END and rh < hi:
+        risk = _drop_risk(house_id, section_id, latest, now)
+        thr = float((_tray or {}).get("drop_threshold") or 0.70)
+        if risk is not None and risk >= thr:
+            secs = max(6, min(15, int(round((hi - rh) * 0.6))))
+            status = "prefill"
+            prefill = {"risk": round(risk, 3), "threshold": thr,
+                       "horizon": (_tray or {}).get("drop_horizon_hours", 3)}
+            msg = (f"Humidity is {rh}% and falling: it is likely to drop below "
+                   f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
+                   f"while there is still heat to evaporate it.")
+
+    # ── KEEP THE RESERVOIR CHARGED ───────────────────────────────────────────
+    # A humidity tray raises humidity by evaporating. An empty one cannot, so
+    # waiting for the air to dry before filling charges the buffer exactly when
+    # it is already too late.
+    #
+    # Every other rule here infers the tray's state - from air humidity, or from
+    # a clock. The probe MEASURES it, and a measurement beats an inference. On
+    # the live farm this was found reading 0 % for thirty hours while the system
+    # reported "ok, no fill needed", because the air happened to be humid at the
+    # time it was asked.
+    level = _tray_level(latest)
+    dry = level is not None and level < TRAY_LOW_PCT
+    if dry and TRAY_DAY_START <= hour <= TRAY_DAY_END and secs < TRAY_REFILL_SEC:
+        secs = TRAY_REFILL_SEC
+        status = "refill"
+        msg = (f"The tray is empty (level {level:.0f}%). Refilling {secs}s so there is "
+               f"water to evaporate when humidity falls. An empty tray cannot hold "
+               f"humidity up, however good the air looks right now.")
 
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
     # Overfilling a 3 cm tray into already damp air risks mould on the roots,
     # so this one stays hard.
-    if secs > 0 and rh >= hi:
+    # `not dry` matters: this ceiling exists to stop water being added to a tray
+    # that already has some, into air that is already damp. Putting water into an
+    # EMPTY tray is not over-humidifying - it is stocking a reservoir, and
+    # evaporation self-limits at high humidity anyway.
+    if secs > 0 and rh >= hi and not dry:
         msg = (f"Model asked for {secs}s but humidity is {rh}%, at or above the "
                f"{hi:.0f}% ceiling. Fill blocked to avoid over-humidifying.")
         secs, status = 0, "ok"
@@ -1029,9 +1229,18 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # 3 cm notch and waste water. Instead we hold off and flag that the tray has
     # reached its limit, which is what justifies an extra watering session.
     cooling = False
-    if status in ("fill", "topup") and since is not None and since < COOLDOWN_HOURS:
+    # "prefill" belongs in this list. It was missing, so the anticipatory path
+    # skipped the cooldown entirely and could refill a tray filled minutes
+    # earlier - the exact overflow the guard exists to prevent.
+    # The cooldown answers "does the tray still have water?" by inference. When
+    # the probe answers it directly, believe the probe - but never drop below the
+    # minimum hold, so a probe stuck at dry cannot cycle the valve for ever.
+    hold = _effective_cooldown(prev.get("lastFillSeconds"))
+    if dry:
+        hold = TRAY_MIN_HOLD_HOURS
+    if status in ("fill", "topup", "prefill", "refill") and since is not None and since < hold:
         cooling  = True
-        wait     = round(COOLDOWN_HOURS - since, 1)
+        wait     = round(hold - since, 1)
         at_limit = status == "fill"
         status, secs = "cooldown", 0
         msg = (f"Tray was filled {since:.1f} h ago, so it still has water. "
@@ -1052,7 +1261,7 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # Acts on ANY dose the model asks for, not just a full "fill". Top-ups were
     # previously computed and then silently dropped, so the small maintenance
     # doses the model is best at never actually reached the valve.
-    if auto and status in ("fill", "topup", "prefill") and secs > 0:
+    if auto and status in ("fill", "topup", "prefill", "refill") and secs > 0:
         cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
         _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
@@ -1072,11 +1281,18 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            "decidedBy": "model" if secs == model_secs else "safety-override",
            "autoCommanded": commanded,
            "lastFillTs": (dev_now if commanded else prev.get("lastFillTs")),
+           # Remembered so the NEXT check can size the hold to what actually
+           # went in, rather than charging a splash the same six hours as a fill.
+           "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
+           # What the probe actually reads, so the app can show an empty tray
+           # instead of only ever showing the air.
+           "trayLevel": level,
+           "trayEmpty": bool(dry),
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
-           "cooldownHours": COOLDOWN_HOURS,
+           "cooldownHours": round(hold, 1),
            "hoursSinceFill": round(since, 1) if since is not None else None,
-           "hoursUntilNextFill": round(max(0.0, COOLDOWN_HOURS - since), 1) if cooling else 0,
+           "hoursUntilNextFill": round(max(0.0, hold - since), 1) if cooling else 0,
            "trayAtLimit": bool(cooling and rh < lo),
            "checkedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", out)
@@ -1280,6 +1496,11 @@ class FarmSetup(BaseModel):
     # everywhere it is shown. Renaming the farm is still available on the
     # dashboard for anyone who wants one.
     farmName: str = "My Farm"
+    # Where the farm is. Optional so an older client still sets up fine, but the
+    # wizard asks for it, because the alternative is what happened before: the
+    # forecast quietly used Peradeniya for every farm on earth.
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     houses: List[HouseIn] = []
 
 
@@ -1287,8 +1508,13 @@ class FarmSetup(BaseModel):
 async def setup_farm(cfg: FarmSetup):
     """First-time setup wizard: farm -> houses -> sections."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    _fb_put("/farm/meta.json", {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
-                                "createdAt": now, "version": 2})
+    meta = {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
+            "createdAt": now, "version": 2}
+    if (cfg.latitude is not None and cfg.longitude is not None
+            and -90.0 <= cfg.latitude <= 90.0 and -180.0 <= cfg.longitude <= 180.0):
+        meta["latitude"] = round(float(cfg.latitude), 6)
+        meta["longitude"] = round(float(cfg.longitude), 6)
+    _fb_put("/farm/meta.json", meta)
     made = []
     for hi, h in enumerate(cfg.houses, 1):
         hid = h.id or f"H{hi}"
@@ -1909,6 +2135,47 @@ async def rename_farm(body: RenameIn):
     meta = _fb_get("/farm/meta.json") or {}
     meta["farmName"] = _clean_name(body.name)
     _fb_put("/farm/meta.json", meta)
+    return {"status": "success", "farm": meta}
+
+
+class LocationIn(BaseModel):
+    latitude: float
+    longitude: float
+
+
+@router.put("/farm/location")
+async def set_farm_location(body: LocationIn):
+    """Where this farm actually is.
+
+    forecast.farm_location() has always READ /farm/meta/{latitude,longitude},
+    falling back to Peradeniya. Nothing anywhere ever wrote them - no endpoint,
+    no screen, no script - so every farm silently used Peradeniya's weather for
+    its outdoor forecast, whatever the model was told about it. The setting was
+    designed and its writer was never built. This is that writer.
+
+    It matters because two errors compound for a farm elsewhere: the outdoor
+    forecast is for the wrong place, AND the indoor-vs-outdoor delta the model
+    learned was calibrated for Peradeniya. Neither shows a symptom on any
+    screen, which is exactly why it went unnoticed.
+    """
+    lat, lon = float(body.latitude), float(body.longitude)
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise HTTPException(400, "Latitude must be -90..90 and longitude -180..180.")
+
+    meta = _fb_get("/farm/meta.json") or {}
+    meta["latitude"] = round(lat, 6)
+    meta["longitude"] = round(lon, 6)
+    _fb_put("/farm/meta.json", meta)
+
+    # Today's outdoor forecast was fetched for the OLD location and is cached
+    # until midnight. Without this, moving the farm appears to do nothing at all
+    # until tomorrow - the worst kind of setting, one that silently ignores you.
+    try:
+        from app.api.routes import forecast as _fx
+        _fx._outdoor_cache.clear()
+    except Exception as e:
+        print(f"[WARN] could not clear the forecast cache after a move: {e}")
+
     return {"status": "success", "farm": meta}
 
 

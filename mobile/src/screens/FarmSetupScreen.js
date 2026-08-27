@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import { setupFarm, addHouse, addSection, assignDevice, getOverview } from '../services/careV2';
+import LocationPicker from '../components/LocationPicker';
 import NodePicker from '../components/NodePicker';
 
 const HOUSE_TYPES = ['shade-net', 'shade-cloth', 'poly-tunnel', 'double-shade'];
@@ -33,6 +34,12 @@ export default function FarmSetupScreen({ route, navigation }) {
   const [houseType,setHouseType]= useState('shade-net');
   const [sections, setSections] = useState([newSection(), newSection()]);
   const [saving,   setSaving]   = useState(false);
+  /* Where the farm is. Asked once, here, because it decides which place the
+     weather forecast is downloaded for - and that forecast feeds every watering
+     decision. Before this the question was never asked and every farm silently
+     used the coordinates the models were trained at. */
+  const [loc,      setLoc]      = useState(null);   // { latitude, longitude }
+  const [locOpen,  setLocOpen]  = useState(false);
 
   // Set once a section has been created and we are on the "link a node" step.
   const [linkFor, setLinkFor] = useState(null);   // { house, section, name }
@@ -122,7 +129,7 @@ export default function FarmSetupScreen({ route, navigation }) {
         firstRun = !(ov.houses || []).length;
       } catch (_) { /* unreachable backend: setupFarm is the safe assumption */ }
 
-      if (firstRun) await setupFarm({ houses: [house] });
+      if (firstRun) await setupFarm({ houses: [house], ...(loc || {}) });
       else          await addHouse(house);
       Alert.alert('Saved', `${house.name} created with ${house.sections.length} sections.\n\nFlash each device with its ID (shown on the dashboard).`,
         [{ text: 'OK', onPress: () => navigation.goBack() }]);
@@ -196,6 +203,29 @@ export default function FarmSetupScreen({ route, navigation }) {
                 ))}
               </View>
             </View>
+
+            {/* Asked once, at setup. It decides which place the weather forecast
+                is downloaded for, and that forecast feeds every watering time.
+                A map, not two number fields: nobody knows their coordinates. */}
+            <Text style={styles.h}>Where is it?</Text>
+            <View style={[styles.card, SHADOW.sm]}>
+              <TouchableOpacity style={styles.locRow} onPress={() => setLocOpen(true)}
+                activeOpacity={0.7} accessibilityRole="button"
+                accessibilityLabel="Choose the farm location on a map">
+                <Ionicons name={loc ? 'location' : 'map-outline'} size={22}
+                  color={loc ? COLORS.primary : COLORS.textTertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.locTitle}>
+                    {loc ? `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}` : 'Choose on the map'}
+                  </Text>
+                  <Text style={styles.locSub}>
+                    {loc ? 'Weather forecasts will be downloaded for this position.'
+                         : 'Search your town or tap the map. Used for the weather forecast.'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            </View>
           </>
         )}
 
@@ -265,6 +295,13 @@ export default function FarmSetupScreen({ route, navigation }) {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      <LocationPicker
+        visible={locOpen}
+        initial={loc ? { latitude: loc.latitude, longitude: loc.longitude } : null}
+        onCancel={() => setLocOpen(false)}
+        onPick={(p) => { setLoc(p); setLocOpen(false); }}
+      />
     </View>
   );
 }
@@ -298,6 +335,9 @@ const styles = StyleSheet.create({
   lbl:   { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '600', marginBottom: 5 },
   input: { backgroundColor: COLORS.bgInput, borderRadius: RADIUS.sm - 2, padding: SPACE.md, color: COLORS.text, fontSize: FONT.sm },
 
+  locRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  locTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  locSub:   { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
   chips:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: SPACE.md },
   chip:     { paddingHorizontal: 11, paddingVertical: 6, borderRadius: RADIUS.full, backgroundColor: COLORS.bgInput },
   chipOn:   { backgroundColor: COLORS.primary },

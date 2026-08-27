@@ -215,6 +215,17 @@ export const assignDevice = (mac, house, section, force = false) =>
 export const unassignDevice = (mac) => devReq(`/${mac}/assign`, { method: 'DELETE' });
 
 /** Blinks the node's onboard LED for ~10s so the farmer can find the physical box. */
+/**
+ * Where the farm is, used for the outdoor weather forecast.
+ *
+ * The backend has always READ these coordinates and fallen back to Peradeniya;
+ * nothing ever wrote them, so every farm used Peradeniya's weather no matter
+ * where it stood. Setting them also clears today's cached forecast server-side,
+ * so a correction takes effect now rather than tomorrow.
+ */
+export const setFarmLocation = (latitude, longitude) =>
+  req('/farm/location', { method: 'PUT', body: JSON.stringify({ latitude, longitude }) });
+
 export const identifyDevice = (mac) => devReq(`/${mac}/identify`, { method: 'POST' });
 
 /**
