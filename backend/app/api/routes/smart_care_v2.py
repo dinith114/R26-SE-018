@@ -75,13 +75,28 @@ _fert:  Optional[dict] = None
 def _load_v2():
     global _water, _tray, _fert
     _water = joblib.load(os.path.join(_MODEL_DIR, "watering_v2.pkl"))
-    _tray  = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
+    # v3 adds an anticipation head trained on the section's own trajectory, so
+    # the tray can act early WITHOUT the outdoor forecast API. v2 stays as the
+    # fallback: its dose head is byte-identical in features and label, so a farm
+    # running either behaves the same reactively.
+    try:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v3.pkl"))
+    except Exception:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
     _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
     m = _water["metrics"]
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
           f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
           f"2nd-session F1={m['second_session']['f1']:.3f}")
-    print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s")
+    if _tray.get("drop_model") is not None:
+        d = _tray["metrics"].get("drop_at_threshold") or {}
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s | "
+              f"drop-risk AUC={_tray['metrics'].get('drop_auc', 0):.3f} "
+              f"(thr {d.get('threshold', 0):.2f}: precision {d.get('precision', 0):.3f}, "
+              f"recall {d.get('recall', 0):.3f}) - no outdoor API")
+    else:
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s "
+              f"(v2 - reactive only)")
     # Deliberately NOT printed as an F1 score. It is 1.0 because the label is a
     # deterministic function of the inputs, so the classifier reproduces a rule
     # the code already holds. Printing "F1=1.000" invites a claim we cannot defend.
@@ -941,6 +956,97 @@ def _run_per_section(houses: dict, fn) -> dict:
     return dict(sorted(results.items()))
 
 
+# The tray is never filled in the dark: there has to be heat and light left to
+# evaporate what goes in. Matches the hours the model was trained on.
+TRAY_DAY_START, TRAY_DAY_END = 6, 18
+
+
+def _recent_window(house_id: str, section_id: str, points: int = 48) -> dict:
+    """The last few hours of this section's own readings.
+
+    Deliberately NOT _history_window(), which pulls 288 records (~50 KB) for the
+    daily plan. The tray runs every 15 minutes; at that rate the big window would
+    add tens of MB a day against a 360 MB budget, to answer a question that only
+    needs about four hours. 48 records is four hours at a 5-minute interval.
+    """
+    return _fb_get(f'/farm/history/{house_id}/{section_id}.json'
+                   f'?orderBy="$key"&limitToLast={points}') or {}
+
+
+def _at_hours_ago(recs: list, now_ms: float, hours: float, tol_min: float = 25.0):
+    """The reading nearest `hours` ago, or None if the gap is too wide.
+
+    A node reporting every 5 minutes gives an exact-ish match; one reporting
+    every 15 does not, hence the tolerance. Returning None rather than the
+    nearest-whatever matters: a "1 hour ago" value that is really 3 hours old
+    would invent a trend that never happened.
+    """
+    target = now_ms - hours * 3600_000.0
+    best, best_gap = None, None
+    for r in recs:
+        ts = r.get("timestamp")
+        if not ts:
+            continue
+        gap = abs(float(ts) - target)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = r, gap
+    if best is None or best_gap is None or best_gap > tol_min * 60_000.0:
+        return None
+    return best
+
+
+def _drop_risk(house_id: str, section_id: str, latest: dict, now: datetime) -> Optional[float]:
+    """Probability this section breaches the humidity band within a few hours.
+
+    Built ONLY from readings the node has already sent. This is what replaces the
+    outdoor forecast for the tray: over a 1-4 hour horizon the section's own
+    trajectory - how fast humidity is falling and drying power rising - carries
+    the signal, and needs no external service that can rate-limit, block or go
+    down. The forecast is still used for the day-level view, where weather that
+    has not arrived yet genuinely cannot be inferred from local sensors.
+
+    Returns None when there is not enough history to be honest about a trend,
+    which is the correct answer for a node that booted twenty minutes ago.
+    """
+    if not _tray or _tray.get("drop_model") is None:
+        return None
+    raw = _recent_window(house_id, section_id)
+    recs = [r for r in (raw or {}).values() if isinstance(r, dict) and r.get("timestamp")]
+    if len(recs) < 12:                      # under an hour of readings
+        return None
+    now_ms = _device_now_ms({"latest": latest}) or _server_now_ms()
+
+    past = {h: _at_hours_ago(recs, now_ms, h) for h in (1, 2, 3)}
+    if any(v is None for v in past.values()):
+        return None
+    p = {h: _clean(v) for h, v in past.items()}
+
+    t0, rh0, li0 = latest["temperature"], latest["humidity"], latest["light"]
+    v0 = vpd_kpa(t0, rh0)
+    pv = {h: vpd_kpa(p[h]["temperature"], p[h]["humidity"]) for h in (1, 2, 3)}
+
+    # Same order as drop_features in the bundle. Built from that list rather than
+    # hardcoded, so a retrain that reorders features cannot silently misalign.
+    vals = {
+        "temperature": t0, "humidity": rh0, "light": li0, "vpd": v0,
+        "hour": float(now.hour), "month": float(now.month),
+        "d_rh_1": rh0 - p[1]["humidity"], "d_rh_2": rh0 - p[2]["humidity"],
+        "d_rh_3": rh0 - p[3]["humidity"],
+        "d_t_1": t0 - p[1]["temperature"], "d_t_2": t0 - p[2]["temperature"],
+        "d_t_3": t0 - p[3]["temperature"],
+        "d_vpd_1": v0 - pv[1], "d_vpd_2": v0 - pv[2], "d_vpd_3": v0 - pv[3],
+        "d_light_1": li0 - p[1]["light"],
+        "rh_min_3": min(rh0, p[1]["humidity"], p[2]["humidity"], p[3]["humidity"]),
+    }
+    try:
+        row = np.array([[vals[k] for k in _tray["drop_features"]]])
+        X = _tray["drop_scaler"].transform(row)
+        return float(_tray["drop_model"].predict_proba(X)[0][1])
+    except Exception as e:
+        print(f"[WARN] drop-risk skipped for {house_id}-{section_id}: {e}")
+        return None
+
+
 def _tray_decision(house_id: str, section_id: str, section: dict,
                    now: Optional[datetime] = None) -> dict:
     latest = _clean((section or {}).get("latest") or {})
@@ -994,24 +1100,31 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
         msg = f"Humidity {rh}% is below {lo:.0f}%, open the valve {secs}s to raise it."
 
     # ── ANTICIPATORY TOP-UP ──────────────────────────────────────────────────
-    # If nothing is needed right now but the forecast says this section is
-    # heading for a hot, dry afternoon, top the tray up while there is still
-    # time for the water to evaporate. Used only to ACT EARLIER, never to skip
-    # a fill: the model's recall is ~0.68, so a miss must cost nothing.
+    # Nothing is needed right now, but the section's own trajectory says the
+    # band is about to be breached. Top up while there is still heat and light
+    # to evaporate it, rather than filling into an afternoon that has already
+    # turned dry.
+    #
+    # This used to be driven by the outdoor forecast API. It is not any more:
+    # over a 1-4 hour horizon the node's own falling humidity and rising drying
+    # power predict the drop at AUC 0.987, and that needs no external service
+    # that can rate-limit, block, or be down when the plants need water.
+    #
+    # The threshold is set for PRECISION, not best F1. A missed anticipation
+    # costs nothing - the reactive path fills an hour later. A WRONG one starts
+    # the six-hour cooldown and can block a fill that was genuinely needed.
     prefill = None
-    if secs == 0:
-        try:
-            from app.api.routes import forecast as _fx
-            fc = (section or {}).get("forecast") or {}
-            if fc.get("date") == now.strftime("%Y-%m-%d"):
-                advice = _fx.prefill_advice(fc, hour + now.minute / 60.0, rh)
-                if advice:
-                    prefill = advice
-                    secs = max(6, min(15, int(round((hi - rh) * 0.6))))
-                    status = "prefill"
-                    msg = advice["reason"]
-        except Exception as e:
-            print(f"[WARN] prefill check skipped: {e}")
+    if secs == 0 and TRAY_DAY_START <= hour <= TRAY_DAY_END and rh < hi:
+        risk = _drop_risk(house_id, section_id, latest, now)
+        thr = float((_tray or {}).get("drop_threshold") or 0.70)
+        if risk is not None and risk >= thr:
+            secs = max(6, min(15, int(round((hi - rh) * 0.6))))
+            status = "prefill"
+            prefill = {"risk": round(risk, 3), "threshold": thr,
+                       "horizon": (_tray or {}).get("drop_horizon_hours", 3)}
+            msg = (f"Humidity is {rh}% and falling: it is likely to drop below "
+                   f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
+                   f"while there is still heat to evaporate it.")
 
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
@@ -1029,7 +1142,10 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # 3 cm notch and waste water. Instead we hold off and flag that the tray has
     # reached its limit, which is what justifies an extra watering session.
     cooling = False
-    if status in ("fill", "topup") and since is not None and since < COOLDOWN_HOURS:
+    # "prefill" belongs in this list. It was missing, so the anticipatory path
+    # skipped the cooldown entirely and could refill a tray filled minutes
+    # earlier - the exact overflow the guard exists to prevent.
+    if status in ("fill", "topup", "prefill") and since is not None and since < COOLDOWN_HOURS:
         cooling  = True
         wait     = round(COOLDOWN_HOURS - since, 1)
         at_limit = status == "fill"
