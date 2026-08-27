@@ -67,13 +67,38 @@ const mapHtml = (lat, lon, zoom, pin) => `<!DOCTYPE html>
     }
     else {
       var map = L.map('map').setView([${lat}, ${lon}], ${zoom});
-      var tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19, attribution: '(c) OpenStreetMap'
+      /* Satellite imagery from Esri, NOT OpenStreetMap's own tiles.
+
+         OSM's tile servers are volunteer-run and their usage policy forbids
+         app use; they answer a blocked client with HTTP 418 and an image that
+         reads "Access blocked", which is what this picker showed at first. Esri
+         serves World Imagery free with attribution and no API key.
+
+         Satellite also happens to be the right picture for the question. A
+         farmer recognises their own greenhouse roof far quicker than a street
+         name, and the pin has to land on the building, not the village. */
+      var tiles = L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Imagery (c) Esri' });
+
+      /* If that provider ever blocks us the same way, fall back rather than
+         showing a blank map. Counted, because one stray failed tile at the edge
+         of the world is normal and must not trigger a switch. */
+      var tileFails = 0, swapped = false, anyOk = false;
+      var fallback = function () {
+        if (swapped || anyOk) return;
+        swapped = true;
+        map.removeLayer(tiles);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+          { maxZoom: 19, attribution: '(c) OpenStreetMap, (c) CARTO' }).addTo(map);
+        post({ type: 'tilesok' });
+      };
+      tiles.on('tileerror', function () {
+        tileFails++;
+        if (tileFails >= 4) fallback();
+        if (tileFails >= 12 && swapped) post({ type: 'tileerror' });
       });
-      // Say so if the tiles themselves fail, rather than showing a blank square
-      // and letting it be mistaken for "the map is broken".
-      tiles.on('tileerror', function () { post({ type: 'tileerror' }); });
-      tiles.on('load', function () { post({ type: 'tilesok' }); });
+      tiles.on('load', function () { anyOk = true; post({ type: 'tilesok' }); });
       tiles.addTo(map);
       post({ type: 'ready' });
 
@@ -277,7 +302,9 @@ export default function LocationPicker({ visible, initial, onCancel, onPick }) {
               </TouchableOpacity>
 
               <TouchableOpacity onPress={() => setManual({ lat: '', lon: '' })}>
-                <Text style={s.link}>I already know the coordinates</Text>
+                <Text style={s.link} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                  Enter coordinates instead
+                </Text>
               </TouchableOpacity>
             </View>
           </>
