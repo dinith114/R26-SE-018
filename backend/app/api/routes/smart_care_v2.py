@@ -1912,6 +1912,47 @@ async def rename_farm(body: RenameIn):
     return {"status": "success", "farm": meta}
 
 
+class LocationIn(BaseModel):
+    latitude: float
+    longitude: float
+
+
+@router.put("/farm/location")
+async def set_farm_location(body: LocationIn):
+    """Where this farm actually is.
+
+    forecast.farm_location() has always READ /farm/meta/{latitude,longitude},
+    falling back to Peradeniya. Nothing anywhere ever wrote them - no endpoint,
+    no screen, no script - so every farm silently used Peradeniya's weather for
+    its outdoor forecast, whatever the model was told about it. The setting was
+    designed and its writer was never built. This is that writer.
+
+    It matters because two errors compound for a farm elsewhere: the outdoor
+    forecast is for the wrong place, AND the indoor-vs-outdoor delta the model
+    learned was calibrated for Peradeniya. Neither shows a symptom on any
+    screen, which is exactly why it went unnoticed.
+    """
+    lat, lon = float(body.latitude), float(body.longitude)
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise HTTPException(400, "Latitude must be -90..90 and longitude -180..180.")
+
+    meta = _fb_get("/farm/meta.json") or {}
+    meta["latitude"] = round(lat, 6)
+    meta["longitude"] = round(lon, 6)
+    _fb_put("/farm/meta.json", meta)
+
+    # Today's outdoor forecast was fetched for the OLD location and is cached
+    # until midnight. Without this, moving the farm appears to do nothing at all
+    # until tomorrow - the worst kind of setting, one that silently ignores you.
+    try:
+        from app.api.routes import forecast as _fx
+        _fx._outdoor_cache.clear()
+    except Exception as e:
+        print(f"[WARN] could not clear the forecast cache after a move: {e}")
+
+    return {"status": "success", "farm": meta}
+
+
 @router.put("/houses/{house_id}/sections/{section_id}/name")
 async def rename_section(house_id: str, section_id: str, body: RenameIn):
     """Rename one section, touching nothing else about it."""

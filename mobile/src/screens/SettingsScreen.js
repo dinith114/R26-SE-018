@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, Animated, Alert,
+  Switch, Animated, Alert, TextInput, ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,7 +11,8 @@ import ScreenHeader from '../components/ScreenHeader';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
-  getDevices, getOverview, getModelInfo, intervalLabel, lastSeenLabel, signalLabel,
+  getDevices, getOverview, getModelInfo, setFarmLocation,
+  intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
@@ -75,11 +76,13 @@ const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
-  const { expert, setExpert } = usePrefs();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
   const [online,  setOnline]  = useState(null);   // is the backend reachable at all
+  const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
+  const [locEdit, setLocEdit] = useState(null);   // { lat, lon } while editing
+  const [locSaving, setLocSaving] = useState(false);
 
   const [alerts, setAlerts] = useState({
     watering:      true,
@@ -95,6 +98,35 @@ export default function SettingsScreen({ navigation }) {
   });
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  /* Save the farm's coordinates.
+
+     Validated here as well as on the backend because a typo in a latitude is
+     silent otherwise: the forecast simply becomes wrong for somewhere else,
+     and nothing on any screen looks broken. */
+  const saveLocation = async () => {
+    const lat = parseFloat(locEdit?.lat);
+    const lon = parseFloat(locEdit?.lon);
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      Alert.alert('Check the numbers', 'Latitude and longitude must both be numbers, for example 7.2683 and 80.5960.');
+      return;
+    }
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      Alert.alert('Out of range', 'Latitude must be between -90 and 90, longitude between -180 and 180.');
+      return;
+    }
+    try {
+      setLocSaving(true);
+      const res = await setFarmLocation(lat, lon);
+      setFarm(res.farm || { ...(farm || {}), latitude: lat, longitude: lon });
+      setLocEdit(null);
+      Alert.alert('Location saved', "Tomorrow's forecast will use this position. Today's was refetched for it too.");
+    } catch (e) {
+      Alert.alert('Could not save', e.message);
+    } finally {
+      setLocSaving(false);
+    }
+  };
 
   useEffect(() => {
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
@@ -123,6 +155,7 @@ export default function SettingsScreen({ navigation }) {
           });
         });
         setSection(sec);
+        setFarm(ov.farm || null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -179,28 +212,6 @@ export default function SettingsScreen({ navigation }) {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
 
-          {/* ── Display mode: Simple (default) vs Expert ──────────────── */}
-          <View style={[s.modeCard, SHADOW.sm]}>
-            <View style={s.modeRow}>
-              <Ionicons name={expert ? 'construct-outline' : 'happy-outline'}
-                size={26} color={expert ? COLORS.info : COLORS.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={s.modeTitle}>{expert ? 'Expert view' : 'Simple view'}</Text>
-                <Text style={s.modeDesc}>
-                  {expert
-                    ? 'Showing full technical detail, sensor values, drying power (VPD), charts and every control.'
-                    : 'Big text and plain words. Just what to do today.'}
-                </Text>
-              </View>
-              <Switch
-                value={expert}
-                onValueChange={setExpert}
-                trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
-                thumbColor={expert ? COLORS.info : COLORS.textTertiary}
-              />
-            </View>
-          </View>
-
           {/* ── Orchid Profile card ───────────────────────────────────── */}
           <LinearGradient
             colors={[COLORS.primary, COLORS.primaryDark]}
@@ -238,6 +249,99 @@ export default function SettingsScreen({ navigation }) {
                 {i < arr.length - 1 && <View style={s.snapSep} />}
               </React.Fragment>
             ))}
+          </View>
+
+          {/* ── FARM LOCATION ────────────────────────────────────────────
+              The backend has always read /farm/meta/{latitude,longitude} for
+              the outdoor weather forecast and fallen back to Peradeniya when
+              they were absent - which they always were, because nothing in the
+              app or the API ever wrote them. A farm anywhere else silently got
+              the wrong weather, with no symptom on any screen.
+
+              So the unset case is shown LOUDLY rather than left blank: an
+              invisible default is what let this hide in the first place. */}
+          <Text style={s.sectionLabel}>FARM LOCATION</Text>
+          <View style={[s.card, SHADOW.sm]}>
+            {locEdit ? (
+              <>
+                <View style={s.locRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.locFieldLabel}>Latitude</Text>
+                    <TextInput
+                      style={s.locInput}
+                      value={locEdit.lat}
+                      onChangeText={(v) => setLocEdit({ ...locEdit, lat: v })}
+                      keyboardType="numbers-and-punctuation"
+                      placeholder="7.2683"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.locFieldLabel}>Longitude</Text>
+                    <TextInput
+                      style={s.locInput}
+                      value={locEdit.lon}
+                      onChangeText={(v) => setLocEdit({ ...locEdit, lon: v })}
+                      keyboardType="numbers-and-punctuation"
+                      placeholder="80.5960"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15}
+                    />
+                  </View>
+                </View>
+                <Text style={s.locHint}>
+                  Open a map app while standing at the greenhouse and copy the coordinates.
+                  They decide which place the weather forecast is downloaded for.
+                </Text>
+                <View style={s.locBtns}>
+                  <TouchableOpacity style={s.locCancel} onPress={() => setLocEdit(null)}
+                    disabled={locSaving} accessibilityRole="button">
+                    <Text style={s.locCancelTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.locSave} onPress={saveLocation}
+                    disabled={locSaving} accessibilityRole="button">
+                    {locSaving
+                      ? <ActivityIndicator size="small" color="#FFF" />
+                      : <Text style={s.locSaveTxt}>Save</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={s.locView}
+                onPress={() => setLocEdit({
+                  lat: farm?.latitude != null ? String(farm.latitude) : '',
+                  lon: farm?.longitude != null ? String(farm.longitude) : '',
+                })}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Set the farm location used for the weather forecast">
+                <Ionicons
+                  name={farm?.latitude != null ? 'location' : 'alert-circle-outline'}
+                  size={22}
+                  color={farm?.latitude != null ? COLORS.primary : COLORS.warning} />
+                <View style={{ flex: 1 }}>
+                  {farm?.latitude != null ? (
+                    <>
+                      <Text style={s.locValue}>
+                        {Number(farm.latitude).toFixed(4)}, {Number(farm.longitude).toFixed(4)}
+                      </Text>
+                      <Text style={s.locSub}>Weather forecasts are downloaded for this position.</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={[s.locValue, { color: COLORS.warning }]}>Not set</Text>
+                      <Text style={s.locSub}>
+                        Using the Peradeniya default (7.2683, 80.5960). If the farm is somewhere
+                        else, the forecast behind every watering decision is for the wrong place.
+                      </Text>
+                    </>
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* ── HARDWARE ─────────────────────────────────────────────── */}
@@ -362,6 +466,22 @@ const s = StyleSheet.create({
   snapSep:  { width: 1, backgroundColor: COLORS.borderLight, marginVertical: 4 },
 
   // Section
+  locView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  locValue:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  locSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
+  locRow:    { flexDirection: 'row', gap: SPACE.md },
+  locFieldLabel: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700', marginBottom: 4 },
+  locInput:  { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm, borderWidth: 1,
+               borderColor: COLORS.border, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+               color: COLORS.text, fontSize: FONT.md },
+  locHint:   { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.md },
+  locBtns:   { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.lg },
+  locCancel: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md,
+               borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border },
+  locCancelTxt: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700' },
+  locSave:   { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md,
+               borderRadius: RADIUS.md, backgroundColor: COLORS.primary },
+  locSaveTxt:{ color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
   sectionLabel: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700', letterSpacing: 1.5, marginBottom: SPACE.sm, marginLeft: 2, marginTop: 4 },
   card:         { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, overflow: 'hidden', marginBottom: SPACE.xl },
   divider:      { height: 1, backgroundColor: COLORS.borderLight, marginLeft: 56 },
@@ -377,8 +497,4 @@ const s = StyleSheet.create({
   badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },
   badgeDot: { width: 6, height: 6, borderRadius: 3 },
   badgeText:{ fontSize: FONT.xs, fontWeight: '700' },
-  modeCard:  { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, marginBottom: SPACE.lg },
-  modeRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  modeTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
-  modeDesc:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
 });
