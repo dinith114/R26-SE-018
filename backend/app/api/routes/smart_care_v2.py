@@ -137,6 +137,10 @@ TRAY_MIN_HOLD_HOURS = 0.5
 TRAY_LOW_PCT = 20.0
 TRAY_REFILL_SEC = 25
 
+# How long after a real fill the tray should be showing water. Anything longer
+# and a still-dry reading is not evidence about the tray.
+TRAY_RESPONSE_HOURS = 1.0
+
 
 def _tray_level(latest: dict):
     """Measured water level in the tray, or None when there is no usable probe.
@@ -1201,13 +1205,50 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # reported "ok, no fill needed", because the air happened to be humid at the
     # time it was asked.
     level = _tray_level(latest)
-    dry = level is not None and level < TRAY_LOW_PCT
+
+    # ── DOES THE TRAY ANSWER WHEN IT IS FILLED? ──────────────────────────────
+    # A level reading is only worth acting on if it responds to water. Three
+    # things produce a permanent, entirely plausible 0%:
+    #
+    #   * the probe is unplugged - a floating ADC pin sits near the dry end,
+    #     which reads as a perfectly ordinary "empty tray", not as a fault
+    #   * the probe is mounted above the water line
+    #   * the fill never arrives - the tray pump is not wired on this rig yet,
+    #     so the command reaches a relay channel with nothing on the end of it
+    #
+    # None of those is distinguishable from a genuinely empty tray by looking at
+    # one reading. What IS distinguishable: fill it, and see whether anything
+    # changes. If a real dose went in within the last hour and the tray still
+    # reads empty, then whatever this number is, it is not measuring water - so
+    # stop letting it open the valve, and fall back to the air-humidity
+    # behaviour that needs no probe at all.
+    #
+    # This is deliberately about the whole path rather than the probe alone. A
+    # dead pump, a kinked tube and an empty water butt all look the same from
+    # here, and all three mean the same thing: do not keep commanding fills that
+    # achieve nothing.
+    responds = prev.get("trayResponds")
+    if level is not None and level >= TRAY_LOW_PCT:
+        responds = True                      # it has shown water: it works
+    elif (level is not None and since is not None
+          and since <= TRAY_RESPONSE_HOURS
+          and float(prev.get("lastFillSeconds") or 0) >= TRAY_REFILL_SEC):
+        responds = False                     # filled, and nothing moved
+
+    dry = (level is not None and level < TRAY_LOW_PCT and responds is not False)
     if dry and TRAY_DAY_START <= hour <= TRAY_DAY_END and secs < TRAY_REFILL_SEC:
         secs = TRAY_REFILL_SEC
         status = "refill"
         msg = (f"The tray is empty (level {level:.0f}%). Refilling {secs}s so there is "
                f"water to evaporate when humidity falls. An empty tray cannot hold "
                f"humidity up, however good the air looks right now.")
+
+    # A tray that does not answer is worth saying out loud: it is a bench fault,
+    # not a plant one, and the farmer can do something about it.
+    if responds is False and level is not None and level < TRAY_LOW_PCT:
+        msg += (" The tray still reads empty after a fill, so the probe, the tray "
+                "pump or the water supply needs checking - humidity is being "
+                "managed from the air reading alone until it does.")
 
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
@@ -1288,6 +1329,8 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            # instead of only ever showing the air.
            "trayLevel": level,
            "trayEmpty": bool(dry),
+           # None until it has been put to the test either way.
+           "trayResponds": responds,
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
            "cooldownHours": round(hold, 1),
