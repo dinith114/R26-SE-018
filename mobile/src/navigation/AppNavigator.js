@@ -116,9 +116,14 @@ function MainTabs() {
   );
 }
 
-export default function AppNavigator() {
+/* `navRef` and `onReady` come from App.js, which routes a tapped notification.
+   This used to take NO props at all while App.js passed `navRef={navRef}`, so
+   the ref was never attached, navRef.current stayed null forever, and every
+   `navRef.current?.navigate(...)` was silently swallowed by the optional chain.
+   Tapping any notification did nothing. */
+export default function AppNavigator({ navRef, onReady }) {
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navRef} onReady={onReady}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Settings" component={SettingsScreen} />

@@ -251,6 +251,7 @@ export const FarmQuickScreen = ({ navigation }) => {
         obstacles: [], plant_rows: [],
       };
       const res  = await fetch(`${BASE_URL}/api/v1/farm/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
       setResults(data);
       setThreeHtml(buildQuickHTML(data));

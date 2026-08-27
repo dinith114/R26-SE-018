@@ -69,7 +69,9 @@ export default function FarmTrialScreen({ route, navigation }) {
   const poll = useCallback(async () => {
     try {
       const res  = await fetch(`${BASE_URL}/api/v1/farm/trial-status/${sessionId}`);
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
+      if (!Array.isArray(data.positions)) throw new Error('Malformed trial status');
       setPositions(data.positions);
       setHtmlKey(k => k + 1);
     } catch (_) {}
@@ -83,6 +85,7 @@ export default function FarmTrialScreen({ route, navigation }) {
   const startPosition = async (posId) => {
     try {
       const res  = await fetch(`${BASE_URL}/api/v1/farm/trial-start/${sessionId}/${posId}`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
       setPositions(prev => prev.map(p =>
         p.id === posId    ? { ...p, status: 'active', start_time: new Date().toISOString() } :
@@ -108,7 +111,8 @@ export default function FarmTrialScreen({ route, navigation }) {
           text: 'Yes, move sensor',
           onPress: async () => {
             try {
-              await fetch(`${BASE_URL}/api/v1/farm/trial-done/${sessionId}/${posId}?reading_count=0`, { method: 'POST' });
+              const doneRes = await fetch(`${BASE_URL}/api/v1/farm/trial-done/${sessionId}/${posId}?reading_count=0`, { method: 'POST' });
+              if (!doneRes.ok) throw new Error(`Server error ${doneRes.status}`);
               setPositions(prev => prev.map(p =>
                 p.id === posId ? { ...p, status: 'done', end_time: new Date().toISOString() } : p
               ));
@@ -126,6 +130,7 @@ export default function FarmTrialScreen({ route, navigation }) {
     setAnalyzing(true);
     try {
       const res  = await fetch(`${BASE_URL}/api/v1/farm/analyze-trial/${sessionId}`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
       navigation.replace('FarmResults', { sessionId, model, analysis: data, positions });
     } catch (err) {

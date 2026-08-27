@@ -89,6 +89,9 @@ const HomeScreen = ({ navigation }) => {
               { label: 'Hybrid',   icon: 'git-merge-outline',route: 'Hybrid',      color: COLORS.warning },
               { label: 'Growth',   icon: 'leaf-outline',     route: 'Growth',      color: COLORS.fertilizer },
               { label: 'Devices',  icon: 'calculator-outline', route: 'DeviceCalculator', color: COLORS.temperature },
+              // Six screens and the whole survey flow were registered in the
+              // navigator with nothing anywhere that navigated to them.
+              { label: 'Farm Plan',icon: 'map-outline',      route: 'FarmPlanner', color: COLORS.info },
             ].map((item, i) => (
               <TouchableOpacity key={i} style={[styles.navCard, SHADOW.sm]} activeOpacity={0.6}
                 onPress={() => navigation.navigate(item.route)}>
@@ -215,8 +218,9 @@ const styles = StyleSheet.create({
   settingsBtn:{ flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.full, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm + 2 },
   settingsBtnText: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
 
-  navRow:   { flexDirection: 'row', gap: SPACE.sm, marginBottom: SPACE.xl },
-  navCard:  { flex: 1, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.md, alignItems: 'center' },
+  navRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginBottom: SPACE.xl },
+  navCard:  { flexBasis: '30%', flexGrow: 1, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm,
+              padding: SPACE.md, alignItems: 'center' },
   navIcon:  { width: 34, height: 34, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.xs },
   navLabel: { color: COLORS.textSecondary, fontSize: 10, fontWeight: '600' },
 

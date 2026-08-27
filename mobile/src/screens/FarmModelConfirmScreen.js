@@ -39,7 +39,10 @@ export default function FarmModelConfirmScreen({ route, navigation }) {
 
   useEffect(() => {
     fetch(`${BASE_URL}/api/v1/farm/scan-summary/${sessionId}`)
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`Server error ${r.status}`);
+        return r.json();
+      })
       .then(data => {
         setSummary(data);
         // Pre-fill rough estimates from aspect hint
@@ -95,6 +98,7 @@ export default function FarmModelConfirmScreen({ route, navigation }) {
       form.append('length', length);
 
       const r = await fetch(`${BASE_URL}/api/v1/farm/detect-plants/${sessionId}`, { method: 'POST', body: form });
+      if (!r.ok) throw new Error(`Server error ${r.status}`);
       if (!r.ok) throw new Error(`Server error ${r.status}`);
       const data = await r.json();
 
@@ -170,6 +174,7 @@ export default function FarmModelConfirmScreen({ route, navigation }) {
       }
 
       const res  = await fetch(`${BASE_URL}/api/v1/farm/confirm-model`, { method: 'POST', body: form });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const data = await res.json();
 
       navigation.replace('FarmTrial', {
