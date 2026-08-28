@@ -47,7 +47,7 @@ from pydantic import BaseModel
 import requests as _req
 
 from app.api.routes.smart_care_v2 import (
-    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section,
+    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section, second_session_due,
     _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL,
     _device_now_ms, _hours_since, _clean, _freshness, _farm_now_ms, _ready,
@@ -517,7 +517,7 @@ def _today(now: datetime) -> str:
     return now.strftime("%Y-%m-%d")
 
 
-def _due_sessions(plan: dict, now: datetime) -> List[dict]:
+def _due_sessions(plan: dict, now: datetime, section: Optional[dict] = None) -> List[dict]:
     """Which watering sessions in today's plan are due right now?
 
     Returns at most the first session and, on an extreme-heat day, the second.
@@ -542,8 +542,16 @@ def _due_sessions(plan: dict, now: datetime) -> List[dict]:
             out.append({"tag": tag, "time": hhmm, "durationSec": int(secs)})
 
     add("first", plan.get("waterTime"), plan.get("durationSec"))
-    if plan.get("secondSession"):
-        add("second", plan.get("secondTime"), plan.get("secondDurationSec"))
+
+    # The second session is NOT scheduled at dawn. It is judged in the afternoon
+    # on measured temperature, measured humidity and whether the tray coped, and
+    # it only qualifies once the morning watering has actually happened - a
+    # second watering makes no sense if the first never ran.
+    if section is not None and _already_done(section, _today(now), "first"):
+        sec = second_session_due(section, now)
+        if sec:
+            out.append({"tag": "second", "time": now.strftime("%H:%M"),
+                        "durationSec": int(sec["durationSec"]), "why": sec["reason"]})
     return out
 
 
@@ -579,7 +587,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
             if not isinstance(s, dict) or not s.get("latest"):
                 continue
             plan = s.get("plan") or {}
-            for sess in _due_sessions(plan, now):
+            for sess in _due_sessions(plan, now, s):
                 tag = sess["tag"]
                 if _already_done(s, day, tag):
                     continue

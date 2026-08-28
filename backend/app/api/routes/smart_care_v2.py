@@ -122,6 +122,89 @@ SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
 # A 3 cm tray cannot physically dry out faster than this. Any "low humidity"
 # sooner than this after a fill is caused by dry air, not an empty tray — so we
 # refuse to refill and avoid a wasteful overflow loop.
+# A second, lighter watering is allowed on a genuinely extreme day - but it is
+# decided in the AFTERNOON from what the day actually did, not at dawn.
+#
+# It used to be a dawn prediction pinned to 17:00. By 17:00 the system knows the
+# measured temperature, the measured humidity, and whether the tray coped, and
+# was throwing all of it away in favour of a guess made twelve hours earlier.
+#
+# It is also gated on the tray being exhausted, which removes a conflict rather
+# than managing one. The tray is the cheap intervention and carries no root-rot
+# risk, so it always goes first; a second watering happens only once the tray
+# has demonstrably failed - it has water, and humidity is still below the band.
+# The two can no longer fire for the same reason.
+#
+# The code already said this and never did it: the tray writes "The tray is at
+# its limit - extra watering may be needed" and nothing anywhere acted on it.
+ALLOW_SECOND_SESSION = True
+
+# Late enough that the day has shown what it is, early enough that roots are not
+# going into the night wet.
+SECOND_WINDOW_START, SECOND_WINDOW_END = 15.0, 17.5
+# Extreme, measured now - not predicted at dawn. Same thresholds the training
+# label used, applied to observation instead.
+SECOND_PEAK_TEMP_C = 36.0
+SECOND_VPD_KPA = 3.0
+SECOND_DOSE_SHARE = 0.7
+# A decision this consequential is not made on an old reading.
+SECOND_MAX_READING_AGE_MIN = 30.0
+
+
+def second_session_due(section: dict, now: Optional[datetime] = None) -> Optional[dict]:
+    """Does today, as measured, justify a second watering for this section?
+
+    Every condition is something OBSERVED this afternoon. Nothing here is a
+    prediction, and nothing here is from a weather service.
+
+    The tray gate is the important one. Without it, the tray and a second
+    watering both react to the same heat and can over-treat a section between
+    them. With it there is a strict order: the tray tries first because it is
+    cheap and cannot rot a root, and the roots are only watered again once the
+    tray has water in it and STILL cannot hold humidity up.
+    """
+    if not ALLOW_SECOND_SESSION:
+        return None
+    now = now or farm_now()
+    hour = now.hour + now.minute / 60.0
+    if not (SECOND_WINDOW_START <= hour <= SECOND_WINDOW_END):
+        return None
+
+    latest = _clean((section or {}).get("latest") or {})
+    t, rh = latest.get("temperature"), latest.get("humidity")
+    if t is None or rh is None:
+        return None
+
+    # An old reading cannot describe this afternoon.
+    ts = latest.get("timestamp")
+    try:
+        age_min = (_server_now_ms() - float(ts)) / 60000.0
+    except (TypeError, ValueError):
+        return None
+    if age_min > SECOND_MAX_READING_AGE_MIN or age_min < -SECOND_MAX_READING_AGE_MIN:
+        return None
+
+    tray = (section or {}).get("tray") or {}
+    plan = (section or {}).get("plan") or {}
+    v = vpd_kpa(t, rh)
+    low = float(tray.get("targetLow") or 60.0)
+
+    extreme = (t >= SECOND_PEAK_TEMP_C) or (v >= SECOND_VPD_KPA)
+    dry_now = rh < low
+    tray_spent = bool(tray.get("trayAtLimit"))
+    if not (extreme and dry_now and tray_spent):
+        return None
+
+    base = int(plan.get("durationSec") or 0)
+    if base <= 0:
+        return None
+    secs = max(20, min(RELAY_MAX_SEC, int(round(base * SECOND_DOSE_SHARE))))
+    return {"durationSec": secs,
+            "temperature": t, "humidity": rh, "vpd": round(v, 3),
+            "reason": (f"Second watering: it is {t}C at {rh}% humidity (VPD {v:.2f}) and the "
+                       f"tray was filled {tray.get('hoursSinceFill')}h ago and still cannot "
+                       f"hold humidity up. The tray has done what it can.")}
+
 COOLDOWN_HOURS = 6.0
 
 # The dose that actually fills the tray, and so earns the FULL cooldown.
@@ -910,8 +993,11 @@ def _plan_section(house_id: str, section_id: str, section: dict,
 
     hour   = float(_water["model_hour"].predict(Xs)[0])
     dur    = int(round(float(_water["model_duration"].predict(Xs)[0])))
-    second = bool(_water["model_second"].predict(Xs)[0])
+    # The model still runs, so the plan can report what it WOULD have said and
+    # the report can cite it. Only the acting on it is switched off.
+    second_model = bool(_water["model_second"].predict(Xs)[0])
     second_conf = float(_water["model_second"].predict_proba(Xs)[0].max())
+    second = second_model and ALLOW_SECOND_SESSION
 
     hour = max(6.0, min(9.0, hour))
     dur  = max(30, min(120, dur))
@@ -921,14 +1007,25 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         "waterHour": round(hour, 2),
         "waterTime": _hhmm(hour),
         "durationSec": dur,
-        "secondSession": second,
-        "secondTime": "17:00" if second else None,
-        "secondDurationSec": int(dur * 0.7) if second else 0,
+        # No fixed second session any more. It is decided in the afternoon from
+        # measured conditions - see second_session_due() - so the plan carries
+        # only what the dawn model SUGGESTED, for the record.
+        "secondSession": False,
+        "secondTime": None,
+        "secondDurationSec": 0,
         "secondConfidence": round(second_conf * 100, 1),
+        # What the model asked for, separately from what policy allows, so a
+        # disabled second session is visible rather than silently absent.
+        "secondSuggested": second_model,
+        "secondAllowed": ALLOW_SECOND_SESSION,
         "reason": (
             f"Extreme heat detected (yesterday peaked {y['peak_temp']}°C, "
             f"VPD {y['mean_vpd']}) — a second evening session is allowed."
             if second else
+            f"Extreme heat (yesterday peaked {y['peak_temp']}°C, VPD "
+            f"{y['mean_vpd']}), but this farm waters once a day. The tray keeps "
+            f"afternoon humidity up instead."
+            if second_model else
             f"Normal conditions — one watering is enough. The tray handles "
             f"midday humidity (VPD {dawn_vpd})."
         ),
