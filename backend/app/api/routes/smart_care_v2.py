@@ -1012,6 +1012,47 @@ def _hhmm(hour_float: float) -> str:
 
 # ═══════════════════════ ML: today's watering plan ════════════════════════════
 
+def _reading_for_planning(section: dict) -> tuple:
+    """The reading to plan from, and where it came from.
+
+    Prefers what the section measured. Falls back to a kriged estimate from
+    neighbouring sections when this one has no hardware - which is the whole
+    point of the spatial service - but returns the provenance alongside, so a
+    plan built on an estimate can say so rather than passing it off as measured.
+
+    The estimate is only accepted if it is recent. A stale one describes a
+    different hour of a different day, and is worse than having none, because
+    it looks exactly as authoritative as a fresh one.
+    """
+    # The RAW record decides whether a reading exists, not the cleaned one.
+    # _clean() substitutes model-safe defaults - 28 C and 70 % - for a section
+    # that never reported, which is correct for feeding a model and useless as
+    # an existence test: checking the cleaned value would find a temperature
+    # every time and this fallback would never run at all.
+    raw_latest = (section or {}).get("latest") or {}
+    measured = _clean(raw_latest)
+    if raw_latest.get("timestamp") and measured.get("temperature") is not None:
+        return measured, "measured", None
+
+    est = (section or {}).get("estimated") or {}
+    try:
+        age_min = (_server_now_ms() - float(est.get("timestampMs"))) / 60000.0
+    except (TypeError, ValueError):
+        return measured, "measured", None
+    if age_min > 60.0 or est.get("temperature") is None:
+        return measured, "measured", None
+
+    return ({"temperature": est.get("temperature"),
+             "humidity": est.get("humidity"),
+             "light": est.get("light", 0.0),
+             "timestamp": est.get("timestampMs")},
+            "interpolated",
+            {"anchors": est.get("anchorCount"),
+             "temperatureSd": est.get("temperatureSd"),
+             "humiditySd": est.get("humiditySd"),
+             "method": est.get("method")})
+
+
 def _plan_section(house_id: str, section_id: str, section: dict,
                   now: Optional[datetime] = None) -> dict:
     """`now` lets the automation engine keep one pass internally consistent.
@@ -2391,6 +2432,38 @@ async def set_farm_location(body: LocationIn):
         print(f"[WARN] could not clear the forecast cache after a move: {e}")
 
     return {"status": "success", "farm": meta}
+
+
+class PositionIn(BaseModel):
+    """Where a section sits on the house floor, in metres from one corner."""
+    x: float
+    y: float
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/position")
+async def set_section_position(house_id: str, section_id: str, body: PositionIn):
+    """Place a section in the house, so its microclimate can be interpolated.
+
+    Sections were purely logical until now - a name, a label and a light-exposure
+    coefficient, with nothing saying where in the building they are. Spatial
+    interpolation needs real coordinates: without them a zone cannot be related
+    to its neighbours at all.
+
+    Metres from a corner the farmer picks, consistently for the whole house. The
+    origin does not matter as long as it does not move, because kriging works on
+    distances between points rather than absolute position.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if not (0.0 <= body.x <= 500.0) or not (0.0 <= body.y <= 500.0):
+        raise HTTPException(400, "Coordinates are metres within the house, 0-500.")
+    meta["x"] = round(float(body.x), 2)
+    meta["y"] = round(float(body.y), 2)
+    _fb_put(path, meta)
+    return {"status": "success", "meta": meta,
+            "message": f"{section_id} placed at ({meta['x']}, {meta['y']}) m."}
 
 
 class DurationsIn(BaseModel):
