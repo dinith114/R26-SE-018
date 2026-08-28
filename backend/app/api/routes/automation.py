@@ -58,6 +58,9 @@ router = APIRouter()
 
 # ─────────────────────────── Tunables ────────────────────────────────────────
 TICK_SECONDS        = 60      # how often the engine wakes up
+# Kriging every tick would recompute the same answer sixty times an hour from
+# readings that only change every five minutes. Same shape as the tray check.
+SPATIAL_MINUTES     = 5       # how often unmonitored zones are re-estimated
 TRAY_CHECK_MINUTES  = 15      # how often the humidity trays are assessed
 # On the FARM's clock, not UTC. This used to be PLAN_HOUR_UTC = 4 with the
 # comment "~09:30 Sri Lanka" - a hand compensation for a missing timezone that
@@ -718,16 +721,29 @@ def _engine_pass(now: datetime) -> dict:
         did["plan"] = run_plan_cycle(now, houses)
         _state["lastPlanDay"] = _today(now)
 
-    # 2. Humidity trays, every TRAY_CHECK_MINUTES.
+    # 2. Estimate the zones with no hardware, BEFORE anything reads them.
+    #    Placed here so that by the time the tray check and the watering link
+    #    look at a section, its estimate is already current. Uses the farm
+    #    document this pass already fetched rather than re-reading it.
+    last_spatial = _state.get("lastSpatial")
+    if last_spatial is None or (now - last_spatial) >= timedelta(minutes=SPATIAL_MINUTES):
+        try:
+            from app.api.routes import spatial_service as _sp
+            did["spatial"] = _sp.interpolate_all(houses, now)
+        except Exception as e:               # advisory only; never stop the clock
+            print(f"[SPATIAL] pass skipped: {e}")
+        _state["lastSpatial"] = now
+
+    # 3. Humidity trays, every TRAY_CHECK_MINUTES.
     last_tray = _state["lastTray"]
     if last_tray is None or (now - last_tray) >= timedelta(minutes=TRAY_CHECK_MINUTES):
         did["tray"] = run_tray_cycle(now, houses)
         _state["lastTray"] = now
 
-    # 3. Watering, checked every tick because a planned minute must not be missed.
+    # 4. Watering, checked every tick because a planned minute must not be missed.
     did["water"] = run_watering_link(now, houses)
 
-    # 4. Anything the farmer must act on gets pushed to their phone, grouped so
+    # 5. Anything the farmer must act on gets pushed to their phone, grouped so
     #    four due sections do not mean four separate buzzes.
     _flush_pending_pushes()
 

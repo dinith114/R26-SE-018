@@ -557,6 +557,78 @@ NODE_ACTIONS = ("water", "tray", "stop", "wifi")
 RELAY_MAX_SEC = 120
 
 
+# One master controller can hold one relay board, and eight is what the common
+# board offers. Beyond that a second master is needed rather than a bigger map.
+MASTER_MAX_CHANNELS = 8
+
+# /devices is read once per command burst rather than once per command. A tick
+# that waters four sections would otherwise pull the whole registry four times.
+_DEVICE_CACHE: dict = {"at": 0.0, "devices": None}
+_DEVICE_CACHE_SEC = 30.0
+
+
+def _devices_cached() -> dict:
+    now = _server_now_ms() / 1000.0
+    if _DEVICE_CACHE["devices"] is None or now - _DEVICE_CACHE["at"] > _DEVICE_CACHE_SEC:
+        _DEVICE_CACHE["devices"] = _fb_get("/devices.json") or {}
+        _DEVICE_CACHE["at"] = now
+    return _DEVICE_CACHE["devices"]
+
+
+def _own_device(house_id: str, section_id: str) -> Optional[str]:
+    """The MAC of the node assigned to this section, or None.
+
+    The registry is the authority, not meta.deviceId: that field is a
+    convenience for the app and drifts when a write half-fails.
+    """
+    target = f"{house_id}/{section_id}"
+    for mac, rec in (_devices_cached() or {}).items():
+        if (rec or {}).get("assignedTo") == target:
+            return mac
+    return None
+
+
+def _master_for_house(house_id: str) -> Optional[str]:
+    """The controller that actuates sections having no node of their own."""
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    mac = (meta.get("masterMac") or "").strip()
+    return mac or None
+
+
+def _relay_channel(house_id: str, section_id: str) -> Optional[int]:
+    """Which relay channel on the master opens this section's valve.
+
+    Explicit meta.relayChannel wins, because it has to match how the board was
+    physically wired and nobody should have to guess that from an ordering. When
+    it is absent the channel is derived from the section's position in sorted
+    order, which is stable and predictable but is only a convenience - a farm
+    that wires channels out of order must set them.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json") or {}
+    try:
+        ch = int(meta["relayChannel"])
+        if 1 <= ch <= MASTER_MAX_CHANNELS:
+            return ch
+    except (KeyError, TypeError, ValueError):
+        pass
+    # NATURAL order, not lexicographic. sorted() puts S10, S11, S12 before S2,
+    # so on a farm with more than nine sections the derived channels come out
+    # scrambled - S12 landed on channel 4 in testing, which would have opened
+    # the wrong valve on correctly wired hardware and looked like a plumbing
+    # fault rather than a sort order.
+    def _natural(sid: str):
+        digits = "".join(c for c in sid if c.isdigit())
+        return (0, int(digits)) if digits else (1, 0), sid
+
+    ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
+                 key=_natural)
+    if section_id in ids:
+        ch = ids.index(section_id) + 1
+        if ch <= MASTER_MAX_CHANNELS:
+            return ch
+    return None
+
+
 def _issue_node_command(house_id: str, section_id: str, action: str,
                         duration_sec: int, **extra) -> Optional[dict]:
     """Write the command document the FIRMWARE polls. Returns it, or None.
@@ -586,7 +658,40 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
            # ms overflows it.
            "issuedAtSec": int(now.timestamp())}
     cmd.update(extra)
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/command.json", cmd)
+
+    # A section with its own node keeps the direct path: that node polls exactly
+    # here and nothing else reads it.
+    if _own_device(house_id, section_id) or action == "wifi":
+        cmd["routedTo"] = None
+        _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/command.json", cmd)
+        return cmd
+
+    # No node of its own. If a master controller has been named for this house,
+    # its relay board can open this section's valve on its behalf.
+    master = _master_for_house(house_id)
+    channel = _relay_channel(house_id, section_id) if master else None
+    if not master or not channel:
+        # Refusing is the point. Writing to the section's own path here would
+        # produce a command nobody polls: not delayed, never seen, while the app
+        # reports success and the log records a watering that did not happen.
+        print(f"[CMD] {house_id}/{section_id} has no node and "
+              f"{'no master' if not master else 'no relay channel'} - {action} not issued")
+        return None
+
+    cmd["targetSection"] = section_id
+    cmd["channel"] = channel
+    cmd["routedTo"] = master
+
+    # A QUEUE, keyed by command id - not a single document. The engine can find
+    # several sections due in one 60 s tick (today's plan has two of them a
+    # minute apart), and a shared document would let each write clobber the one
+    # before it. The section would still be marked watered, so the log would
+    # claim three pours where one happened. Distinct keys cannot collide.
+    _fb_put(f"/farm/masters/{master}/queue/{cmd['id']}.json", cmd)
+
+    # So the app knows the section can be actuated after all, and stops greying
+    # out its controls.
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/routedTo.json", master)
     return cmd
 
 
@@ -1011,6 +1116,47 @@ def _hhmm(hour_float: float) -> str:
 
 
 # ═══════════════════════ ML: today's watering plan ════════════════════════════
+
+def _reading_for_planning(section: dict) -> tuple:
+    """The reading to plan from, and where it came from.
+
+    Prefers what the section measured. Falls back to a kriged estimate from
+    neighbouring sections when this one has no hardware - which is the whole
+    point of the spatial service - but returns the provenance alongside, so a
+    plan built on an estimate can say so rather than passing it off as measured.
+
+    The estimate is only accepted if it is recent. A stale one describes a
+    different hour of a different day, and is worse than having none, because
+    it looks exactly as authoritative as a fresh one.
+    """
+    # The RAW record decides whether a reading exists, not the cleaned one.
+    # _clean() substitutes model-safe defaults - 28 C and 70 % - for a section
+    # that never reported, which is correct for feeding a model and useless as
+    # an existence test: checking the cleaned value would find a temperature
+    # every time and this fallback would never run at all.
+    raw_latest = (section or {}).get("latest") or {}
+    measured = _clean(raw_latest)
+    if raw_latest.get("timestamp") and measured.get("temperature") is not None:
+        return measured, "measured", None
+
+    est = (section or {}).get("estimated") or {}
+    try:
+        age_min = (_server_now_ms() - float(est.get("timestampMs"))) / 60000.0
+    except (TypeError, ValueError):
+        return measured, "measured", None
+    if age_min > 60.0 or est.get("temperature") is None:
+        return measured, "measured", None
+
+    return ({"temperature": est.get("temperature"),
+             "humidity": est.get("humidity"),
+             "light": est.get("light", 0.0),
+             "timestamp": est.get("timestampMs")},
+            "interpolated",
+            {"anchors": est.get("anchorCount"),
+             "temperatureSd": est.get("temperatureSd"),
+             "humiditySd": est.get("humiditySd"),
+             "method": est.get("method")})
+
 
 def _plan_section(house_id: str, section_id: str, section: dict,
                   now: Optional[datetime] = None) -> dict:
@@ -2391,6 +2537,103 @@ async def set_farm_location(body: LocationIn):
         print(f"[WARN] could not clear the forecast cache after a move: {e}")
 
     return {"status": "success", "farm": meta}
+
+
+class MasterIn(BaseModel):
+    """MAC of the controller that waters sections having no node, or null."""
+    masterMac: Optional[str] = None
+
+
+@router.put("/houses/{house_id}/master")
+async def set_house_master(house_id: str, body: MasterIn):
+    """Name the controller that actuates this house's unmonitored sections.
+
+    One ESP32 on a multi-channel relay board, opening a valve per section. A
+    section with its own node is unaffected and keeps being commanded directly;
+    this only covers the ones that would otherwise have nobody listening.
+
+    Clearing it is deliberate and supported: without a master, a command for a
+    nodeless section is refused rather than written somewhere nothing reads.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    mac = (body.masterMac or "").strip().upper()
+    if mac:
+        if mac not in (_fb_get("/devices.json") or {}):
+            raise HTTPException(400, f"No device {mac} has ever registered.")
+        meta["masterMac"] = mac
+    else:
+        meta.pop("masterMac", None)
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _DEVICE_CACHE["devices"] = None                 # force a fresh read
+
+    return {"status": "success", "masterMac": meta.get("masterMac"),
+            "maxChannels": MASTER_MAX_CHANNELS,
+            "message": (f"{mac} will water sections that have no node of their own."
+                        if mac else
+                        "Cleared. Sections without a node can no longer be watered.")}
+
+
+class ChannelIn(BaseModel):
+    relayChannel: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/channel")
+async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
+    """Which relay channel on the master opens this section's valve.
+
+    This has to match the physical wiring, so it is set rather than inferred.
+    Cleared, the channel falls back to the section's position in sorted order,
+    which is predictable but only correct if the board was wired that way.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if body.relayChannel is None:
+        meta.pop("relayChannel", None)
+    else:
+        ch = int(body.relayChannel)
+        if not (1 <= ch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"Relay channel must be 1-{MASTER_MAX_CHANNELS}.")
+        meta["relayChannel"] = ch
+    _fb_put(path, meta)
+    return {"status": "success", "relayChannel": meta.get("relayChannel"),
+            "effective": _relay_channel(house_id, section_id)}
+
+
+class PositionIn(BaseModel):
+    """Where a section sits on the house floor, in metres from one corner."""
+    x: float
+    y: float
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/position")
+async def set_section_position(house_id: str, section_id: str, body: PositionIn):
+    """Place a section in the house, so its microclimate can be interpolated.
+
+    Sections were purely logical until now - a name, a label and a light-exposure
+    coefficient, with nothing saying where in the building they are. Spatial
+    interpolation needs real coordinates: without them a zone cannot be related
+    to its neighbours at all.
+
+    Metres from a corner the farmer picks, consistently for the whole house. The
+    origin does not matter as long as it does not move, because kriging works on
+    distances between points rather than absolute position.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if not (0.0 <= body.x <= 500.0) or not (0.0 <= body.y <= 500.0):
+        raise HTTPException(400, "Coordinates are metres within the house, 0-500.")
+    meta["x"] = round(float(body.x), 2)
+    meta["y"] = round(float(body.y), 2)
+    _fb_put(path, meta)
+    return {"status": "success", "meta": meta,
+            "message": f"{section_id} placed at ({meta['x']}, {meta['y']}) m."}
 
 
 class DurationsIn(BaseModel):
