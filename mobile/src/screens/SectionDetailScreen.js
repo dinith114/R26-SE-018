@@ -1149,15 +1149,6 @@ export default function SectionDetailScreen({ route, navigation }) {
                     <Text style={styles.planDate}>{plan.date}</Text>
                   </View>
                 </View>
-                {plan.secondSession && (
-                  <View style={styles.second}>
-                    <Ionicons name="flame-outline" size={15} color={COLORS.danger} />
-                    <Text style={styles.secondTxt}>
-                      Extreme heat, second session {plan.secondTime} for {plan.secondDurationSec}s
-                      ({plan.secondConfidence}%)
-                    </Text>
-                  </View>
-                )}
                 <Text style={styles.reason}>{plan.reason}</Text>
               </>
             ) : <Text style={styles.none}>No plan worked out for today yet.</Text>}

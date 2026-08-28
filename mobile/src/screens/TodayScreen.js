@@ -288,14 +288,6 @@ export default function TodayScreen({ navigation }) {
               </View>
             </View>
           )}
-          {plan?.secondSession && (
-            <View style={[s.hotCard, SHADOW.sm]} accessibilityRole="alert">
-              <Ionicons name="flame" size={24} color={COLORS.danger} />
-              <Text style={s.hotText}>
-                Very hot today, the plants will get water again at {plan.secondTime}.
-              </Text>
-            </View>
-          )}
 
           {/* plant food */}
           {fertDue.length > 0 ? (
