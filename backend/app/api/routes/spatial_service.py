@@ -86,19 +86,42 @@ def _anchor_reading(section: dict) -> Optional[dict]:
 def _krige_field(xs, ys, zs, tx, ty):
     """One field, kriged onto the target points. (values, variances) or None.
 
-    Tries an ordinary variogram first and falls back to linear, which is the
-    most forgiving model when there are few points. A singular matrix - from
-    collinear or near-duplicate anchors - raises, and is reported rather than
-    silently producing nonsense.
+    A singular matrix - from collinear or near-duplicate anchors - raises, and
+    is reported rather than silently producing nonsense.
+
+    LINEAR IS TRIED FIRST WHEN ANCHORS ARE FEW, and the reason is a bug this
+    code shipped with. Spherical was tried first, with linear kept only as a
+    fallback for when spherical RAISED. Spherical does not raise on few points:
+    it fits a variogram whose range is shorter than the spacing between the
+    sensors, decides no anchor is close enough to any target to be informative,
+    and returns the plain mean of the anchors for every target - which is
+    exactly what ordinary kriging should do with that variogram, so nothing
+    anywhere reports a problem.
+
+    Measured on five anchors spanning 25.0-28.5 C with a clear gradient:
+
+        spherical   -> [26.8, 26.8, 26.8, 26.8]   range 3.03 m, anchors 5-10 m apart
+        linear      -> [28.43, 26.86, 27.08, 25.34]
+
+    26.8 is the mean of the five. The left-hand column is four estimates that
+    look measured, carry a confidence interval, and contain no information.
     """
     from pykrige.ok import OrdinaryKriging
 
-    for model in ("spherical", "linear"):
+    zs_arr = np.asarray(zs, dtype=float)
+    z_mean = float(np.mean(zs_arr))
+    z_spread = float(np.ptp(zs_arr))
+
+    # Below this many anchors the fitted range is not trustworthy, so start with
+    # the model that does not depend on getting one right.
+    models = ("linear", "spherical") if len(zs_arr) < 8 else ("spherical", "linear")
+
+    for model in models:
         try:
             ok = OrdinaryKriging(
                 np.asarray(xs, dtype=float),
                 np.asarray(ys, dtype=float),
-                np.asarray(zs, dtype=float),
+                zs_arr,
                 variogram_model=model,
                 enable_plotting=False,
                 coordinates_type="euclidean",
@@ -108,8 +131,16 @@ def _krige_field(xs, ys, zs, tx, ty):
                                np.asarray(ty, dtype=float))
             vals = np.asarray(z, dtype=float).ravel()
             var = np.asarray(ss, dtype=float).ravel()
-            if np.all(np.isfinite(vals)):
-                return vals, var, model
+            if not np.all(np.isfinite(vals)):
+                continue
+            # Reject a collapse to the mean. The anchors disagree by z_spread,
+            # so an estimate that equals their average at every target has
+            # thrown away the only thing kriging was asked to use - where the
+            # sensors are. Checked against the mean rather than against the
+            # spread of the outputs, so it also catches a single target.
+            if z_spread > 0.5 and np.all(np.abs(vals - z_mean) < 0.02 * z_spread):
+                continue
+            return vals, var, model
         except Exception:
             continue
     return None
