@@ -23,7 +23,7 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
-  setSectionDurations,
+  setSectionDurations, setSectionPosition,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
@@ -151,6 +151,8 @@ export default function SectionDetailScreen({ route, navigation }) {
      Kept as strings while editing so a half-typed number is not coerced to 0. */
   const [durEdit,   setDurEdit]   = useState(null);  // { water, tray } as text
   const [durSaving, setDurSaving] = useState(false);
+  const [posEdit,   setPosEdit]   = useState(null);  // { x, y } as text
+  const [posSaving, setPosSaving] = useState(false);
   const [savingIv,  setSavingIv]  = useState(null);
   // One sheet at a time: 'water' | 'fill' | 'interval' | 'control' | 'unlink'
   const [sheet, setSheet] = useState(null);
@@ -334,6 +336,32 @@ export default function SectionDetailScreen({ route, navigation }) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
       setDurSaving(false);
+    }
+  };
+
+  /* Save where this section sits. Metres, so a plain number is the whole
+     input - a map picker can replace this later without the API changing. */
+  const savePosition = async () => {
+    const x = parseFloat(String(posEdit?.x ?? '').trim());
+    const y = parseFloat(String(posEdit?.y ?? '').trim());
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      Alert.alert('Position', 'Enter both X and Y in metres, for example 3.5 and 8.');
+      return;
+    }
+    if (x < 0 || y < 0 || x > 500 || y > 500) {
+      Alert.alert('Position', 'Coordinates are metres inside the house, 0 to 500.');
+      return;
+    }
+    try {
+      setPosSaving(true);
+      await setSectionPosition(houseId, sectionId, x, y);
+      setPosEdit(null);
+      load();
+      setToast({ text: `Placed at ${x} m, ${y} m`, kind: 'success' });
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setPosSaving(false);
     }
   };
 
@@ -583,11 +611,27 @@ export default function SectionDetailScreen({ route, navigation }) {
     </View>
   );
 
-  const latest = sec?.latest || {};
+  const est    = sec?.estimated || null;
   const plan   = sec?.plan   || {};
   const tray   = sec?.tray   || {};
   const meta   = sec?.meta   || {};
   const fcast  = sec?.forecast || null;
+  /* An estimate is only worth showing while it still describes this hour. An
+     hour-old kriging of a farm's microclimate is describing weather that has
+     moved on, and it would look exactly as confident as a fresh one. */
+  const rawLatest = sec?.latest || {};
+  const estAgeMin = est?.timestampMs ? (Date.now() - est.timestampMs) / 60000 : null;
+  const estUsable = !!est && estAgeMin != null && estAgeMin >= 0 && estAgeMin <= 60;
+  /* Only stand in where there is nothing of this section's own. A stale real
+     reading still beats a neighbour's guess, because it at least happened
+     here. */
+  const usingEstimate = estUsable && !rawLatest.timestamp;
+
+  const latest = usingEstimate
+    ? { temperature: est.temperature, humidity: est.humidity,
+        light: est.light, vpd: est.vpd, timestamp: est.timestampMs }
+    : rawLatest;
+
   const rh = humidityStatus(latest.humidity);
   const vp = vpdStatus(latest.vpd ?? tray.vpd);
   const sig = signalLabel(device?.rssi);
@@ -603,12 +647,45 @@ export default function SectionDetailScreen({ route, navigation }) {
      Watering is blocked rather than merely discouraged: the firmware only acts
      on a command it polls for, so a command sent to a silent node does nothing
      while the app reports success. Better to say why up front. */
-  const fresh  = sec?.freshness || null;
+  const fresh = usingEstimate
+    ? { state: 'estimated',
+        ageMinutes: Math.round(estAgeMin),
+        label: `estimated ${Math.round(estAgeMin)} min ago`,
+        trusted: false,
+        message: `No sensor in this zone. These figures are interpolated from `
+                 + `${est.anchorCount} nearby section(s) that do have one.` }
+    : (sec?.freshness || null);
+
   const live   = fresh?.state === 'live';
   const noNode = fresh?.state === 'nonode' || (!device && !latest.timestamp);
-  const actionsOff = noNode || !live;
-  const blockReason = noNode
-    ? 'No sensor node is linked to this section, so there is nothing to send the command to.'
+
+  /* Two separate questions, and conflating them is what makes a control lie.
+
+     Do we have numbers worth acting on?  live, or a fresh estimate.
+     Is there anything that will act?      something must COLLECT the command.
+
+     The second is the one that matters here. The firmware polls only its own
+     assigned section - BASE + "/command.json" - so a section with no node has
+     nobody reading its command path. A command written there is not delayed,
+     it is never seen, while the app reports success, a countdown runs and the
+     event log records a watering that did not happen.
+
+     There is no master controller in the deployed firmware. `routedTo` is the
+     hook for one: when the backend can route an unmonitored zone's commands to
+     a shared valve it will set that field, and these buttons come alive with no
+     further change here. Until then an estimated section can be READ from and
+     not watered, which is the truth. */
+  const dataOk    = live || usingEstimate;
+  const canActuate = !!device || !!(sec?.control?.routedTo);
+  const actionsOff = !dataOk || !canActuate;
+
+  const blockReason = !canActuate
+    ? (usingEstimate
+        ? 'These readings are estimated from nearby sections, but this zone has no '
+          + 'node or valve of its own, so there is nothing here to open. Link a node '
+          + 'to water it from the app.'
+        : 'No sensor node is linked to this section, so there is nothing to send the '
+          + 'command to.')
     : `This node last reported ${fresh?.label || 'a while ago'} and has missed readings since. `
       + 'Watering on numbers this old could soak plants that do not need it.';
   /* The tray is on a cooldown of its own, separate from node health.
@@ -991,23 +1068,38 @@ export default function SectionDetailScreen({ route, navigation }) {
           <View style={styles.grid}>
             {[
               ['thermometer-outline', COLORS.temperature, fmt(latest.temperature, 1), '°C',
-               'Temperature'],
+               'Temperature', est?.temperatureSd],
               ['water-outline',       rh.color,           fmt(latest.humidity, 0),    '%',
-               live ? `Humidity · ${rh.label}` : 'Humidity'],
+               live ? `Humidity · ${rh.label}` : 'Humidity', est?.humiditySd],
               ['sunny-outline',       COLORS.light,       fmt(latest.light, 0),       'lux',
-               'Light'],
+               'Light', est?.lightSd],
               ['speedometer-outline', vp.color,           fmt(latest.vpd ?? tray.vpd, 2), 'kPa',
-               live ? `Drying · ${vp.label}` : 'Drying'],
-            ].map(([ic, c, v, u, l], i) => (
-              <View key={i} style={[styles.tile, SHADOW.sm, !live && styles.tileDead]}>
-                <Ionicons name={ic} size={17} color={live ? c : COLORS.textTertiary} />
-                <Text style={[styles.tileVal, { color: live ? c : COLORS.textTertiary }]}>
+               live ? `Drying · ${vp.label}` : 'Drying', null],
+            ].map(([ic, c, v, u, l, sd], i) => {
+              // An estimate is shown in its own colour, never in the colour a
+              // measured reading uses, and never greyed out as though absent.
+              const tone = usingEstimate ? COLORS.estimated
+                         : live ? c : COLORS.textTertiary;
+              return (
+              <View key={i} style={[styles.tile, SHADOW.sm,
+                                    !live && !usingEstimate && styles.tileDead,
+                                    usingEstimate && styles.tileEst]}>
+                <Ionicons name={ic} size={17} color={tone} />
+                <Text style={[styles.tileVal, { color: tone }]}>
                   {v}<Text style={styles.tileUnit}>{u}</Text>
                 </Text>
+                {/* The spread is the point of kriging: an estimate without one
+                    is just a number wearing someone else's confidence. */}
+                {usingEstimate && sd != null && (
+                  <Text style={styles.tileSd} maxFontSizeMultiplier={1.15}>
+                    ±{Number(sd).toFixed(sd >= 10 ? 0 : 1)}{u}
+                  </Text>
+                )}
                 <Text style={styles.tileLbl} numberOfLines={1}
                 adjustsFontSizeToFit maxFontSizeMultiplier={1.15}>{l}</Text>
               </View>
-            ))}
+              );
+            })}
           </View>
 
           {/* Directly under the numbers, because it is the caveat on them: how
@@ -1564,6 +1656,75 @@ export default function SectionDetailScreen({ route, navigation }) {
             )}
           </View>
 
+          {/* ── POSITION ────────────────────────────────────────────────
+              Metres from whichever corner of the house the farmer picks, used
+              consistently for every section. The origin is arbitrary because
+              kriging works on the distances between sections; what matters is
+              that it does not move once chosen. */}
+          <Text style={styles.sectionLabel}>POSITION IN THE HOUSE</Text>
+          <View style={[styles.card, SHADOW.sm]}>
+            {posEdit ? (
+              <>
+                <View style={styles.durRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.durLabel}>X (metres)</Text>
+                    <TextInput style={styles.durInput} value={posEdit.x}
+                      onChangeText={(v) => setPosEdit({ ...posEdit, x: v })}
+                      keyboardType="numbers-and-punctuation" placeholder="0.0"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.durLabel}>Y (metres)</Text>
+                    <TextInput style={styles.durInput} value={posEdit.y}
+                      onChangeText={(v) => setPosEdit({ ...posEdit, y: v })}
+                      keyboardType="numbers-and-punctuation" placeholder="0.0"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15} />
+                  </View>
+                </View>
+                <Text style={styles.durHint}>
+                  Measure from the same corner for every section. Once four sections
+                  are placed and reporting, zones without a node can be estimated
+                  from their neighbours.
+                </Text>
+                <View style={styles.durBtns}>
+                  <TouchableOpacity style={styles.durCancel} onPress={() => setPosEdit(null)}
+                    disabled={posSaving} accessibilityRole="button">
+                    <Text style={styles.durCancelTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.durSave} onPress={savePosition}
+                    disabled={posSaving} accessibilityRole="button">
+                    {posSaving ? <ActivityIndicator size="small" color="#FFF" />
+                               : <Text style={styles.durSaveTxt}>Save</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <TouchableOpacity style={styles.durView} activeOpacity={0.7}
+                onPress={() => setPosEdit({
+                  x: meta.x != null ? String(meta.x) : '',
+                  y: meta.y != null ? String(meta.y) : '',
+                })}
+                accessibilityRole="button"
+                accessibilityLabel="Set where this section is in the house">
+                <Ionicons name="location-outline" size={22}
+                  color={meta.x != null ? COLORS.primary : COLORS.textTertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.durValue}>
+                    {meta.x != null ? `${meta.x} m, ${meta.y} m` : 'Not placed'}
+                  </Text>
+                  <Text style={styles.durSub}>
+                    {meta.x != null
+                      ? 'Used to estimate zones that have no sensor of their own.'
+                      : 'Tap to say where this section sits in the house.'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+
           {/* ── POUR LENGTHS ─────────────────────────────────────────────
               How long the pump runs, not when. The models keep deciding the
               time of day and whether the tray needs anything; these only
@@ -1865,6 +2026,8 @@ const styles = StyleSheet.create({
                gap: 6, paddingVertical: SPACE.md - 2, borderRadius: RADIUS.md,
                borderWidth: 1, borderColor: COLORS.primary },
   nodeBtnOn: { backgroundColor: COLORS.primary },
+  tileEst:   { borderWidth: 1, borderColor: COLORS.estimated, backgroundColor: COLORS.estimatedDim },
+  tileSd:    { color: COLORS.estimated, fontSize: FONT.xs, fontWeight: '700', marginTop: -2 },
   durView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   durValue:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
   durSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },

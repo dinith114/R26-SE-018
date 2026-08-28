@@ -69,6 +69,11 @@ export const COLORS = {
   lightDim: 'rgba(161, 98, 7, 0.10)',
   soil: '#047857',
   soilDim: 'rgba(4, 120, 87, 0.10)',
+  // Estimated (kriged) readings. Deliberately a hue no measured value uses, so
+  // "this number came from neighbouring sections" is legible before the label
+  // is read. 7.10:1 on the card background.
+  estimated: '#6D28D9',
+  estimatedDim: 'rgba(109, 40, 217, 0.10)',
   fertilizer: '#6D28D9',     // 7.10:1
   fertilizerDim: 'rgba(109, 40, 217, 0.10)',
 

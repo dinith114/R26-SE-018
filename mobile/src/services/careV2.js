@@ -61,6 +61,22 @@ export const setSectionDurations = (h, s, waterDurationSec, trayFillSec) =>
     body: JSON.stringify({ waterDurationSec, trayFillSec }),
   });
 
+/**
+  * Place a section on the house floor, in metres from a corner the farmer picks.
+  *
+  * Sections were purely logical - a name, a label and a light-exposure figure -
+  * with nothing recording where in the building they are. Spatial interpolation
+  * cannot relate a zone to its neighbours without this.
+  *
+  * The origin does not matter as long as it does not move between sections,
+  * because kriging works on the distances between points rather than on
+  * absolute position.
+  */
+export const setSectionPosition = (h, s, x, y) =>
+  req(`/houses/${h}/sections/${s}/position`, {
+    method: 'PUT', body: JSON.stringify({ x, y }),
+  });
+
 export const renameFarm    = (name)    => req('/farm', { method: 'PUT', body: JSON.stringify({ name }) });
 export const renameHouse   = (h, name) => req(`/houses/${h}`, { method: 'PUT', body: JSON.stringify({ name }) });
 export const renameSection = (h, s, name) =>

@@ -10,7 +10,14 @@
  *
  * `freshness` comes from the backend (/overview -> sections[].freshness) and is
  * shaped { state, ageMinutes, label, trusted, message }, where state is one of
- * 'live' | 'delayed' | 'stale' | 'never' | 'future'.
+ * 'live' | 'delayed' | 'stale' | 'never' | 'future' | 'nonode' | 'estimated'.
+ *
+ * 'estimated' is the one state not produced by the backend's freshness logic.
+ * The section screen synthesises it when a zone has no hardware of its own but
+ * carries a recent kriged estimate from its neighbours. It is listed here
+ * because STATE_STYLE falls back to `never` for an unknown state, so a state
+ * added anywhere else would render as a grey "Never" and quietly misreport a
+ * working feature as a dead sensor.
  *
  * 'future' means the reading is stamped ahead of real time - a wrong device
  * clock, or simulated data. It is reported separately from 'stale' because the
@@ -34,6 +41,10 @@ export const STATE_STYLE = {
   // No node is LINKED at all - different from a node that has gone quiet, and
   // the fix is different too: link one, rather than check the battery.
   nonode:  { color: COLORS.textTertiary, icon: 'hardware-chip-outline', word: 'No node' },
+  // Not measured here. Interpolated from sections that ARE measured, which is
+  // a different claim from both "fresh" and "stale" and needs its own word: a
+  // farmer must never mistake a neighbour's reading for this zone's own.
+  estimated: { color: COLORS.estimated, icon: 'git-network-outline', word: 'Estimated' },
 };
 
 export const isTrusted = (f) => f?.trusted !== false;
@@ -41,6 +52,11 @@ export const isTrusted = (f) => f?.trusted !== false;
 /** The node is keeping its promise. The only state in which a reading may be
  *  shown in colour, or an action button left pressable. */
 export const isLive = (f) => f?.state === 'live';
+
+/** Interpolated from neighbours rather than measured here. Deliberately NOT
+ *  folded into isLive: the two carry different confidence, and every caller
+ *  should have to decide which it will accept. */
+export const isEstimated = (f) => f?.state === 'estimated';
 
 /** Small inline badge — sits next to a reading. */
 export function FreshnessBadge({ freshness, style }) {
