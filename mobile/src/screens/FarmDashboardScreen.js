@@ -322,7 +322,6 @@ export default function FarmDashboardScreen({ navigation }) {
                           {plan.waterTime && (
                             <Text style={[styles.chip, { backgroundColor: COLORS.infoDim, color: COLORS.info }]}>
                               Water {plan.waterTime} · {plan.durationSec}s
-                              {plan.secondSession ? ` +${plan.secondTime}` : ''}
                             </Text>
                           )}
                           {tray.status === 'fill' && (

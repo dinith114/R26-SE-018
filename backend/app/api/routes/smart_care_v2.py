@@ -86,7 +86,7 @@ def _load_v2():
     m = _water["metrics"]
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
           f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
-          f"2nd-session F1={m['second_session']['f1']:.3f}")
+          f"duration R2={m['duration']['r2']:.3f}")
     if _tray.get("drop_model") is not None:
         d = _tray["metrics"].get("drop_at_threshold") or {}
         print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s | "
@@ -992,11 +992,6 @@ def _plan_section(house_id: str, section_id: str, section: dict,
 
     hour   = float(_water["model_hour"].predict(Xs)[0])
     dur    = int(round(float(_water["model_duration"].predict(Xs)[0])))
-    # The model still runs, so the plan can report what it WOULD have said and
-    # the report can cite it. Only the acting on it is switched off.
-    second_model = bool(_water["model_second"].predict(Xs)[0])
-    second_conf = float(_water["model_second"].predict_proba(Xs)[0].max())
-    second = second_model and ALLOW_SECOND_SESSION
 
     hour = max(6.0, min(9.0, hour))
     dur  = max(30, min(120, dur))
@@ -1006,28 +1001,15 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         "waterHour": round(hour, 2),
         "waterTime": _hhmm(hour),
         "durationSec": dur,
-        # No fixed second session any more. It is decided in the afternoon from
-        # measured conditions - see second_session_due() - so the plan carries
-        # only what the dawn model SUGGESTED, for the record.
-        "secondSession": False,
-        "secondTime": None,
-        "secondDurationSec": 0,
-        "secondConfidence": round(second_conf * 100, 1),
-        # What the model asked for, separately from what policy allows, so a
-        # disabled second session is visible rather than silently absent.
-        "secondSuggested": second_model,
-        "secondAllowed": ALLOW_SECOND_SESSION,
-        "reason": (
-            f"Extreme heat detected (yesterday peaked {y['peak_temp']}°C, "
-            f"VPD {y['mean_vpd']}) — a second evening session is allowed."
-            if second else
-            f"Extreme heat (yesterday peaked {y['peak_temp']}°C, VPD "
-            f"{y['mean_vpd']}), but this farm waters once a day. The tray keeps "
-            f"afternoon humidity up instead."
-            if second_model else
-            f"Normal conditions — one watering is enough. The tray handles "
-            f"midday humidity (VPD {dawn_vpd})."
-        ),
+        # A second watering is no longer part of the dawn plan. It is decided in
+        # the afternoon from measured conditions - see second_session_due() - so
+        # there is nothing about it to publish twelve hours in advance, and the
+        # fields that used to carry one have been removed rather than left
+        # permanently empty for screens to test against.
+        "reason": (f"One watering at {_hhmm(hour)} for {dur}s. The tray handles "
+                   f"midday humidity (VPD {dawn_vpd}); if the afternoon turns "
+                   f"extreme and the tray cannot cope, a second session is added "
+                   f"then, on measured conditions."),
         "inputs": {"dawnTemp": dawn["temperature"], "dawnHumidity": dawn["humidity"],
                    "dawnLight": dawn["light"], "dawnVpd": dawn_vpd,
                    "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"]},
@@ -2520,11 +2502,23 @@ async def alerts():
                                          f"{int(float(fert.get('strength', 0.5)) * 100)}% strength — "
                                          f"it will be mixed into the next watering.",
                               "houseId": hid, "sectionId": sid})
-            if plan.get("secondSession"):
-                items.append({"id": f"{hid}-{sid}-2nd", "level": "info",
-                              "icon": "time-outline", "title": "Second watering planned",
-                              "message": f"{where}: extra session at {plan.get('secondTime')} "
-                                         f"({plan.get('secondDurationSec')}s) because of heat.",
+            # A second watering is no longer planned at dawn, and the plan field
+            # this once tested has been removed. Before that it sat permanently
+            # false, so the farmer was never told an extra session was coming -
+            # even while the afternoon rule authorised one and the pump ran.
+            # Ask the rule instead.
+            #
+            # to_farm_time() rather than `now`: `now` here is UTC, and the rule
+            # is gated on a 15:00-17:30 FARM-local window. The local name
+            # `farm_now` is a float of epoch ms and shadows the farm_now()
+            # function, so it cannot be called in this scope.
+            second_now = second_session_due(s, to_farm_time(farm_now))
+            if second_now:
+                items.append({"id": f"{hid}-{sid}-2nd", "level": "action",
+                              "icon": "time-outline", "title": "Second watering now",
+                              "message": f"{where}: {second_now['temperature']}°C at "
+                                         f"{second_now['humidity']}% and the tray cannot cope — "
+                                         f"an extra {second_now['durationSec']}s is due.",
                               "houseId": hid, "sectionId": sid})
             elif plan.get("waterTime"):
                 items.append({"id": f"{hid}-{sid}-plan", "level": "info",
