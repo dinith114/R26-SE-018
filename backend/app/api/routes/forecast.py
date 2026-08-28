@@ -26,7 +26,6 @@ The dawn reading alone gave recall 0.62. Adding the outdoor weather forecast
 
 import json
 import os
-import pickle
 import joblib
 import urllib.parse
 import urllib.request
@@ -195,30 +194,3 @@ LEAD_MAX_HOURS = 4.0
 PREFILL_RH = 62.0      # only pre-fill if the air is already drying toward the floor
 
 
-def prefill_advice(fc: dict, now_hour: float, current_rh: float) -> Optional[dict]:
-    """Should we top the tray up NOW because of what is coming?
-
-    Returns None unless every condition holds:
-      * a forecast exists and is for today
-      * the predicted stress peak is 1-4 hours away (time to evaporate, not so
-        far that the tray would be refilled again first)
-      * it is genuinely a hot day by the model's own threshold
-      * humidity is already sagging, so this is a top-up and not an overfill
-    """
-    if not fc or not fc.get("hotDay"):
-        return None
-    lead = float(fc["peakHour"]) - float(now_hour)
-    if not (LEAD_MIN_HOURS <= lead <= LEAD_MAX_HOURS):
-        return None
-    if current_rh >= PREFILL_RH:
-        return None
-
-    return {
-        "reason": (f"Getting ready for the afternoon: {fc['peakTemp']}C and "
-                   f"{fc['minHumidity']}% humidity are expected around "
-                   f"{int(fc['peakHour']):02d}:00, in about {lead:.0f}h. "
-                   f"Topping the tray up now gives the water time to evaporate."),
-        "leadHours": round(lead, 1),
-        "peakTemp": fc["peakTemp"],
-        "peakHour": fc["peakHour"],
-    }
