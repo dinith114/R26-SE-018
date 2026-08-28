@@ -32,7 +32,6 @@ state, which made the app take seconds to show anything. Keep them apart.
 
 import math
 import os
-import pickle
 # joblib, not pickle, for the v2 bundles: they are stored compressed so the
 # backend can be deployed without shipping 1.7 GB. joblib.load reads a plain
 # pickle too, so restoring an uncompressed backup still works.

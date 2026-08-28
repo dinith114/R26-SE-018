@@ -47,10 +47,9 @@ from pydantic import BaseModel
 import requests as _req
 
 from app.api.routes.smart_care_v2 import (
-    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section, second_session_due,
-    _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
-    farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL,
-    _device_now_ms, _hours_since, _clean, _freshness, _farm_now_ms, _ready,
+    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section,
+    second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
+    farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL, _ready,
     _record_fertilized, _log_event,
 )
 
