@@ -2520,11 +2520,22 @@ async def alerts():
                                          f"{int(float(fert.get('strength', 0.5)) * 100)}% strength — "
                                          f"it will be mixed into the next watering.",
                               "houseId": hid, "sectionId": sid})
-            if plan.get("secondSession"):
-                items.append({"id": f"{hid}-{sid}-2nd", "level": "info",
-                              "icon": "time-outline", "title": "Second watering planned",
-                              "message": f"{where}: extra session at {plan.get('secondTime')} "
-                                         f"({plan.get('secondDurationSec')}s) because of heat.",
+            # A second watering is no longer planned at dawn, so reading
+            # plan.secondSession here could never be true and the farmer was
+            # never told an extra session was coming - even while the afternoon
+            # rule was authorising one and the pump was running. Ask the rule.
+            #
+            # to_farm_time() rather than `now`: `now` here is UTC, and the rule
+            # is gated on a 15:00-17:30 FARM-local window. The local name
+            # `farm_now` is a float of epoch ms and shadows the farm_now()
+            # function, so it cannot be called in this scope.
+            second_now = second_session_due(s, to_farm_time(farm_now))
+            if second_now:
+                items.append({"id": f"{hid}-{sid}-2nd", "level": "action",
+                              "icon": "time-outline", "title": "Second watering now",
+                              "message": f"{where}: {second_now['temperature']}°C at "
+                                         f"{second_now['humidity']}% and the tray cannot cope — "
+                                         f"an extra {second_now['durationSec']}s is due.",
                               "houseId": hid, "sectionId": sid})
             elif plan.get("waterTime"):
                 items.append({"id": f"{hid}-{sid}-plan", "level": "info",
