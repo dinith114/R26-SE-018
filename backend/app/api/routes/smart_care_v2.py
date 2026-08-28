@@ -214,10 +214,42 @@ TRAY_FULL_FILL_SEC = 30.0
 # make the valve open every fifteen minutes for ever.
 TRAY_MIN_HOLD_HOURS = 0.5
 
+# ── MEASURED HARDWARE, 28 August 2026 ────────────────────────────────────────
+# Until this was measured, "seconds" was an arbitrary unit. The duration labels
+# were synthesised by formula during training with no pump in the loop, so the
+# models learned a scale that had never been checked against water.
+#
+# Bench measurement, outlet into a jug on a scale:
+#     5 s -> 1.13 L      8 s -> 2.03 L      15 s -> capped by a 2.3 L jug
+# The 15 s runs are discarded: they measure the jug, not the pump. The rate is
+# the 5->8 s slope, which cancels the volume left priming the tube:
+#     (2.03 - 1.13) / 3 = 0.300 L/s
+PUMP_ML_PER_SEC = 300.0
+# Tray measured 32 x 48 cm. Depth is the working figure the cooldown reasoning
+# has always assumed.
+TRAY_AREA_CM2 = 32.0 * 48.0          # 1536 cm2 -> 1.536 L per cm of depth
+TRAY_MAX_DEPTH_CM = 3.0              # 4.61 L full
+
+
+def _sec_for_depth(cm: float) -> int:
+    """Pump seconds to raise the tray by this depth, from measured geometry."""
+    return max(1, int(round(TRAY_AREA_CM2 * cm / PUMP_ML_PER_SEC)))
+
+
+# A hard ceiling, like the 120 s relay cap - a physical limit the model cannot
+# argue with. Before this the model routinely asked for 25 s and could ask for
+# 60 s, which at the measured rate is 7.5 L and 18 L into a tray that holds
+# 4.6 L. The overflow was invisible because nothing measures outflow.
+#
+# Derived rather than hardcoded so a different pump or tray needs three measured
+# numbers changed, not a retrained model.
+TRAY_MAX_SEC = _sec_for_depth(TRAY_MAX_DEPTH_CM)          # ~15 s
+
 # Below this the tray cannot buffer anything - there is nothing left to
 # evaporate - and it is refilled regardless of what the air is doing.
 TRAY_LOW_PCT = 20.0
-TRAY_REFILL_SEC = 25
+# Refilling an empty tray means filling it, so it is the ceiling by definition.
+TRAY_REFILL_SEC = TRAY_MAX_SEC
 
 # How long after a real fill the tray should be showing water. Anything longer
 # and a still-dry reading is not evidence about the tray.
@@ -1001,6 +1033,10 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         "waterHour": round(hour, 2),
         "waterTime": _hhmm(hour),
         "durationSec": dur,
+        # Derived from a single bench measurement of this pump (300 ml/s), so it
+        # is indicative and moves with the hardware. It is published because a
+        # grower can judge "25 litres" and cannot judge "84 seconds".
+        "litres": round(dur * PUMP_ML_PER_SEC / 1000.0, 2),
         # A second watering is no longer part of the dawn plan. It is decided in
         # the afternoon from measured conditions - see second_session_due() - so
         # there is nothing about it to publish twelve hours in advance, and the
@@ -1208,6 +1244,12 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     secs = max(0, min(60, secs))
     model_secs = secs          # the model's own call, kept for the UI and report
 
+    # PHYSICAL CEILING. The model was trained on a synthetic seconds scale that
+    # no pump was ever measured against; at 300 ml/s its typical 25 s dose is
+    # 7.5 L into a 4.6 L tray. Clamp to what the tray can actually hold.
+    if secs > TRAY_MAX_SEC:
+        secs = TRAY_MAX_SEC
+
     lo, hi = _tray["rh_target_low"], _tray["rh_target_high"]
     rh = latest["humidity"]
 
@@ -1405,6 +1447,12 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
            # What the probe actually reads, so the app can show an empty tray
            # instead of only ever showing the air.
+           # Seconds meant nothing physical until the pump was measured. Volume
+           # is what a grower can sanity-check, and what the tray's own capacity
+           # is expressed in.
+           "litres": round(secs * PUMP_ML_PER_SEC / 1000.0, 2),
+           "trayCapacityL": round(TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000.0, 2),
+           "maxSeconds": TRAY_MAX_SEC,
            "trayLevel": level,
            "trayEmpty": bool(dry),
            # None until it has been put to the test either way.
