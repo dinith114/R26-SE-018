@@ -231,6 +231,29 @@ TRAY_AREA_CM2 = 32.0 * 48.0          # 1536 cm2 -> 1.536 L per cm of depth
 TRAY_MAX_DEPTH_CM = 3.0              # 4.61 L full
 
 
+def _manual_durations(section: dict) -> dict:
+    """A grower's own pour lengths for this section, where they have set any.
+
+    Stored under control/durations, NOT control/override - that key already
+    holds the auto/manual autonomy switch and means something different.
+
+    These change HOW LONG a pour runs, never WHETHER one happens. The models
+    still decide the timing and whether water is needed at all; this only
+    replaces the length once that decision is made. A value that forced fills
+    would keep watering a section forever after one afternoon of tinkering.
+    """
+    d = ((section or {}).get("control") or {}).get("durations") or {}
+    out = {}
+    for key in ("water", "tray"):
+        try:
+            v = int(d.get(key))
+            if v > 0:
+                out[key] = v
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def _sec_for_depth(cm: float) -> int:
     """Pump seconds to raise the tray by this depth, from measured geometry."""
     return max(1, int(round(TRAY_AREA_CM2 * cm / PUMP_ML_PER_SEC)))
@@ -1028,11 +1051,23 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     hour = max(6.0, min(9.0, hour))
     dur  = max(30, min(120, dur))
 
+    # A length set by the grower wins over the model's, but not over the safety
+    # clamp: the relay stops at RELAY_MAX_SEC regardless, so promising more in
+    # the app than the hardware will honour would be a lie.
+    manual = _manual_durations(section)
+    model_dur = dur
+    if manual.get("water"):
+        dur = max(30, min(120, int(manual["water"])))
+
     plan = {
         "date": now.strftime("%Y-%m-%d"),
         "waterHour": round(hour, 2),
         "waterTime": _hhmm(hour),
         "durationSec": dur,
+        # What the model asked for, kept beside what is actually used, so an
+        # override is visible rather than silently replacing the model.
+        "modelDurationSec": model_dur,
+        "durationSetBy": "manual" if manual.get("water") else "model",
         # Derived from a single bench measurement of this pump (300 ml/s), so it
         # is indicative and moves with the hardware. It is published because a
         # grower can judge "25 litres" and cannot judge "84 seconds".
@@ -1244,9 +1279,17 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     secs = max(0, min(60, secs))
     model_secs = secs          # the model's own call, kept for the UI and report
 
+    # A length set by the grower replaces the model's - but only when the model
+    # has already decided a fill is warranted. Applying it to a zero would turn
+    # a manual preference into a standing instruction to keep filling.
+    manual = _manual_durations(section)
+    if secs > 0 and manual.get("tray"):
+        secs = int(manual["tray"])
+
     # PHYSICAL CEILING. The model was trained on a synthetic seconds scale that
     # no pump was ever measured against; at 300 ml/s its typical 25 s dose is
-    # 7.5 L into a 4.6 L tray. Clamp to what the tray can actually hold.
+    # 7.5 L into a 4.6 L tray. Clamp to what the tray can actually hold. This
+    # applies to a manual length too - the tray's size is not a preference.
     if secs > TRAY_MAX_SEC:
         secs = TRAY_MAX_SEC
 
@@ -1439,7 +1482,9 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            # the report can show the model's own decision rather than the result
            "modelSeconds": model_secs,
            "prefill": prefill,
-           "decidedBy": "model" if secs == model_secs else "safety-override",
+           "decidedBy": ("manual" if manual.get("tray") and secs > 0
+                         else "model" if secs == model_secs else "safety-override"),
+           "manualSeconds": manual.get("tray"),
            "autoCommanded": commanded,
            "lastFillTs": (dev_now if commanded else prev.get("lastFillTs")),
            # Remembered so the NEXT check can size the hold to what actually
@@ -2346,6 +2391,50 @@ async def set_farm_location(body: LocationIn):
         print(f"[WARN] could not clear the forecast cache after a move: {e}")
 
     return {"status": "success", "farm": meta}
+
+
+class DurationsIn(BaseModel):
+    """Null means "back to automatic" - both fields are always sent."""
+    waterDurationSec: Optional[int] = None
+    trayFillSec: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/durations")
+async def set_section_durations(house_id: str, section_id: str, body: DurationsIn):
+    """Let a grower fix the pour lengths for one section.
+
+    Only the LENGTHS. The models keep deciding the time of day and whether any
+    water is needed; a grower who disagreed with the timing would be switching
+    the model off, which is what the autonomy flag is for.
+
+    Both values are validated against the same limits the models are held to, so
+    the app cannot promise a pour the relay will cut short or a tray fill the
+    tray cannot hold.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/control/durations.json"
+    out = {}
+    if body.waterDurationSec is not None:
+        v = int(body.waterDurationSec)
+        if not (30 <= v <= RELAY_MAX_SEC):
+            raise HTTPException(400, f"Watering length must be 30-{RELAY_MAX_SEC} seconds.")
+        out["water"] = v
+    if body.trayFillSec is not None:
+        v = int(body.trayFillSec)
+        if not (1 <= v <= TRAY_MAX_SEC):
+            raise HTTPException(
+                400, f"Tray fill must be 1-{TRAY_MAX_SEC} seconds - more than that "
+                     f"overflows a {TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000:.1f} L tray.")
+        out["tray"] = v
+
+    if out:
+        _fb_put(path, out)
+    else:
+        _fb_delete(path)                     # both cleared: back to automatic
+    return {"status": "success", "durations": out,
+            "limits": {"waterMin": 30, "waterMax": RELAY_MAX_SEC,
+                       "trayMin": 1, "trayMax": TRAY_MAX_SEC},
+            "message": ("Back to automatic." if not out else
+                        "Saved. The models still choose when to water; these set how long.")}
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/name")

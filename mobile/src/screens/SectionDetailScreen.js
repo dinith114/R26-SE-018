@@ -23,6 +23,7 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
+  setSectionDurations,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
@@ -146,6 +147,10 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [evLoading, setEvLoading] = useState(false);
   const [blinking,  setBlinking]  = useState(false);
   const [ping,      setPing]      = useState(null);   // { state: asking|ok|timeout }
+  /* Manual pour lengths. null in either slot means "let the model decide".
+     Kept as strings while editing so a half-typed number is not coerced to 0. */
+  const [durEdit,   setDurEdit]   = useState(null);  // { water, tray } as text
+  const [durSaving, setDurSaving] = useState(false);
   const [savingIv,  setSavingIv]  = useState(null);
   // One sheet at a time: 'water' | 'fill' | 'interval' | 'control' | 'unlink'
   const [sheet, setSheet] = useState(null);
@@ -293,6 +298,45 @@ export default function SectionDetailScreen({ route, navigation }) {
 
   // Same trick the Add Section picker uses: blink the board's LED so the farmer
   // can tell which of four identical boxes they are about to unlink.
+  /* Save the grower's own pour lengths.
+
+     Blank means automatic, so an empty box is a deliberate value here rather
+     than a missing one - it is how you hand a section back to the model. The
+     backend re-checks both numbers against the relay cap and the tray's real
+     capacity, so this only catches the obvious mistakes early. */
+  const saveDurations = async () => {
+    const parse = (v) => {
+      const t = String(v ?? '').trim();
+      if (!t) return null;
+      const n = parseInt(t, 10);
+      return Number.isNaN(n) ? null : n;
+    };
+    const w = parse(durEdit?.water);
+    const t = parse(durEdit?.tray);
+    if (w != null && (w < 30 || w > 120)) {
+      Alert.alert('Watering length', 'Must be between 30 and 120 seconds.');
+      return;
+    }
+    if (t != null && (t < 1 || t > (tray?.maxSeconds ?? 15))) {
+      Alert.alert('Tray fill length',
+                  `Must be between 1 and ${tray?.maxSeconds ?? 15} seconds — longer than `
+                  + `that overflows the tray.`);
+      return;
+    }
+    try {
+      setDurSaving(true);
+      await setSectionDurations(houseId, sectionId, w, t);
+      setDurEdit(null);
+      load();
+      setToast({ text: w == null && t == null ? 'Back to automatic' : 'Lengths saved',
+                 kind: 'success' });
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setDurSaving(false);
+    }
+  };
+
   const blinkNode = async () => {
     if (!device) return;
     try {
@@ -1520,6 +1564,79 @@ export default function SectionDetailScreen({ route, navigation }) {
             )}
           </View>
 
+          {/* ── POUR LENGTHS ─────────────────────────────────────────────
+              How long the pump runs, not when. The models keep deciding the
+              time of day and whether the tray needs anything; these only
+              replace the length once that decision is made, which is why a
+              blank box means "automatic" rather than "never". */}
+          <Text style={styles.sectionLabel}>POUR LENGTHS</Text>
+          <View style={[styles.card, SHADOW.sm]}>
+            {durEdit ? (
+              <>
+                <View style={styles.durRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.durLabel}>Watering (30–120s)</Text>
+                    <TextInput style={styles.durInput} value={durEdit.water}
+                      onChangeText={(v) => setDurEdit({ ...durEdit, water: v })}
+                      keyboardType="number-pad" placeholder="auto"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.durLabel}>
+                      Tray fill (1–{tray?.maxSeconds ?? 15}s)
+                    </Text>
+                    <TextInput style={styles.durInput} value={durEdit.tray}
+                      onChangeText={(v) => setDurEdit({ ...durEdit, tray: v })}
+                      keyboardType="number-pad" placeholder="auto"
+                      placeholderTextColor={COLORS.textTertiary}
+                      maxFontSizeMultiplier={1.15} />
+                  </View>
+                </View>
+                <Text style={styles.durHint}>
+                  Leave a box empty to let the system choose. It still decides when to
+                  water — these only set how long the pump runs.
+                </Text>
+                <View style={styles.durBtns}>
+                  <TouchableOpacity style={styles.durCancel} onPress={() => setDurEdit(null)}
+                    disabled={durSaving} accessibilityRole="button">
+                    <Text style={styles.durCancelTxt}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.durSave} onPress={saveDurations}
+                    disabled={durSaving} accessibilityRole="button">
+                    {durSaving ? <ActivityIndicator size="small" color="#FFF" />
+                               : <Text style={styles.durSaveTxt}>Save</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <TouchableOpacity style={styles.durView} activeOpacity={0.7}
+                onPress={() => setDurEdit({
+                  water: plan?.durationSetBy === 'manual' ? String(plan.durationSec) : '',
+                  tray:  tray?.manualSeconds != null ? String(tray.manualSeconds) : '',
+                })}
+                accessibilityRole="button"
+                accessibilityLabel="Change how long watering and tray filling run">
+                <Ionicons name="timer-outline" size={22} color={COLORS.primary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.durValue}>
+                    Watering {plan?.durationSetBy === 'manual'
+                      ? `${plan.durationSec}s (yours)` : `${plan?.durationSec ?? '--'}s (auto)`}
+                    {'   ·   '}
+                    Tray {tray?.manualSeconds != null
+                      ? `${tray.manualSeconds}s (yours)` : 'auto'}
+                  </Text>
+                  <Text style={styles.durSub}>
+                    {plan?.litres != null
+                      ? `About ${plan.litres} L per watering. Tap to change.`
+                      : 'Tap to set your own lengths.'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+
           <Text style={styles.device}>Device ID: {meta.deviceId || `${houseId}-${sectionId}`}</Text>
 
           <TouchableOpacity style={styles.renameBtn} onPress={() => setRenaming(true)}
@@ -1748,6 +1865,22 @@ const styles = StyleSheet.create({
                gap: 6, paddingVertical: SPACE.md - 2, borderRadius: RADIUS.md,
                borderWidth: 1, borderColor: COLORS.primary },
   nodeBtnOn: { backgroundColor: COLORS.primary },
+  durView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  durValue:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
+  durSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
+  durRow:    { flexDirection: 'row', gap: SPACE.md },
+  durLabel:  { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700', marginBottom: 4 },
+  durInput:  { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm, borderWidth: 1,
+               borderColor: COLORS.border, paddingHorizontal: SPACE.md,
+               paddingVertical: SPACE.sm, color: COLORS.text, fontSize: FONT.md },
+  durHint:   { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.md },
+  durBtns:   { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.lg },
+  durCancel: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md,
+               borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border },
+  durCancelTxt: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700' },
+  durSave:   { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md,
+               borderRadius: RADIUS.md, backgroundColor: COLORS.primary },
+  durSaveTxt:{ color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
   nodeBtnOk: { backgroundColor: COLORS.success, borderColor: COLORS.success },
   nodeBtnBad:{ borderColor: COLORS.danger },
   nodeBtnTxt:{ color: COLORS.primary, fontSize: FONT.sm, fontWeight: '700' },

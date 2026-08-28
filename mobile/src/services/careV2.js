@@ -46,6 +46,21 @@ export const HISTORY_RANGES = [
 ];
 
 /* ── rename (name only — never touches other settings) ── */
+/**
+ * Fix the pour LENGTHS for one section. Pass null for either to hand it back to
+ * the model.
+ *
+ * Lengths only. The models keep choosing when to water and whether the tray
+ * needs anything; this replaces how long the pump runs once that is decided.
+ * Both values are re-checked server-side against the relay cap and the tray's
+ * real capacity, so the app cannot offer a pour the hardware will cut short.
+ */
+export const setSectionDurations = (h, s, waterDurationSec, trayFillSec) =>
+  req(`/houses/${h}/sections/${s}/durations`, {
+    method: 'PUT',
+    body: JSON.stringify({ waterDurationSec, trayFillSec }),
+  });
+
 export const renameFarm    = (name)    => req('/farm', { method: 'PUT', body: JSON.stringify({ name }) });
 export const renameHouse   = (h, name) => req(`/houses/${h}`, { method: 'PUT', body: JSON.stringify({ name }) });
 export const renameSection = (h, s, name) =>
