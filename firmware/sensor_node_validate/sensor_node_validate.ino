@@ -70,6 +70,10 @@ const char* WIFI_PASSWORD = "EF4282A7";
 #define DHT_TYPE  DHT22
 #define I2C_SDA   21
 #define I2C_SCL   22
+// How often to re-probe a light meter that was absent at boot. Five minutes is
+// short enough that a farmer who reconnects a wire sees it return while still
+// standing there, and long enough to cost a healthy node nothing.
+#define LIGHT_RETRY_MS 300000UL
 #define SOIL_PIN  34          // GPIO34: ADC1, input-only, safe for an analogue sensor
 
 /* Relay outputs.
@@ -728,7 +732,7 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.7\"" +
+                ",\"fw\":\"validation-1.8\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node
@@ -1099,6 +1103,65 @@ void pollCommand() {
   Serial.printf("[CMD] ack %s\n", ok ? "sent" : "FAILED");
 }
 
+/* Free a bus that a reset left mid-transaction.
+ *
+ * An RTS reset restarts the ESP32 but NOT the BH1750, so a reset landing between
+ * a slave's address byte and its data leaves that slave still driving SDA low,
+ * waiting to finish. A held-low SDA means no START condition can be generated,
+ * so every later Wire.begin() fails and a full bus scan finds nothing at ANY
+ * address - which reads exactly like a disconnected sensor.
+ *
+ * The standard remedy: bit-bang up to nine SCL pulses, one more than the eight
+ * bits a stuck slave could still be clocking out, then issue a STOP. Costs about
+ * a millisecond when the bus is healthy.
+ *
+ * Measured evidence, 29 Aug 2026: the node reported "NOTHING on the bus", an RTS
+ * reset did NOT clear it, and a reflash DID - on wiring that a probe sketch
+ * proved good minutes later. Note this is the best explanation of that
+ * behaviour, not a confirmed one; confirm by resetting the board ~20 times with
+ * this in place and checking it never wedges.
+ */
+void i2cRecover() {
+  pinMode(I2C_SDA, INPUT_PULLUP);
+  pinMode(I2C_SCL, INPUT_PULLUP);
+  delay(5);
+  if (digitalRead(I2C_SDA) == HIGH) return;        // bus already free
+
+  Serial.println("[I2C] SDA held low - clocking the bus free");
+  pinMode(I2C_SCL, OUTPUT);
+  for (int i = 0; i < 9 && digitalRead(I2C_SDA) == LOW; i++) {
+    digitalWrite(I2C_SCL, LOW);  delayMicroseconds(5);
+    digitalWrite(I2C_SCL, HIGH); delayMicroseconds(5);
+  }
+  // STOP condition: SDA rises while SCL is high.
+  pinMode(I2C_SDA, OUTPUT);
+  digitalWrite(I2C_SDA, LOW);  delayMicroseconds(5);
+  digitalWrite(I2C_SCL, HIGH); delayMicroseconds(5);
+  digitalWrite(I2C_SDA, HIGH); delayMicroseconds(5);
+  pinMode(I2C_SDA, INPUT_PULLUP);
+  pinMode(I2C_SCL, INPUT_PULLUP);
+  Serial.printf("[I2C] recovery done, SDA now %s\n",
+                digitalRead(I2C_SDA) == HIGH ? "free" : "STILL LOW");
+}
+
+/* Try the light meter a few times before giving up.
+ *
+ * relaySelfTest() clicks both relays immediately before this runs and dips the
+ * 3.3 V rail while it does. A single attempt into a sagging rail is fragile, and
+ * the cost of losing that gamble is a whole boot reporting -999 lux.
+ */
+bool beginLightMeter() {
+  for (int a = 1; a <= 3; a++) {
+    if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+      Serial.printf("[BH1750] found (attempt %d)\n", a);
+      return true;
+    }
+    delay(120);
+  }
+  Serial.println("[BH1750] NOT FOUND after 3 attempts");
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(400);
@@ -1118,9 +1181,9 @@ void setup() {
   relaySelfTest();
 
   dht.begin();
+  i2cRecover();
   Wire.begin(I2C_SDA, I2C_SCL);
-  lightOK = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
-  Serial.printf("[BH1750] %s\n", lightOK ? "found" : "NOT FOUND");
+  lightOK = beginLightMeter();
   if (!lightOK) {
     // Scanning the bus makes the cause obvious: nothing at all means the wiring
     // is wrong; a device at 0x5C means ADD is tied high instead of left floating.
@@ -1164,8 +1227,29 @@ void takeReading() {
   // numbers re-measured the same way.
   const int SOIL_DRY = 2600, SOIL_WET = 1100;
   int raw = analogRead(SOIL_PIN);
+
+  /* A count outside the calibrated span is a DISCONNECTED PROBE, not a very wet
+     or very dry one, and must not be clamped into a confident answer.
+
+     Clamping is what this did, and it turned a floating ADC pin into a
+     measurement: raw 3015 - drier than open air, which is physically impossible
+     - clamped to 0% "empty tray", and raw 111 - wetter than water - clamped to
+     100% "full tray". Both were sent with sensorFault false and both were
+     believed. A false empty makes the system fill a tray it cannot see; a false
+     full stops it filling one that needs it. -999 is safe because the backend
+     already knows to distrust it; a clamped 0 or 100 is not.
+
+     The margin lets a healthy probe drift past either end without being called
+     faulty. */
+  const int SOIL_MARGIN = 150;
+  bool soilOK = (raw >= SOIL_WET - SOIL_MARGIN) && (raw <= SOIL_DRY + SOIL_MARGIN);
   float soil = 100.0 * (SOIL_DRY - raw) / (float)(SOIL_DRY - SOIL_WET);
   if (soil < 0) soil = 0; if (soil > 100) soil = 100;
+  if (!soilOK) {
+    Serial.printf("[SOIL] raw %d outside %d-%d - probe disconnected\n",
+                  raw, SOIL_WET - SOIL_MARGIN, SOIL_DRY + SOIL_MARGIN);
+    soil = SENTINEL;
+  }
 
   bool tempOK  = !isnan(t) && !isnan(rh);
   bool lightIsOK = lightOK && lx >= 0;
@@ -1346,6 +1430,32 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && millis() - lastDevAt >= DEVICE_POLL_MS) {
     lastDevAt = millis();
     pollDeviceFlags();
+  }
+
+  /* Keep looking for a light meter that was not there at boot.
+   *
+   * THE PART THAT MATTERS. lightOK was set once in setup() and never revisited,
+   * and takeReading() reads `lightOK ? read() : SENTINEL` - so a sensor missing
+   * at boot stayed missing FOREVER. Reconnect the wire, fit a new sensor,
+   * nothing changed: -999 until somebody rebooted the board, which a farmer has
+   * no reason to know to do.
+   *
+   * Reported as "even after fixing it, it kept showing that -999 error the same
+   * way", and that description is precisely this block being absent. Bus
+   * recovery alone does not help here: with lightOK false, nothing ever asks the
+   * sensor anything, however clean the bus is.
+   *
+   * Only runs while lightOK is false, so a healthy node pays nothing.
+   */
+  static uint32_t lastLightTry = 0;
+  if (!lightOK && millis() - lastLightTry >= LIGHT_RETRY_MS) {
+    lastLightTry = millis();
+    i2cRecover();
+    Wire.begin(I2C_SDA, I2C_SCL);
+    if (beginLightMeter()) {
+      lightOK = true;
+      Serial.println("[BH1750] recovered at runtime - no reboot needed");
+    }
   }
 
   // "I am here", on a clock of its own - not the reading clock.

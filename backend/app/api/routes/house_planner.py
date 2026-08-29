@@ -339,15 +339,37 @@ async def plan_house(body: PlanIn) -> dict:
         for key, m in methods.items():
             row[key] = None if m["error"] is None else round(m["error"], 3)
 
-        # THE BEST METHOD AT THIS COUNT WINS, and it is not always the same one.
-        # Measured on this field, PySensors is beaten by a plain grid from three
-        # to seven sensors and only pulls ahead at eight. Running the comparison
-        # and then using PySensors regardless would make the table decorative -
-        # it would show the farmer that a grid was better and then place their
-        # sensors the worse way.
+        # PYSENSORS PLACES. The baselines validate, they do not compete for the
+        # job - one method is one thing to explain and to defend, and SSPOR is
+        # the published, peer-reviewed one.
+        #
+        # This is deliberate even though PySensors does not always score best
+        # here, and the reason it does not is worth stating rather than hiding.
+        # The generated field is essentially RANK 2 - its first two singular
+        # values hold 98.8% of the energy, and the first alone holds 93% - so it
+        # is one strong gradient. SSPOR optimises POD reconstruction and pivots
+        # to extremal points of the modes, which on a smooth monotone gradient
+        # means the hot edge. This module scores by KRIGING reconstruction,
+        # because kriging is what production runs. Those are different
+        # objectives, and at three to five sensors evenly spreading along the
+        # gradient - what a grid does - happens to serve the kriging objective
+        # better.
+        #
+        # Not a defect in SSPOR and not a misuse of it: it is being marked on a
+        # task it was not optimising for. Checked before accepting it - varying
+        # n_basis_modes across 3, n, n+2 and 20 moves the numbers around and
+        # never removes the low-count gap, so it is structural, not a tuning
+        # mistake.
+        #
+        # `bestScoring` records which method actually scored lowest so the app
+        # can say so. The table has to stay honest even when it disagrees with
+        # the placement.
         scored = [(k, m) for k, m in methods.items() if m["error"] is not None]
-        win_key, win = min(scored, key=lambda kv: kv[1]["error"]) if scored             else ("kriging_greedy", methods["kriging_greedy"])
-        row["best"] = win_key
+        best_key = min(scored, key=lambda kv: kv[1]["error"])[0] if scored else None
+        row["bestScoring"] = best_key
+
+        win = methods.get("pysensors") or methods["kriging_greedy"]
+        row["placedBy"] = "pysensors" if "pysensors" in methods else "kriging_greedy"
         # Positions PER ROW, not sliced from the largest layout. Greedy and
         # pivoted methods do have that prefix property, but a regular grid does
         # not: the 5-point grid is a different arrangement from the first five
@@ -364,14 +386,14 @@ async def plan_house(body: PlanIn) -> dict:
     # limit - the farmer picks from the table.
     rec = top
     for a, b in zip(curve, curve[1:]):
-        ea, eb = a.get(a["best"]), b.get(b["best"])
+        ea, eb = a.get(a["placedBy"]), b.get(b["placedBy"])
         if ea and eb and (ea - eb) / ea < 0.05:
             rec = a["sensors"]
             break
 
     rec_row = next(r for r in curve if r["sensors"] == rec)
     best_positions = rec_row["positions"]
-    key = rec_row["best"]
+    key = rec_row["placedBy"]
 
     return {
         "status": "success",
@@ -381,10 +403,11 @@ async def plan_house(body: PlanIn) -> dict:
         "method": key,
         "pysensorsAvailable": not used_fallback,
         "message": (
-            "PySensors is not installed on this server, so it has no row in the "
-            "table. Placement used the best of the remaining methods."
+            "PySensors is not installed on this server, so placement used the "
+            "kriging-variance method instead and the table has no PySensors row."
             if used_fallback else
-            f"Best method at {rec} sensors on this house: {key}."),
+            "Placed by PySensors (SSPOR, QR-pivot). The other rows are baselines "
+            "it is measured against, not alternatives it was chosen over."),
         "recommendedSensors": rec,
         "positions": best_positions,
         "curve": curve,
