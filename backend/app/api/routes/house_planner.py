@@ -60,7 +60,7 @@ GRID_SPACING_M = 0.5
 WALL_MARGIN_M = 0.6
 
 # How many synthetic conditions the field is sampled under. Split into fit and
-# held-out halves; see _snapshots().
+# held-out halves; see _snapshots_simulated().
 N_SNAPSHOTS = 120
 TEST_FRACTION = 0.4
 
@@ -124,7 +124,7 @@ def _field(coords: np.ndarray, width: float, length: float,
     return 24.0 + ambient + 9.0 * shade * edge * sun + noise
 
 
-def _snapshots(coords: np.ndarray, width: float, length: float
+def _snapshots_simulated(coords: np.ndarray, width: float, length: float
                ) -> Tuple[np.ndarray, np.ndarray]:
     """(fit, test) snapshot matrices, each (n_snapshots, n_points).
 
@@ -153,6 +153,81 @@ def _snapshots(coords: np.ndarray, width: float, length: float
     return all_snap[idx[n_test:]], all_snap[idx[:n_test]]
 
 
+# ── Measured snapshots: the real calibration data ───────────────────────────
+# How wide a slice of time counts as "the same moment" across sections. Nodes do
+# not report in step - this one pushes every ~40 s, and they drift - so readings
+# have to be grouped into buckets before they form a matrix. Ten minutes is
+# comfortably longer than any report interval and far shorter than the time a
+# shade house takes to change temperature.
+BUCKET_MINUTES = 10
+
+# A bucket is only usable if EVERY section contributed to it. A matrix with
+# holes cannot be decomposed, and filling those holes by interpolation would
+# mean choosing sensor positions from numbers kriging invented - the exact
+# circularity this whole phase exists to avoid.
+MIN_BUCKETS = 24
+
+
+def _snapshots_measured(house_id: str, section_ids: List[str], field: str = "temperature"
+                        ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """(fit, test) matrices built from what the nodes actually recorded.
+
+    Shape is (buckets, sections): each row is one moment across the house, each
+    column one section. That is the orientation SSPOR wants - it selects
+    COLUMNS, and a column here is a physical section, so the answer comes back
+    as "these sections" rather than as an index into something abstract.
+
+    Returns None when there is not enough overlapping data, and the caller says
+    so rather than quietly falling back to generated numbers. Falling back
+    silently would be the worst outcome available: the farmer would be shown a
+    placement derived from assumptions, labelled as derived from their farm.
+
+    THE SPLIT IS CHRONOLOGICAL, not random. Sensors are chosen on the earlier
+    part of the window and scored on the later part, which is the question
+    actually being asked - will this placement still describe the house
+    tomorrow? A random split lets a method be scored on the hour either side of
+    an hour it was fitted on, which is much easier and much less useful.
+    """
+    from app.api.routes.smart_care_v2 import _fb_get, _clean
+
+    bucket_ms = BUCKET_MINUTES * 60000.0
+    per_section: dict = {}
+
+    for sid in section_ids:
+        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
+        buckets: dict = {}
+        for rec in hist.values():
+            if not isinstance(rec, dict):
+                continue
+            ts = rec.get("timestamp")
+            if not ts:
+                continue
+            # _clean() rather than the raw record, so a failed sensor's -999 is
+            # excluded instead of being decomposed as if it were a temperature.
+            v = _clean(rec).get(field)
+            if v is None:
+                continue
+            b = int(float(ts) // bucket_ms)
+            buckets.setdefault(b, []).append(float(v))
+        if buckets:
+            per_section[sid] = {b: sum(v) / len(v) for b, v in buckets.items()}
+
+    if len(per_section) < len(section_ids):
+        return None
+
+    # Only the moments every section saw.
+    common = set.intersection(*(set(d) for d in per_section.values()))
+    if len(common) < MIN_BUCKETS:
+        return None
+
+    order = sorted(common)
+    matrix = np.array([[per_section[sid][b] for sid in section_ids] for b in order],
+                      dtype=float)
+
+    n_test = max(2, int(len(order) * TEST_FRACTION))
+    return matrix[:-n_test], matrix[-n_test:]
+
+
 # ── Placement methods ───────────────────────────────────────────────────────
 # Each returns INDICES into `coords`, so they are interchangeable and the
 # evaluator does not care which produced them.
@@ -172,9 +247,19 @@ def _place_pysensors(fit: np.ndarray, n: int) -> Optional[List[int]]:
     except Exception:
         return None
 
-    # n_basis_modes caps at the number of snapshots available; asking for more
-    # modes than samples is what raises inside the SVD rather than here.
-    modes = int(min(20, max(2, fit.shape[0] - 1)))
+    # Capped by BOTH dimensions of the matrix, and it has to be both.
+    #
+    # TruncatedSVD limits n_components by the number of FEATURES (columns), not
+    # samples. This function now serves two very different shapes: the Phase 1
+    # matrix is (snapshots x ~468 candidate points), where 20 modes is nothing,
+    # and the Phase 2 matrix is (buckets x 9 instrumented sections), where 20 is
+    # more than exist. Capping on rows alone was fine until the second caller
+    # arrived and it raised
+    #     ValueError: n_components(20) must be <= n_features(9)
+    modes = int(min(20, max(2, fit.shape[0] - 1), max(2, fit.shape[1] - 1)))
+    # A pointless ask: selecting every column needs no basis at all.
+    if n >= fit.shape[1]:
+        return list(range(fit.shape[1]))
     model = SSPOR(n_sensors=int(n), basis=SVD(n_basis_modes=modes))
     model.fit(fit)
     return [int(i) for i in np.asarray(model.selected_sensors).ravel()[:n]]
@@ -251,6 +336,79 @@ def _place_kriging_greedy(coords: np.ndarray, n: int) -> List[int]:
     return chosen
 
 
+def _has_xy(section: dict) -> bool:
+    meta = (section or {}).get("meta") or {}
+    try:
+        float(meta["x"]), float(meta["y"])
+        return True
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _round(v):
+    return None if v is None else round(v, 3)
+
+
+def _place_grid_idx(coords: np.ndarray, n: int) -> List[int]:
+    """Grid baseline over an arbitrary set of points.
+
+    _place_grid() snaps to a dense candidate lattice, which does not exist here:
+    the only positions available are the sections that were instrumented. This
+    picks n of them spread as evenly as possible, by farthest-point sampling
+    from the centroid - the same intent, over the points that actually exist.
+    """
+    n = min(n, coords.shape[0])
+    centre = coords.mean(axis=0)
+    chosen = [int(np.argmin(((coords - centre) ** 2).sum(axis=1)))]
+    while len(chosen) < n:
+        d = np.full(coords.shape[0], np.inf)
+        for c in chosen:
+            d = np.minimum(d, ((coords - coords[c]) ** 2).sum(axis=1))
+        d[chosen] = -np.inf
+        chosen.append(int(np.argmax(d)))
+    return chosen
+
+
+def _elbow(table: List[dict]) -> int:
+    """The knee of the error curve: most accuracy bought, before it flattens.
+
+    Maximum perpendicular distance from the straight line joining the first and
+    last points. Deterministic, standard, and defensible in the report - unlike
+    a "within 5% of the best" rule, which needs a threshold nobody can justify
+    and which broke on a curve that was not monotonic.
+    """
+    pts = [(r["sensors"], r["error"]) for r in table if r["error"] is not None]
+    if len(pts) < 3:
+        return pts[0][0] if pts else MIN_SENSORS
+
+    # MONOTONISE FIRST. The knee construction assumes a curve that falls, and
+    # this one does not always: measured data gave 0.375 at three sensors and
+    # 0.464 at four. Left alone, the maximum-distance rule picks the point
+    # furthest from the chord - and a point that is WORSE than the chord is
+    # furthest of all, so it recommended four sensors for more money and more
+    # error than three.
+    #
+    # The running minimum is not a smoothing trick, it is the quantity actually
+    # being asked for: "the best I can do with at most n sensors". Adding a
+    # sensor can never genuinely make an estimate worse - you could ignore it -
+    # so a rise is noise in the estimate, not a property of the farm.
+    best = float("inf")
+    mono = []
+    for x, y in pts:
+        best = min(best, y)
+        mono.append((x, best))
+    pts = mono
+    (x1, y1), (x2, y2) = pts[0], pts[-1]
+    dx, dy = x2 - x1, y2 - y1
+    norm = math.hypot(dx, dy) or 1.0
+    best, best_d = pts[0][0], -1.0
+    for x, y in pts:
+        d = abs(dy * x - dx * y + x2 * y1 - y2 * x1) / norm
+        if d > best_d:
+            best, best_d = x, d
+    return best
+
+
 # ── Scoring ─────────────────────────────────────────────────────────────────
 
 def _score(coords: np.ndarray, sensors: List[int], test: np.ndarray) -> Optional[float]:
@@ -305,6 +463,116 @@ def _methods_for(coords, fit, test, n, width, length) -> Dict[str, dict]:
 
 # ── API ─────────────────────────────────────────────────────────────────────
 
+class AnalyseIn(BaseModel):
+    """Nothing to configure: the data decides. maxSensors caps the table only."""
+    maxSensors: int = Field(MAX_SENSORS_CAP, ge=MIN_SENSORS, le=MAX_SENSORS_CAP)
+
+
+@router.post("/{house_id}/analyze-placement")
+async def analyze_placement(house_id: str, body: AnalyseIn) -> dict:
+    """Which sections should keep a sensor, decided from the calibration data.
+
+    This is the phase the whole design exists for. Phase 1 places sensors from a
+    field GENERATED out of house geometry, because a house with no hardware has
+    nothing else to go on. This runs once those sensors have been in the ground
+    for the calibration window, and it uses what they actually recorded.
+
+    What it can and cannot answer, stated plainly:
+
+      * It CAN say which k of the instrumented sections carry the information -
+        the classic over-instrument-then-prune workflow, and what the flow asks
+        for.
+      * It CANNOT propose a position with no sensor in it. There is no data
+        there. Kriging could invent some, but then SSPOR would be selecting
+        sensors to reconstruct kriging's own guess, which is circular.
+
+    Scored by ordinary kriging on held-out LATER buckets, so a placement is
+    asked to describe the house tomorrow rather than to re-describe the hours it
+    was fitted on.
+    """
+    from app.api.routes.smart_care_v2 import _fb_get, _natural_key, _ml_per_sec
+
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    placed = {sid: sec for sid, sec in sections.items()
+              if isinstance(sec, dict) and _has_xy(sec)}
+    if len(placed) < MIN_SENSORS:
+        raise HTTPException(
+            400, f"{len(placed)} sections have a position. At least {MIN_SENSORS} "
+                 f"are needed - set them in each section's Setup tab.")
+
+    ids = sorted(placed, key=_natural_key)
+    coords = np.array([[float(placed[s]["meta"]["x"]), float(placed[s]["meta"]["y"])]
+                       for s in ids], dtype=float)
+
+    got = _snapshots_measured(house_id, ids)
+    if got is None:
+        raise HTTPException(
+            409, "Not enough overlapping readings yet. Every section needs data "
+                 f"covering at least {MIN_BUCKETS} common {BUCKET_MINUTES}-minute "
+                 "periods. Check the calibration screen for which section is behind.")
+    fit, test = got
+
+    top = int(min(body.maxSensors, len(ids) - 1))
+    if top < MIN_SENSORS:
+        raise HTTPException(
+            400, f"With {len(ids)} sections there is nothing to choose - "
+                 f"pruning needs more sections than sensors.")
+
+    table, positions, baselines = [], {}, {}
+    for n in range(MIN_SENSORS, top + 1):
+        chosen = _place_pysensors(fit, n)
+        used = "pysensors"
+        if chosen is None:
+            chosen = _place_kriging_greedy(coords, n)
+            used = "kriging_greedy"
+
+        err = _score(coords, chosen, test)
+        table.append({
+            "sensors": n,
+            "error": None if err is None else round(err, 3),
+            "costLkr": n * NODE_COST_LKR,
+            "method": used,
+        })
+        positions[str(n)] = [
+            {"sectionId": ids[i],
+             "x": round(float(coords[i, 0]), 2),
+             "y": round(float(coords[i, 1]), 2)}
+            for i in chosen
+        ]
+        # Kept for the report, not for the screen. The flow asks for a simple
+        # table; these are what make the simple number defensible.
+        baselines[str(n)] = {
+            "grid": _round(_score(coords, _place_grid_idx(coords, n), test)),
+            "random": _round(_score(coords, _place_random(coords, n, SEED + n), test)),
+            "krigingGreedy": _round(_score(coords, _place_kriging_greedy(coords, n), test)),
+        }
+
+    rec = _elbow(table)
+    for row in table:
+        row["recommended"] = (row["sensors"] == rec)
+
+    return {
+        "status": "success",
+        "houseId": house_id,
+        "source": "measured",
+        "sectionsInstrumented": len(ids),
+        "buckets": {"fit": int(fit.shape[0]), "test": int(test.shape[0]),
+                    "minutes": BUCKET_MINUTES},
+        "recommendedSensors": rec,
+        "table": table,
+        "positions": positions,
+        "baselines": baselines,
+        "note": ("Chosen from the readings these sections recorded during "
+                 "calibration, and scored on later readings none of them was "
+                 "fitted on. Only sections that already hold a sensor can be "
+                 "chosen - there is no data anywhere else."),
+    }
+
+
 class PlanIn(BaseModel):
     width: float = Field(..., gt=1.0, le=200.0, description="House width, metres")
     length: float = Field(..., gt=1.0, le=200.0, description="House length, metres")
@@ -325,7 +593,7 @@ async def plan_house(body: PlanIn) -> dict:
     if coords.shape[0] < MIN_SENSORS:
         raise HTTPException(400, "House is too small to place sensors in.")
 
-    fit, test = _snapshots(coords, width, length)
+    fit, test = _snapshots_simulated(coords, width, length)
 
     top = int(min(body.maxSensors, MAX_SENSORS_CAP, coords.shape[0]))
     curve, used_fallback = [], False
