@@ -27,3 +27,8 @@ pytest==8.3.0
 pandas==2.2.2
 python-multipart==0.0.9
 PyKrige==1.7.2
+# Sparse sensor placement (Brunton lab). The PyPI name is python-sensors:
+# "pysensors" is an unrelated Linux lm-sensors binding that fails to build.
+# Imported as `pysensors`. Documented for Linux and macOS only, so house_planner
+# degrades to its kriging-variance method rather than failing when absent.
+python-sensors==0.4.3
