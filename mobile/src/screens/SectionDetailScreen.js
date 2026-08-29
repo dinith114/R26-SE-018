@@ -113,6 +113,21 @@ export default function SectionDetailScreen({ route, navigation }) {
      release build, so the name hoists as undefined rather than throwing, and
      `undefined?.durationSetBy !== 'manual'` is simply true. The automatic
      switch was built on exactly that and silently became `!durEdit`. */
+  /* How long a MANUAL tray fill should run.
+  
+     manualSeconds first, and that ordering is the whole bug: this used to be
+     `tray.fillSeconds || 15`, and fillSeconds is 0 whenever the model does not
+     currently want a fill. So `0 || 15` handed every hand-pressed fill the
+     tray's MAXIMUM - a grower who had set 3 s got 15 s, which is 4.5 litres
+     into a 4.61 litre tray. The confirm sheet read the same expression, so it
+     truthfully promised 15 s and was ignored as a typo.
+  
+     The 15 s fallback stays for the case where nobody has expressed a
+     preference and the model wants nothing: pressing Fill Tray then means
+     "fill it", and 15 s is one tray. */
+  const trayFillSecs = sec?.tray?.manualSeconds
+    ?? (sec?.tray?.fillSeconds || sec?.tray?.maxSeconds || 15);
+
   const est    = sec?.estimated || null;
   const plan   = sec?.plan   || {};
   const tray   = sec?.tray   || {};
@@ -499,7 +514,7 @@ export default function SectionDetailScreen({ route, navigation }) {
   const runAction = async (kind, seconds) => {
     const secs = seconds ?? (kind === 'water'
       ? (sec?.plan?.durationSec || 45)
-      : (sec?.tray?.fillSeconds || 15));
+      : trayFillSecs);
     setSheet(null);
     setAgain(null);
     setBusy(kind);
@@ -543,7 +558,13 @@ export default function SectionDetailScreen({ route, navigation }) {
         if (st.running) {
           setRun((r) => (r && r.id === run.id
             ? { ...r, phase: 'running',
-                remaining: st.remainingSec != null ? st.remainingSec : r.remaining }
+                // Clamped to the pour's own length. remainingSec is computed
+                // server-side as (node's start clock + duration - SERVER clock),
+                // so any disagreement between the two clocks lands straight in
+                // this number - which is how a 2 s pour counted down from 4.
+                remaining: st.remainingSec != null
+                  ? Math.min(r.secs, st.remainingSec)
+                  : r.remaining }
             : r));
           return;
         }
@@ -835,7 +856,7 @@ export default function SectionDetailScreen({ route, navigation }) {
         visible={sheet === 'fill'}
         icon="add-circle-outline"
         title="Fill the humidity tray?"
-        body={`The valve will open for ${sec?.tray?.fillSeconds || 15} seconds. The water `
+        body={`The valve will open for ${trayFillSecs} seconds. The water `
             + 'evaporates to raise humidity around the plants; it does not touch the roots.'}
         confirmLabel="Fill tray"
         busy={busy === 'fill'}
