@@ -23,7 +23,7 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
-  setSectionDurations, setSectionPosition,
+  setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
@@ -104,6 +104,10 @@ export default function SectionDetailScreen({ route, navigation }) {
   const { houseId, sectionId, houseName } = route.params;
 
   const [sec,     setSec]     = useState(null);
+  const [masterOpen, setMasterOpen] = useState(false);
+  const [masterBusy, setMasterBusy] = useState(false);
+  const [allDevices, setAllDevices] = useState([]);
+  const [houseMeta,  setHouseMeta]  = useState(null);
 
   /* Derived from `sec`, and declared HERE rather than beside the JSX.
   
@@ -205,6 +209,9 @@ export default function SectionDetailScreen({ route, navigation }) {
       ]);
       const s = house?.sections?.[sectionId];
       setSec(s || null);
+      // The master is a HOUSE-level setting shown on a section screen, so the
+      // house meta has to be carried along with the section.
+      setHouseMeta(house?.meta || null);
       setDevice(dev?.device || null);
       // fertilizer is stored with the plan, so show it immediately
       if (s?.fertilizer && 'due' in s.fertilizer) setFert(s.fertilizer);
@@ -411,6 +418,39 @@ export default function SectionDetailScreen({ route, navigation }) {
     } finally {
       setDurSaving(false);
     }
+  };
+
+  /* Name the board that carries the relay bank for this whole house.
+
+     A house-level setting living on a section screen, which the card itself has
+     to say: there is one master per house, and changing it here changes every
+     section. It sits here because this is the tab a farmer opens when setting
+     hardware up, and a whole screen for one field would be worse.
+
+     ANY device may be chosen, including one already assigned to a section - the
+     master is normally also a sensor node, measuring the section it stands in
+     while draining the command queue for the rest. That is why this cannot
+     reuse the Add Section picker, which deliberately lists only unclaimed
+     boards. */
+  const chooseMaster = async (mac) => {
+    try {
+      setMasterBusy(true);
+      const r = await setHouseMaster(houseId, mac);
+      setMasterOpen(false);
+      setToast({ text: r?.message || 'Master controller set.', kind: 'success' });
+      load();
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setMasterBusy(false);
+    }
+  };
+
+  const openMaster = () => {
+    setMasterOpen(true);
+    getDevices()
+      .then((r) => setAllDevices(r.devices || []))
+      .catch(() => setAllDevices([]));
   };
 
   /* Save where this section sits. Metres, so a plain number is the whole
@@ -941,6 +981,24 @@ export default function SectionDetailScreen({ route, navigation }) {
         onCancel={() => setSheet(null)}
         onConfirm={removeSection}
       />
+
+      <SelectSheet
+        visible={masterOpen}
+        title="Master controller"
+        subtitle={'One board for the whole house. It opens the valve for every '
+                  + 'section, so changing it changes watering everywhere.'}
+        options={allDevices.map((d) => ({
+          key: d.mac,
+          label: d.mac,
+          sub: [d.assignedTo ? `section ${d.assignedTo}` : 'unassigned',
+                d.online ? 'online' : 'offline'].join(' \u00b7 '),
+        }))}
+        emptyText="No board has announced itself yet. Power one on and it appears here."
+        value={houseMeta?.masterMac || null}
+        busy={masterBusy}
+        confirmLabel="Set as master"
+        onCancel={() => setMasterOpen(false)}
+        onConfirm={(mac) => chooseMaster(mac)} />
 
       <SelectSheet
         visible={sheet === 'control'}
@@ -1932,6 +1990,38 @@ export default function SectionDetailScreen({ route, navigation }) {
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
               </TouchableOpacity>
             )}
+          </View>
+
+          {/* ── MASTER CONTROLLER ─────────────────────────────────────
+              House-level, and the card says so. Every pour in this house is
+              routed through this board's relay bank, so a house without one
+              cannot water at all - worth stating here rather than leaving it to
+              be discovered when nothing happens. */}
+          <SectionHead icon="git-network-outline" title="Master controller"
+            tint={COLORS.warning} tintDim={COLORS.warningDim}
+            status={houseMeta?.masterMac ? 'assigned' : 'not set'}
+            statusTone={houseMeta?.masterMac ? COLORS.warning : COLORS.danger} />
+          <View style={[styles.card, SHADOW.sm]}>
+            <TouchableOpacity style={styles.durView} activeOpacity={0.7}
+              onPress={openMaster}
+              accessibilityRole="button"
+              accessibilityLabel="Choose the master controller for this house">
+              <Ionicons name="git-network-outline" size={22}
+                color={houseMeta?.masterMac ? COLORS.warning : COLORS.textTertiary} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.durValue}>
+                  {houseMeta?.masterMac || 'No master controller'}
+                </Text>
+                <Text style={styles.durSub}>
+                  {houseMeta?.masterMac
+                    ? 'One board for the whole house \u2014 it opens the valve for every '
+                      + 'section, including this one.'
+                    : 'Watering is refused until one is set. Pick the board wired to '
+                      + 'the pump and the relay bank.'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+            </TouchableOpacity>
           </View>
 
           <Text style={styles.device}>Device ID: {meta.deviceId || `${houseId}-${sectionId}`}</Text>

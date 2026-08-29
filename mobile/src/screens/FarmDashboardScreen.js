@@ -201,7 +201,22 @@ export default function FarmDashboardScreen({ navigation }) {
                       <Ionicons name={TYPE_ICON[h.meta?.type] || 'home-outline'} size={19} color={COLORS.primary} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.houseName}>{h.meta?.name || h.houseId}</Text>
+                      <View style={styles.houseNameRow}>
+                        <Text style={styles.houseName} numberOfLines={1}>
+                          {h.meta?.name || h.houseId}
+                        </Text>
+                        {/* A house still collecting its calibration data behaves
+                            differently from an active one - it is not watering
+                            to a plan yet - so the list has to say which it is.
+                            Absent means active, which is every house that
+                            predates the calibration flow. */}
+                        {h.meta?.lifecycle === 'calibrating' && (
+                          <View style={styles.calBadge}>
+                            <Ionicons name="hourglass-outline" size={9} color={COLORS.warning} />
+                            <Text style={styles.calBadgeTxt}>Calibrating</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={styles.houseMeta}>
                         {h.meta?.type || 'house'} · {h.sections?.length || 0} sections
                         {h.meta?.plantCount ? ` · ${h.meta.plantCount} plants` : ''}
@@ -210,6 +225,25 @@ export default function FarmDashboardScreen({ navigation }) {
                     <Ionicons
                       name={collapsed[h.houseId] ? 'chevron-down' : 'chevron-up'}
                       size={18} color={COLORS.textTertiary} style={{ marginRight: SPACE.sm }} />
+                  </TouchableOpacity>
+
+                  {/* Into the map, or into calibration if that is where the
+                      house is. One button rather than two: which screen is
+                      useful depends entirely on the lifecycle, and offering
+                      both would ask the farmer a question the app can answer. */}
+                  <TouchableOpacity
+                    style={styles.mapBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={h.meta?.lifecycle === 'calibrating'
+                      ? `Calibration progress for ${h.meta?.name || h.houseId}`
+                      : `Map view of ${h.meta?.name || h.houseId}`}
+                    onPress={() => navigation.navigate(
+                      h.meta?.lifecycle === 'calibrating' ? 'Calibration' : 'HouseMap',
+                      { houseId: h.houseId })}>
+                    <Ionicons
+                      name={h.meta?.lifecycle === 'calibrating' ? 'hourglass-outline' : 'map-outline'}
+                      size={17} color={COLORS.primary} />
                   </TouchableOpacity>
 
                   <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -502,6 +536,16 @@ const styles = StyleSheet.create({
   houseTitleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center',
                    gap: SPACE.md, paddingVertical: SPACE.xs },
   houseIcon: { width: 38, height: 38, borderRadius: RADIUS.md, backgroundColor: COLORS.primaryDim, alignItems: 'center', justifyContent: 'center' },
+  houseNameRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  calBadge:  { flexDirection: 'row', alignItems: 'center', gap: 3,
+               backgroundColor: COLORS.warningDim, borderRadius: RADIUS.full,
+               paddingHorizontal: 6, paddingVertical: 2 },
+  calBadgeTxt: { color: COLORS.warning, fontSize: 9, fontWeight: '800',
+                 letterSpacing: 0.2 },
+  mapBtn:    { width: 34, height: 34, borderRadius: RADIUS.sm,
+               backgroundColor: COLORS.primaryDim,
+               alignItems: 'center', justifyContent: 'center',
+               marginRight: SPACE.sm },
   houseName: { color: COLORS.text, fontSize: FONT.lg, fontWeight: '800' },
   houseMeta: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
   collapsedNote: { color: COLORS.textSecondary, fontSize: FONT.sm,

@@ -19,12 +19,13 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, useWindowDimensions,
+  TextInput, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import Toast from '../components/Toast';
+import DigitalTwin from '../components/DigitalTwin';
 import { planHouse, addHouse, setSectionPosition } from '../services/careV2';
 
 const HOUSE_TYPES = ['shade-net', 'greenhouse', 'open'];
@@ -41,8 +42,6 @@ const METHODS = [
 ];
 
 export default function HousePlannerScreen({ navigation }) {
-  const { width: screenW } = useWindowDimensions();
-
   const [name,   setName]   = useState('');
   const [type,   setType]   = useState('shade-net');
   const [w,      setW]      = useState('10');
@@ -105,6 +104,10 @@ export default function HousePlannerScreen({ navigation }) {
       }));
       const r = await addHouse({
         name: name.trim(), type, plantCount: 0, sections,
+        // The dimensions were asked for on this very screen and then dropped at
+        // creation, so every later map had nothing to draw the house to scale
+        // with - a section at (7, 9) is meaningless without them.
+        width, length,
       });
       const houseId = r.houseId || r.id;
 
@@ -135,13 +138,6 @@ export default function HousePlannerScreen({ navigation }) {
       setSaving(false);
     }
   };
-
-  // ── the 2D plan ──────────────────────────────────────────────────────────
-  // Plain Views, no WebView and no Three.js. A top-down rectangle with dots on
-  // it is all this needs, and the old planner's three WebView screens cost
-  // seconds of load time to say the same thing.
-  const mapW = Math.min(screenW - SPACE.lg * 4, 340);
-  const mapH = sizeOk ? Math.min(360, mapW * (length / width)) : 200;
 
   return (
     <View style={styles.container}>
@@ -270,18 +266,23 @@ export default function HousePlannerScreen({ navigation }) {
                   lower at this count — see the table above.
                 </Text>
               )}
-              <Text style={styles.sunEdge}>open, sun-facing edge</Text>
-              <View style={[styles.plot, { width: mapW, height: mapH }]}>
-                {positions.map((p, i) => (
-                  <View key={i} style={[styles.pin, {
-                    left: (p.x / width) * mapW - 13,
-                    top:  (p.y / length) * mapH - 13,
-                  }]}>
-                    <Text style={styles.pinTxt}>{i + 1}</Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={styles.dims}>{width} m × {length} m</Text>
+              {/* The blueprint, not a white box with dots on it. Scale, grid,
+                  sun edge and plant rows are all things a farmer needs in order
+                  to walk into the house and find these positions. */}
+              <DigitalTwin
+                width={width}
+                length={length}
+                plantRows={4}
+                showPipes={false}
+                nodes={positions.map((p, i) => ({
+                  id: `S${i + 1}`,
+                  short: String(i + 1),
+                  x: p.x, y: p.y,
+                  // Nothing is installed yet, so every marker is a SUGGESTION.
+                  // Drawing these the same green as a measuring sensor would
+                  // claim hardware that does not exist.
+                  kind: 'planned',
+                }))} />
 
               <View style={styles.coords}>
                 {positions.map((p, i) => (
@@ -363,14 +364,6 @@ const styles = StyleSheet.create({
              marginBottom: 2 },
   caveat:  { color: COLORS.warning, fontSize: 11, fontWeight: '600',
              marginBottom: SPACE.sm, textAlign: 'center' },
-  sunEdge: { color: COLORS.textTertiary, fontSize: 10, fontWeight: '700',
-             letterSpacing: 0.3, marginBottom: 4 },
-  plot:    { backgroundColor: COLORS.bgCardAlt, borderWidth: 1.5,
-             borderColor: COLORS.border, borderRadius: 3 },
-  pin:     { position: 'absolute', width: 26, height: 26, borderRadius: 13,
-             backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
-  pinTxt:  { color: '#FFF', fontSize: 11, fontWeight: '800' },
-  dims:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: SPACE.sm },
   coords:  { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm,
              marginTop: SPACE.md, justifyContent: 'center' },
   coord:   { color: COLORS.textSecondary, fontSize: 11, fontWeight: '600',

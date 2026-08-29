@@ -1930,6 +1930,13 @@ class HouseIn(BaseModel):
     name: str
     type: str = "shade-net"
     plantCount: int = 0
+    # Metres. Optional because houses created before this existed have none, but
+    # everything spatial needs them: without the dimensions a section at (7, 9)
+    # cannot be drawn, because nothing knows whether that is the middle of the
+    # house or outside it. The planner has always asked for them and then thrown
+    # them away at the point of creation.
+    width: Optional[float] = None
+    length: Optional[float] = None
     sections: List[SectionIn] = []
 
 
@@ -1987,9 +1994,12 @@ async def add_house(h: HouseIn):
     if hid in existing:
         raise HTTPException(409, f"House '{hid}' already exists")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    _fb_put(f"/farm/houses/{hid}/meta.json", {
-        "name": h.name, "type": h.type, "plantCount": h.plantCount,
-        "sectionCount": len(h.sections), "createdAt": now})
+    meta = {"name": h.name, "type": h.type, "plantCount": h.plantCount,
+            "sectionCount": len(h.sections), "createdAt": now}
+    if h.width and h.length:
+        meta["width"] = round(float(h.width), 2)
+        meta["length"] = round(float(h.length), 2)
+    _fb_put(f"/farm/houses/{hid}/meta.json", meta)
     for si, s in enumerate(h.sections, 1):
         sid = s.id or f"S{si}"
         _fb_put(f"/farm/houses/{hid}/sections/{sid}/meta.json", {
@@ -2702,6 +2712,28 @@ async def set_section_flow(house_id: str, section_id: str, body: FlowIn):
             "isDefault": "mlPerSec" not in meta}
 
 
+class DimensionsIn(BaseModel):
+    width: float = Field(..., gt=1.0, le=200.0)
+    length: float = Field(..., gt=1.0, le=200.0)
+
+
+@router.put("/houses/{house_id}/dimensions")
+async def set_house_dimensions(house_id: str, body: DimensionsIn):
+    """Give an existing house its size in metres.
+
+    Houses created before dimensions were stored have none, and every spatial
+    feature needs them - the map cannot place a section at (7, 9) without
+    knowing whether the house is eight metres across or forty.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+    meta["width"] = round(float(body.width), 2)
+    meta["length"] = round(float(body.length), 2)
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "width": meta["width"], "length": meta["length"]}
+
+
 class LifecycleIn(BaseModel):
     lifecycle: str
 
@@ -2792,6 +2824,8 @@ async def calibration_status(house_id: str):
         "status": "success",
         "houseId": house_id,
         "lifecycle": _house_lifecycle(meta),
+        "width": meta.get("width"),
+        "length": meta.get("length"),
         # Wiring faults belong next to readiness: a house can finish calibrating
         # perfectly and still water the wrong plants.
         "masterMac": _master_for_house(house_id),
