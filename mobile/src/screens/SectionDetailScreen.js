@@ -1661,7 +1661,10 @@ export default function SectionDetailScreen({ route, navigation }) {
               consistently for every section. The origin is arbitrary because
               kriging works on the distances between sections; what matters is
               that it does not move once chosen. */}
-          <Text style={styles.sectionLabel}>POSITION IN THE HOUSE</Text>
+          <SectionHead icon="grid-outline" title="Position in the house"
+            tint={COLORS.info} tintDim={COLORS.infoDim}
+            status={meta.x != null ? 'placed' : 'not placed'}
+            statusTone={meta.x != null ? COLORS.info : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
             {posEdit ? (
               <>
@@ -1730,7 +1733,12 @@ export default function SectionDetailScreen({ route, navigation }) {
               time of day and whether the tray needs anything; these only
               replace the length once that decision is made, which is why a
               blank box means "automatic" rather than "never". */}
-          <Text style={styles.sectionLabel}>POUR LENGTHS</Text>
+          <SectionHead icon="timer-outline" title="Pour lengths"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim}
+            status={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
+                    ? 'yours' : 'automatic'}
+            statusTone={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
+                        ? COLORS.primary : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
             {durEdit ? (
               <>

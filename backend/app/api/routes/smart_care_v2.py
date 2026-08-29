@@ -2673,6 +2673,50 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
         _fb_put(path, out)
     else:
         _fb_delete(path)                     # both cleared: back to automatic
+
+    # Apply it to the STORED plan and tray straight away.
+    #
+    # Storing the preference and stopping was not enough, and looked exactly
+    # like a broken Save button: the section screen reads plan.durationSetBy and
+    # tray.manualSeconds, and both are only written when their model next runs -
+    # the tray within fifteen minutes, but the PLAN not until tomorrow's dawn.
+    # So a grower set 95 s, the card carried on saying "104s (auto)" for the
+    # rest of the day, and nothing anywhere said the number had been kept.
+    #
+    # Neither model is re-run to do this. Both blocks already carry what the
+    # model itself asked for - modelDurationSec and modelSeconds - so the
+    # override can be re-applied to that, which is the same arithmetic the
+    # model path does and cannot disagree with it.
+    base = f"/farm/houses/{house_id}/sections/{section_id}"
+
+    plan = _fb_get(f"{base}/plan.json") or {}
+    if plan.get("modelDurationSec") is not None:
+        model_dur = int(plan["modelDurationSec"])
+        dur = (max(30, min(RELAY_MAX_SEC, int(out["water"])))
+               if out.get("water") else model_dur)
+        plan["durationSec"] = dur
+        plan["durationSetBy"] = "manual" if out.get("water") else "model"
+        plan["litres"] = round(dur * PUMP_ML_PER_SEC / 1000.0, 2)
+        _fb_put(f"{base}/plan.json", plan)
+
+    tray = _fb_get(f"{base}/tray.json") or {}
+    if tray:
+        model_secs = int(tray.get("modelSeconds") or 0)
+        # Only when the model already wants a fill, matching the tray path: a
+        # length applied to a zero would turn a preference into a standing
+        # instruction to keep filling.
+        secs = int(out["tray"]) if (model_secs > 0 and out.get("tray")) else model_secs
+        secs = min(secs, TRAY_MAX_SEC)
+        tray["fillSeconds"] = secs
+        # Written even when no fill is due, because this is the grower's setting
+        # rather than a property of the current decision - it is what the card
+        # shows when the tray is perfectly happy.
+        tray["manualSeconds"] = out.get("tray")
+        tray["decidedBy"] = ("manual" if out.get("tray") and secs > 0
+                             else "model" if secs == model_secs else "safety-override")
+        tray["litres"] = round(secs * PUMP_ML_PER_SEC / 1000.0, 2)
+        _fb_put(f"{base}/tray.json", tray)
+
     return {"status": "success", "durations": out,
             "limits": {"waterMin": 30, "waterMax": RELAY_MAX_SEC,
                        "trayMin": 1, "trayMax": TRAY_MAX_SEC},
