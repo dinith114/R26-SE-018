@@ -88,10 +88,11 @@ const HomeScreen = ({ navigation }) => {
               { label: 'Detection',icon: 'search-outline',   route: 'Disease',     color: COLORS.info },
               { label: 'Hybrid',   icon: 'git-merge-outline',route: 'Hybrid',      color: COLORS.warning },
               { label: 'Growth',   icon: 'leaf-outline',     route: 'Growth',      color: COLORS.fertilizer },
-              { label: 'Devices',  icon: 'calculator-outline', route: 'DeviceCalculator', color: COLORS.temperature },
-              // Six screens and the whole survey flow were registered in the
-              // navigator with nothing anywhere that navigated to them.
-              { label: 'Farm Plan',icon: 'map-outline',      route: 'FarmPlanner', color: COLORS.info },
+              // Replaced the old Farm Plan survey and the standalone device
+              // calculator. Both are gone: the survey never wrote its result
+              // anywhere, and the calculator's plants-per-sensor formula is
+              // answered better by the placement curve this opens.
+              { label: 'Plan House',icon: 'map-outline',     route: 'HousePlanner', color: COLORS.info },
             ].map((item, i) => (
               <TouchableOpacity key={i} style={[styles.navCard, SHADOW.sm]} activeOpacity={0.6}
                 onPress={() => navigation.navigate(item.route)}>

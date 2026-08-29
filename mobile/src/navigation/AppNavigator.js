@@ -12,18 +12,12 @@ import GrowthStageScreen from '../screens/GrowthStageScreen';
 import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
-import FarmPlannerScreen from '../screens/FarmPlannerScreen';
-import { FarmQuickScreen } from '../screens/FarmPlannerScreen';
-import FarmScanScreen from '../screens/FarmScanScreen';
-import FarmModelConfirmScreen from '../screens/FarmModelConfirmScreen';
-import FarmTrialScreen from '../screens/FarmTrialScreen';
-import FarmResultsScreen from '../screens/FarmResultsScreen';
-import DeviceCalculatorScreen from '../screens/DeviceCalculatorScreen';
 import FarmDashboardScreen from '../screens/FarmDashboardScreen';
 import FarmTabScreen from '../screens/FarmTabScreen';
 import SectionDetailScreen from '../screens/SectionDetailScreen';
 import RunScreen from '../screens/RunScreen';
 import AlarmScreen from '../screens/AlarmScreen';
+import HousePlannerScreen from '../screens/HousePlannerScreen';
 import FarmSetupScreen from '../screens/FarmSetupScreen';
 
 const Tab = createBottomTabNavigator();
@@ -128,18 +122,12 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />
-        <Stack.Screen name="FarmPlanner" component={FarmPlannerScreen} />
-        <Stack.Screen name="FarmQuick" component={FarmQuickScreen} />
-        <Stack.Screen name="FarmScan" component={FarmScanScreen} />
-        <Stack.Screen name="FarmModelConfirm" component={FarmModelConfirmScreen} />
-        <Stack.Screen name="FarmTrial" component={FarmTrialScreen} />
-        <Stack.Screen name="FarmResults" component={FarmResultsScreen} />
-        <Stack.Screen name="DeviceCalculator" component={DeviceCalculatorScreen} />
         <Stack.Screen name="FarmDashboard" component={FarmDashboardScreen} />
         <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />
         <Stack.Screen name="Run" component={RunScreen} />
         <Stack.Screen name="Alarm" component={AlarmScreen} />
         <Stack.Screen name="FarmSetup" component={FarmSetupScreen} />
+        <Stack.Screen name="HousePlanner" component={HousePlannerScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

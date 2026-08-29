@@ -112,9 +112,25 @@ def _krige_field(xs, ys, zs, tx, ty):
     z_mean = float(np.mean(zs_arr))
     z_spread = float(np.ptp(zs_arr))
 
-    # Below this many anchors the fitted range is not trustworthy, so start with
-    # the model that does not depend on getting one right.
-    models = ("linear", "spherical") if len(zs_arr) < 8 else ("spherical", "linear")
+    # LINEAR FIRST, ALWAYS. This used to switch to spherical at eight anchors or
+    # more, on the assumption that a fitted range becomes trustworthy once the
+    # points are dense. That assumption was never measured, and it is wrong.
+    # Held-out reconstruction error on a simulated 10 x 14 m house, same points,
+    # only the variogram differing:
+    #
+    #     anchors      linear     spherical
+    #           6       0.246         0.497
+    #           7       0.241         0.460
+    #           8       0.237         0.486
+    #          10       0.194         0.438
+    #
+    # Linear wins at every count and keeps improving as anchors are added, while
+    # spherical stalls near 0.45. The threshold did not trade accuracy for
+    # robustness - it simply made the estimate worse above eight anchors, and
+    # showed up as reconstruction error going UP when a house gained a sensor.
+    #
+    # Spherical stays as a fallback for the case where linear fails outright.
+    models = ("linear", "spherical")
 
     for model in models:
         try:

@@ -122,8 +122,7 @@ if __name__ == "__main__":
 from app.api.routes import devices
 from app.api.routes import smart_watering
 from app.api.routes import hybrid_pollination
-from app.api.routes import farm_planner
-from app.api.routes import farm_scan
+from app.api.routes import house_planner
 from app.api.routes import houses
 from app.api.routes import smart_care_v2
 from app.api.routes import automation
@@ -132,8 +131,7 @@ from app.api.routes import automation
 # app.include_router(growth_stage.router,      prefix="/api/v1/growth",      tags=["Growth Stage"])
 app.include_router(smart_watering.router,     prefix="/api/v1/watering",    tags=["Smart Watering"])
 app.include_router(hybrid_pollination.router, prefix="/api/v1/pollination", tags=["Hybrid Pollination"])
-app.include_router(farm_planner.router,       prefix="/api/v1/farm",        tags=["Farm Planner"])
-app.include_router(farm_scan.router,          prefix="/api/v1/farm",        tags=["Farm Survey"])
+app.include_router(house_planner.router,      prefix="/api/v2/care/houses", tags=["House Planner"])
 app.include_router(houses.router,             prefix="/api/v1/houses",      tags=["Houses"])
 app.include_router(smart_care_v2.router,      prefix="/api/v2/care",        tags=["Smart Care v2"])
 app.include_router(devices.router,            prefix="/api/v2/devices",     tags=["Devices"])
