@@ -83,7 +83,11 @@ export default function HousePlannerScreen({ navigation }) {
      layout would show a placement no method chose and no row scored. */
   const row       = plan?.curve?.find(r => r.sensors === picked) || null;
   const positions = row?.positions || [];
-  const winner    = row?.best || null;
+  const placedBy  = row?.placedBy || null;
+  // The lowest-scoring method, which is not always the one that placed. Shown
+  // when they differ rather than hidden - a table the farmer can read that
+  // disagrees with the map they are given is worse than saying so plainly.
+  const bestScore = row?.bestScoring || null;
 
   const save = async () => {
     if (!name.trim()) {
@@ -245,19 +249,25 @@ export default function HousePlannerScreen({ navigation }) {
 
               <Text style={styles.tnote}>
                 Error in °C, measured by rebuilding weather the placement never saw.
-                The lowest number in each row wins, and it is not always the same
-                method. Recommended: {plan.recommendedSensors} — after that, one more
-                sensor changes the estimate by less than 5%.
+                Placement uses PySensors; the other rows are the baselines it is
+                measured against. Recommended: {plan.recommendedSensors} — after
+                that, one more sensor changes the estimate by less than 5%.
               </Text>
             </View>
 
             {/* ── 4. the map ─────────────────────────────────────────── */}
             <Text style={styles.step}>4 · Where they go</Text>
             <View style={[styles.card, SHADOW.sm, { alignItems: 'center' }]}>
-              {!!winner && (
+              {!!placedBy && (
                 <Text style={styles.winner}>
                   {picked} sensors, placed by{' '}
-                  {METHODS.find(m => m.key === winner)?.label || winner}
+                  {METHODS.find(m => m.key === placedBy)?.label || placedBy}
+                </Text>
+              )}
+              {!!bestScore && bestScore !== placedBy && (
+                <Text style={styles.caveat}>
+                  {METHODS.find(m => m.key === bestScore)?.label || bestScore} scored
+                  lower at this count — see the table above.
                 </Text>
               )}
               <Text style={styles.sunEdge}>open, sun-facing edge</Text>
@@ -350,7 +360,9 @@ const styles = StyleSheet.create({
   tnote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.md },
 
   winner:  { color: COLORS.estimated, fontSize: FONT.xs, fontWeight: '800',
-             marginBottom: SPACE.sm },
+             marginBottom: 2 },
+  caveat:  { color: COLORS.warning, fontSize: 11, fontWeight: '600',
+             marginBottom: SPACE.sm, textAlign: 'center' },
   sunEdge: { color: COLORS.textTertiary, fontSize: 10, fontWeight: '700',
              letterSpacing: 0.3, marginBottom: 4 },
   plot:    { backgroundColor: COLORS.bgCardAlt, borderWidth: 1.5,
