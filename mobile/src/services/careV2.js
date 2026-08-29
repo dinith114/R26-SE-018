@@ -91,55 +91,6 @@ export const deleteSection = (h, s)    => req(`/houses/${h}/sections/${s}`, { me
 export const setupFarm   = (cfg)      => req('/setup',  { method: 'POST', body: JSON.stringify(cfg) });
 export const addHouse    = (house)    => req('/houses', { method: 'POST', body: JSON.stringify(house) });
 
-/**
- * Where the sensors should go in a house that does not exist yet.
- *
- * Returns the chosen positions AND the evidence: a curve of reconstruction
- * error against sensor count, with a row per method, so the app can show what
- * the farmer is buying rather than asserting a number. See house_planner.py -
- * the field is generated from the house's geometry, so this compares placement
- * METHODS and does not claim to know this particular house.
- */
-/**
- * How calibration is really going, counted from the stored readings.
- *
- * Every number comes from /farm/history, never from a timer. A progress bar
- * that advances while a node is unplugged promises data that will not exist
- * when the analysis runs, and the farmer finds out three days later.
- */
-/** Give an existing house its size in metres, so it can be drawn to scale. */
-export const setHouseDimensions = (h, width, length) =>
-  req(`/houses/${h}/dimensions`, {
-    method: 'PUT', body: JSON.stringify({ width, length }),
-  });
-
-export const getCalibration = (h) => req(`/houses/${h}/calibration`);
-
-/** Move a house between "calibrating" and "active". */
-export const setLifecycle = (h, lifecycle) =>
-  req(`/houses/${h}/lifecycle`, { method: 'PUT', body: JSON.stringify({ lifecycle }) });
-
-/**
- * Which sections should keep a sensor, decided from the calibration data.
- *
- * Runs PySensors on what the nodes actually recorded - not on the generated
- * field Phase 1 uses. Returns `table` for the screen and `baselines` for the
- * report; the UI shows only the first.
- */
-export const analyzePlacement = (h, maxSensors = 8) =>
-  req(`/houses/${h}/analyze-placement`, {
-    method: 'POST', body: JSON.stringify({ maxSensors }),
-  });
-
-/** Name the ESP32 that carries the relay board for this house. */
-export const setHouseMaster = (h, masterMac) =>
-  req(`/houses/${h}/master`, { method: 'PUT', body: JSON.stringify({ masterMac }) });
-
-export const planHouse   = (width, length, maxSensors = 8) =>
-  req('/houses/plan', {
-    method: 'POST',
-    body: JSON.stringify({ width, length, maxSensors }),
-  });
 export const addSection  = (h, s)     => req(`/houses/${h}/sections`, { method: 'POST', body: JSON.stringify(s) });
 export const updateSection = (h, s, body) =>
   req(`/houses/${h}/sections/${s}`, { method: 'PUT', body: JSON.stringify(body) });
