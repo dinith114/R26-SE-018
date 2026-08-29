@@ -77,10 +77,13 @@ export default function HousePlannerScreen({ navigation }) {
     }
   };
 
-  /* Positions come back for the largest count the server evaluated. Taking the
-     first `picked` of them is correct for every method here: all four are
-     greedy or pivoted, so their first k points ARE the k-sensor answer. */
-  const positions = plan ? (plan.positions || []).slice(0, picked) : [];
+  /* Positions come per row, and must: the winning METHOD changes with the
+     sensor count. Measured on a 10 x 14 m house, a plain grid wins at 3, 5 and
+     7 sensors while PySensors wins at 6 and 8 - so slicing one method's largest
+     layout would show a placement no method chose and no row scored. */
+  const row       = plan?.curve?.find(r => r.sensors === picked) || null;
+  const positions = row?.positions || [];
+  const winner    = row?.best || null;
 
   const save = async () => {
     if (!name.trim()) {
@@ -242,14 +245,21 @@ export default function HousePlannerScreen({ navigation }) {
 
               <Text style={styles.tnote}>
                 Error in °C, measured by rebuilding weather the placement never saw.
-                Recommended: {plan.recommendedSensors} — after that, one more sensor
-                changes the estimate by less than 5%.
+                The lowest number in each row wins, and it is not always the same
+                method. Recommended: {plan.recommendedSensors} — after that, one more
+                sensor changes the estimate by less than 5%.
               </Text>
             </View>
 
             {/* ── 4. the map ─────────────────────────────────────────── */}
             <Text style={styles.step}>4 · Where they go</Text>
             <View style={[styles.card, SHADOW.sm, { alignItems: 'center' }]}>
+              {!!winner && (
+                <Text style={styles.winner}>
+                  {picked} sensors, placed by{' '}
+                  {METHODS.find(m => m.key === winner)?.label || winner}
+                </Text>
+              )}
               <Text style={styles.sunEdge}>open, sun-facing edge</Text>
               <View style={[styles.plot, { width: mapW, height: mapH }]}>
                 {positions.map((p, i) => (
@@ -339,6 +349,8 @@ const styles = StyleSheet.create({
   tdOn:  { color: COLORS.text, fontWeight: '700' },
   tnote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.md },
 
+  winner:  { color: COLORS.estimated, fontSize: FONT.xs, fontWeight: '800',
+             marginBottom: SPACE.sm },
   sunEdge: { color: COLORS.textTertiary, fontSize: 10, fontWeight: '700',
              letterSpacing: 0.3, marginBottom: 4 },
   plot:    { backgroundColor: COLORS.bgCardAlt, borderWidth: 1.5,

@@ -328,34 +328,50 @@ async def plan_house(body: PlanIn) -> dict:
     fit, test = _snapshots(coords, width, length)
 
     top = int(min(body.maxSensors, MAX_SENSORS_CAP, coords.shape[0]))
-    curve, best_positions, used_fallback = [], None, False
+    curve, used_fallback = [], False
 
     for n in range(MIN_SENSORS, top + 1):
         methods = _methods_for(coords, fit, test, n, width, length)
+        if "pysensors" not in methods:
+            used_fallback = True
+
         row = {"sensors": n, "costLkr": n * NODE_COST_LKR}
         for key, m in methods.items():
             row[key] = None if m["error"] is None else round(m["error"], 3)
-        curve.append(row)
 
-        chosen = methods.get("pysensors") or methods["kriging_greedy"]
-        if "pysensors" not in methods:
-            used_fallback = True
-        if n == top:
-            best_positions = [
-                {"x": round(float(coords[i, 0]), 2), "y": round(float(coords[i, 1]), 2)}
-                for i in chosen["sensors"]
-            ]
+        # THE BEST METHOD AT THIS COUNT WINS, and it is not always the same one.
+        # Measured on this field, PySensors is beaten by a plain grid from three
+        # to seven sensors and only pulls ahead at eight. Running the comparison
+        # and then using PySensors regardless would make the table decorative -
+        # it would show the farmer that a grid was better and then place their
+        # sensors the worse way.
+        scored = [(k, m) for k, m in methods.items() if m["error"] is not None]
+        win_key, win = min(scored, key=lambda kv: kv[1]["error"]) if scored             else ("kriging_greedy", methods["kriging_greedy"])
+        row["best"] = win_key
+        # Positions PER ROW, not sliced from the largest layout. Greedy and
+        # pivoted methods do have that prefix property, but a regular grid does
+        # not: the 5-point grid is a different arrangement from the first five
+        # points of the 8-point grid, so slicing produced a layout no method
+        # ever chose or scored.
+        row["positions"] = [
+            {"x": round(float(coords[i, 0]), 2), "y": round(float(coords[i, 1]), 2)}
+            for i in win["sensors"]
+        ]
+        curve.append(row)
 
     # Where the curve flattens: the first count after which one more node buys
     # less than 5% of the error still remaining. This is a recommendation, not a
     # limit - the farmer picks from the table.
     rec = top
-    key = "pysensors" if not used_fallback else "kriging_greedy"
     for a, b in zip(curve, curve[1:]):
-        ea, eb = a.get(key), b.get(key)
+        ea, eb = a.get(a["best"]), b.get(b["best"])
         if ea and eb and (ea - eb) / ea < 0.05:
             rec = a["sensors"]
             break
+
+    rec_row = next(r for r in curve if r["sensors"] == rec)
+    best_positions = rec_row["positions"]
+    key = rec_row["best"]
 
     return {
         "status": "success",
@@ -365,10 +381,10 @@ async def plan_house(body: PlanIn) -> dict:
         "method": key,
         "pysensorsAvailable": not used_fallback,
         "message": (
-            "Placed with PySensors (SSPOR, QR-pivot)." if not used_fallback else
-            "PySensors is not installed on this server, so placement used the "
-            "kriging-variance method. The positions are still optimised; the "
-            "comparison table simply has no PySensors row."),
+            "PySensors is not installed on this server, so it has no row in the "
+            "table. Placement used the best of the remaining methods."
+            if used_fallback else
+            f"Best method at {rec} sensors on this house: {key}."),
         "recommendedSensors": rec,
         "positions": best_positions,
         "curve": curve,

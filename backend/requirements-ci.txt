@@ -31,4 +31,7 @@ PyKrige==1.7.2
 # "pysensors" is an unrelated Linux lm-sensors binding that fails to build.
 # Imported as `pysensors`. Documented for Linux and macOS only, so house_planner
 # degrades to its kriging-variance method rather than failing when absent.
-python-sensors==0.4.3
+# 0.4.1, NOT 0.4.3: from 0.4.2 the package requires numpy>=2.0, which
+# collides with the numpy==1.26.4 this project pins for its saved models.
+# 0.4.1 leaves numpy unpinned and carries the same SSPOR / SVD API.
+python-sensors==0.4.1
