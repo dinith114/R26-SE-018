@@ -728,7 +728,7 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.6\"" +
+                ",\"fw\":\"validation-1.7\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node
@@ -1134,6 +1134,11 @@ void setup() {
       Serial.println("   NOTHING on the bus - check SDA->D21, SCL->D22, VCC->3V3, GND->GND");
   }
 
+  // Every relay channel driven OFF before Wi-Fi comes up, so a queued command
+  // cannot arrive while a pin is still floating. On an ACTIVE-LOW board a
+  // floating pin reads as ON, which is a valve opening at power-up.
+  masterSetupRelays();
+
   connectWiFi();
   syncClock();
 }
@@ -1325,6 +1330,14 @@ void loop() {
     lastCmdAt = millis();
     pollCommand();
   }
+
+  /* Then act for the sections that have no node of their own.
+
+     After pollCommand deliberately: this board is a sensor node first and a
+     master second, so its own section is served before it opens a valve for
+     anybody else. Harmless until a master is named for the house - the queue
+     path is keyed by this board's MAC and simply reads back empty. */
+  if (!firstCycle) masterPollQueue();
 
   // Identify and scan work whether or not this node is assigned to a section,
   // so unlike pollCommand they are not gated on the first reading cycle - the
