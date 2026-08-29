@@ -2269,7 +2269,13 @@ def command_status(house_id: str, section_id: str,
     secs = (ack.get("durationSec") if matches else cmd.get("durationSec")) or 0
     remaining = None
     if running and started_at:
-        remaining = max(0, int(started_at) + int(secs) - int(time.time()))
+        # started_at is the NODE's clock; time.time() is the SERVER's. Any
+        # disagreement between them lands directly in this number, and it showed
+        # up as a 2 s pour counting down from 4. Clamped to the pour's own
+        # length, which is true whatever the two clocks think: there can never
+        # be more time left than the whole pour.
+        remaining = max(0, min(int(secs),
+                               int(started_at) + int(secs) - int(time.time())))
 
     # Stamp the outcome onto the event that started it. The app polls this
     # throughout every manual run, so the history learns whether the node
