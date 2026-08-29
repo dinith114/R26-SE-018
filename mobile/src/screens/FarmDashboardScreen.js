@@ -37,6 +37,8 @@ export default function FarmDashboardScreen({ navigation }) {
   const [busy, setBusy] = useState(null);
   // { kind: 'farm' } or { kind: 'house', id, name } — null when nothing is open
   const [renaming, setRenaming] = useState(null);
+  // which way of adding a house the farmer is being asked to choose
+  const [adding, setAdding] = useState(false);
   /* houseId -> the farmer's explicit choice for that house. UNSET means
      collapsed, not expanded.
   
@@ -112,6 +114,16 @@ export default function FarmDashboardScreen({ navigation }) {
   const offline  = flat.filter(s => !s.online).length;
   const filling  = flat.filter(s => s.tray?.status === 'fill').length;
   const fertDue  = flat.filter(s => s.fertilizer?.due).length;
+
+  /* Farm-scale counts. The old strip only ever counted SECTIONS, so a farmer
+     with eight houses saw "65" and no way to tell how that split, how much
+     hardware was actually out there, or that two houses were still calibrating
+     and therefore not watering to a plan at all. */
+  const houseCount  = houses.length;
+  const calibrating = houses.filter(h => h.meta?.lifecycle === 'calibrating').length;
+  const nodes       = flat.filter(s => s.node?.mac || s.meta?.deviceMac).length;
+  const estimated   = flat.filter(s => !s.online && s.estimated).length;
+  const plants      = houses.reduce((n, h) => n + (h.meta?.plantCount || 0), 0);
   const alertCount = filling + fertDue + flat.filter(s => s.freshness && !s.freshness.trusted).length;
 
   return (
@@ -164,6 +176,59 @@ export default function FarmDashboardScreen({ navigation }) {
               attention={offline + fertDue}
             />
 
+            {/* A second, quieter line for the things that describe the farm
+                rather than demand action. Kept separate from the tiles above on
+                purpose: those are about what needs doing now, these are about
+                what exists. Mixing the two is what made the old screen hard to
+                read at a glance. */}
+            <View style={styles.statStrip}>
+              <View style={styles.stat}>
+                <Text style={styles.statVal}>{houseCount}</Text>
+                <Text style={styles.statLbl}>house{houseCount === 1 ? '' : 's'}</Text>
+              </View>
+              <View style={styles.statDiv} />
+              <View style={styles.stat}>
+                <Text style={styles.statVal}>{sections}</Text>
+                <Text style={styles.statLbl}>sections</Text>
+              </View>
+              <View style={styles.statDiv} />
+              <View style={styles.stat}>
+                <Text style={styles.statVal}>{nodes}</Text>
+                <Text style={styles.statLbl}>nodes</Text>
+              </View>
+              {estimated > 0 && (
+                <>
+                  <View style={styles.statDiv} />
+                  <View style={styles.stat}>
+                    <Text style={[styles.statVal, { color: COLORS.estimated }]}>{estimated}</Text>
+                    <Text style={styles.statLbl}>estimated</Text>
+                  </View>
+                </>
+              )}
+              {plants > 0 && (
+                <>
+                  <View style={styles.statDiv} />
+                  <View style={styles.stat}>
+                    <Text style={styles.statVal}>{plants}</Text>
+                    <Text style={styles.statLbl}>plants</Text>
+                  </View>
+                </>
+              )}
+            </View>
+
+            {/* Calibrating houses are not watering to a plan, which is not
+                obvious from a list of house cards and matters more than
+                anything else on this screen while it is true. */}
+            {calibrating > 0 && (
+              <View style={styles.calStrip}>
+                <Ionicons name="hourglass-outline" size={14} color={COLORS.warning} />
+                <Text style={styles.calStripTxt}>
+                  {calibrating} house{calibrating === 1 ? ' is' : 's are'} still
+                  calibrating — collecting data before their sensor positions are decided.
+                </Text>
+              </View>
+            )}
+
             {/* actions */}
             <View style={styles.actRow}>
               {/* These two look like siblings but are not: "Work out plan"
@@ -209,26 +274,26 @@ export default function FarmDashboardScreen({ navigation }) {
                       <Ionicons name={TYPE_ICON[h.meta?.type] || 'home-outline'} size={19} color={COLORS.primary} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <View style={styles.houseNameRow}>
-                        <Text style={styles.houseName} numberOfLines={1}>
-                          {h.meta?.name || h.houseId}
-                        </Text>
-                        {/* A house still collecting its calibration data behaves
-                            differently from an active one - it is not watering
-                            to a plan yet - so the list has to say which it is.
-                            Absent means active, which is every house that
-                            predates the calibration flow. */}
+                      {/* The name gets the whole line. Sharing it with a badge
+                          meant "Simulated House (..." on any name of normal
+                          length, and the badge, chevron and map button then
+                          fought for what was left. The state belongs on the
+                          detail line, where there is room for the word. */}
+                      <Text style={styles.houseName} numberOfLines={1}>
+                        {h.meta?.name || h.houseId}
+                      </Text>
+                      <View style={styles.houseMetaRow}>
                         {h.meta?.lifecycle === 'calibrating' && (
                           <View style={styles.calBadge}>
                             <Ionicons name="hourglass-outline" size={9} color={COLORS.warning} />
                             <Text style={styles.calBadgeTxt}>Calibrating</Text>
                           </View>
                         )}
+                        <Text style={styles.houseMeta} numberOfLines={1}>
+                          {h.meta?.type || 'house'} · {h.sections?.length || 0} sections
+                          {h.meta?.plantCount ? ` · ${h.meta.plantCount} plants` : ''}
+                        </Text>
                       </View>
-                      <Text style={styles.houseMeta}>
-                        {h.meta?.type || 'house'} · {h.sections?.length || 0} sections
-                        {h.meta?.plantCount ? ` · ${h.meta.plantCount} plants` : ''}
-                      </Text>
                     </View>
                     <Ionicons
                       name={isCollapsed(h.houseId) ? 'chevron-down' : 'chevron-up'}
@@ -397,13 +462,41 @@ export default function FarmDashboardScreen({ navigation }) {
             ))}
 
             <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
-              onPress={() => navigation.navigate('FarmSetup')} activeOpacity={0.8}
+              onPress={() => setAdding(true)} activeOpacity={0.8}
               accessibilityRole="button" accessibilityLabel="Add another house">
               <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
               <Text style={styles.addHouseText}>Add another house</Text>
             </TouchableOpacity>
 
-            {/* the farm name was previously fixed at setup, a typo was permanent */}
+            {/* Two genuinely different ways to add a house, and the difference is
+          not cosmetic: one ends with sensors already placed and a calibration
+          window running, the other with an empty house the farmer fills in by
+          hand. Sending everyone down one path would either force a three-day
+          wait on somebody who already knows their layout, or hide the whole
+          placement feature from somebody who does not. */}
+      <SelectSheet
+        visible={adding}
+        title="How do you want to set this house up?"
+        subtitle="Both create a real house. They differ in who decides where the sensors go."
+        options={[
+          { key: 'plan',
+            label: 'Work out the best sensor positions',
+            sub: 'Sections are spread evenly, you run them for three days, then '
+               + 'the app says which positions matter and which sensors you can '
+               + 'take out. Needs a sensor in every section to start.' },
+          { key: 'manual',
+            label: 'I know my layout — set it up myself',
+            sub: 'Name the sections yourself and place nodes by hand. No '
+               + 'calibration window, and no placement suggestion.' },
+        ]}
+        confirmOnSelect
+        onCancel={() => setAdding(false)}
+        onConfirm={(k) => {
+          setAdding(false);
+          navigation.navigate(k === 'plan' ? 'HousePlanner' : 'FarmSetup');
+        }} />
+
+      {/* the farm name was previously fixed at setup, a typo was permanent */}
             <TouchableOpacity style={styles.renameFarm} activeOpacity={0.7}
               onPress={() => setRenaming({ kind: 'farm', name: data?.farm?.farmName || '' })}
               accessibilityRole="button"
@@ -544,7 +637,24 @@ const styles = StyleSheet.create({
   houseTitleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center',
                    gap: SPACE.md, paddingVertical: SPACE.xs },
   houseIcon: { width: 38, height: 38, borderRadius: RADIUS.md, backgroundColor: COLORS.primaryDim, alignItems: 'center', justifyContent: 'center' },
-  houseNameRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  statStrip: { flexDirection: 'row', alignItems: 'center',
+               backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm,
+               paddingVertical: SPACE.md, marginTop: SPACE.md },
+  stat:      { flex: 1, alignItems: 'center' },
+  statVal:   { color: COLORS.text, fontSize: FONT.lg, fontWeight: '800',
+               fontVariant: ['tabular-nums'] },
+  statLbl:   { color: COLORS.textTertiary, fontSize: 10, fontWeight: '600',
+               marginTop: 1 },
+  statDiv:   { width: 1, height: 24, backgroundColor: COLORS.borderLight },
+
+  calStrip:    { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm,
+                 backgroundColor: COLORS.warningDim, borderRadius: RADIUS.sm,
+                 padding: SPACE.md, marginTop: SPACE.md },
+  calStripTxt: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.xs,
+                 lineHeight: 17 },
+
+  houseMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6,
+                  marginTop: 3, flexWrap: 'wrap' },
   calBadge:  { flexDirection: 'row', alignItems: 'center', gap: 3,
                backgroundColor: COLORS.warningDim, borderRadius: RADIUS.full,
                paddingHorizontal: 6, paddingVertical: 2 },
