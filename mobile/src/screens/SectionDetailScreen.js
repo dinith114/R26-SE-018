@@ -315,14 +315,17 @@ export default function SectionDetailScreen({ route, navigation }) {
     };
     const w = parse(durEdit?.water);
     const t = parse(durEdit?.tray);
-    if (w != null && (w < 30 || w > 120)) {
-      Alert.alert('Watering length', 'Must be between 30 and 120 seconds.');
+    // 1 second, not 30. Nothing in the hardware needed a 30 s floor - the relay
+    // switches in milliseconds, and 2 s is 600 ml at the measured 300 ml/s.
+    // 120 is real: RELAY_MAX_SEC, clamped on the board itself.
+    if (w != null && (w < 1 || w > 120)) {
+      setToast({ text: 'Watering must be 1 to 120 seconds. The board stops at 120.',
+                 kind: 'error' });
       return;
     }
     if (t != null && (t < 1 || t > (tray?.maxSeconds ?? 15))) {
-      Alert.alert('Tray fill length',
-                  `Must be between 1 and ${tray?.maxSeconds ?? 15} seconds — longer than `
-                  + `that overflows the tray.`);
+      setToast({ text: `Tray fill must be 1 to ${tray?.maxSeconds ?? 15} seconds — `
+                      + `longer overflows the tray.`, kind: 'error' });
       return;
     }
     try {
@@ -339,17 +342,50 @@ export default function SectionDetailScreen({ route, navigation }) {
     }
   };
 
+  /* Hand the lengths back to the model, or take them over.
+     
+     Turning automatic OFF does not save anything yet - it opens the boxes
+     prefilled with what the model last chose, so the grower edits a real number
+     rather than an empty field and can see what they are overriding. Turning it
+     ON writes nulls immediately, because "give it back" is not a draft. */
+  const durAuto = !durEdit
+    && plan?.durationSetBy !== 'manual'
+    && tray?.manualSeconds == null;
+
+  const setDurAuto = async (auto) => {
+    if (!auto) {
+      setDurEdit({
+        water: String(plan?.modelDurationSec ?? plan?.durationSec ?? ''),
+        tray:  tray?.modelSeconds ? String(tray.modelSeconds) : '',
+      });
+      return;
+    }
+    setDurEdit(null);
+    try {
+      setDurSaving(true);
+      await setSectionDurations(houseId, sectionId, null, null);
+      load();
+      setToast({ text: 'Back to automatic', kind: 'success' });
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setDurSaving(false);
+    }
+  };
+
   /* Save where this section sits. Metres, so a plain number is the whole
      input - a map picker can replace this later without the API changing. */
   const savePosition = async () => {
     const x = parseFloat(String(posEdit?.x ?? '').trim());
     const y = parseFloat(String(posEdit?.y ?? '').trim());
     if (Number.isNaN(x) || Number.isNaN(y)) {
-      Alert.alert('Position', 'Enter both X and Y in metres, for example 3.5 and 8.');
+      setToast({ text: 'Enter both X and Y in metres, for example 3.5 and 8.',
+                 kind: 'error' });
       return;
     }
     if (x < 0 || y < 0 || x > 500 || y > 500) {
-      Alert.alert('Position', 'Coordinates are metres inside the house, 0 to 500.');
+      setToast({ text: 'Coordinates are metres inside the house, 0 to 500.',
+                 kind: 'error' });
       return;
     }
     try {
@@ -1740,11 +1776,48 @@ export default function SectionDetailScreen({ route, navigation }) {
             statusTone={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
                         ? COLORS.primary : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
-            {durEdit ? (
+            {/* The switch, and nothing else, decides which half of this card is
+                live. Boxes that look editable while the model owns the value
+                were the previous design and invited exactly the confusion of
+                typing a number that then never took effect. */}
+            <View style={styles.durAutoRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.durAutoTitle}>Let the system choose</Text>
+                <Text style={styles.durSub}>
+                  {durAuto ? 'The model sets both lengths each day.'
+                           : 'You set the lengths. The model still picks the time.'}
+                </Text>
+              </View>
+              <Switch
+                value={durAuto}
+                onValueChange={setDurAuto}
+                disabled={durSaving}
+                trackColor={{ false: COLORS.border, true: COLORS.primaryLight }}
+                thumbColor={durAuto ? COLORS.primary : COLORS.textTertiary} />
+            </View>
+
+            {/* What the model asked for, shown in BOTH states. Under manual it
+                is the reference the grower is deciding against, and hiding it
+                there would make the override a guess. */}
+            <View style={styles.durAiRow}>
+              <Ionicons name="sparkles-outline" size={14} color={COLORS.estimated} />
+              <Text style={styles.durAiTxt}>
+                AI suggestion — watering {plan?.modelDurationSec ?? plan?.durationSec ?? '--'}s
+                {tray?.modelSeconds ? `  ·  tray ${tray.modelSeconds}s` : '  ·  tray not needed now'}
+              </Text>
+            </View>
+
+            {durAuto ? (
+              <Text style={styles.durHint}>
+                Watering {plan?.durationSec ?? '--'}s
+                {plan?.litres != null ? ` — about ${plan.litres} L per watering.` : '.'}
+                {' '}Turn the switch off to set your own.
+              </Text>
+            ) : durEdit ? (
               <>
                 <View style={styles.durRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>Watering (30–120s)</Text>
+                    <Text style={styles.durLabel}>Watering (1–120s)</Text>
                     <TextInput style={styles.durInput} value={durEdit.water}
                       onChangeText={(v) => setDurEdit({ ...durEdit, water: v })}
                       keyboardType="number-pad" placeholder="auto"
@@ -1763,8 +1836,13 @@ export default function SectionDetailScreen({ route, navigation }) {
                   </View>
                 </View>
                 <Text style={styles.durHint}>
-                  Leave a box empty to let the system choose. It still decides when to
-                  water — these only set how long the pump runs.
+                  {durEdit.water
+                    ? `About ${(Number(durEdit.water) * 0.3).toFixed(1)} L per watering `
+                      + `at the measured 300 ml/s. `
+                    : ''}
+                  The board stops any pour at 120s, and the tray holds
+                  {' '}{tray?.trayCapacityL ?? 4.6} L — longer than
+                  {' '}{tray?.maxSeconds ?? 15}s overflows it.
                 </Text>
                 <View style={styles.durBtns}>
                   <TouchableOpacity style={styles.durCancel} onPress={() => setDurEdit(null)}
@@ -1790,15 +1868,14 @@ export default function SectionDetailScreen({ route, navigation }) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.durValue}>
                     Watering {plan?.durationSetBy === 'manual'
-                      ? `${plan.durationSec}s (yours)` : `${plan?.durationSec ?? '--'}s (auto)`}
+                      ? `${plan.durationSec}s` : `${plan?.durationSec ?? '--'}s`}
                     {'   ·   '}
-                    Tray {tray?.manualSeconds != null
-                      ? `${tray.manualSeconds}s (yours)` : 'auto'}
+                    Tray {tray?.manualSeconds != null ? `${tray.manualSeconds}s` : 'auto'}
                   </Text>
                   <Text style={styles.durSub}>
                     {plan?.litres != null
                       ? `About ${plan.litres} L per watering. Tap to change.`
-                      : 'Tap to set your own lengths.'}
+                      : 'Tap to change.'}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
@@ -2036,6 +2113,12 @@ const styles = StyleSheet.create({
   nodeBtnOn: { backgroundColor: COLORS.primary },
   tileEst:   { borderWidth: 1, borderColor: COLORS.estimated, backgroundColor: COLORS.estimatedDim },
   tileSd:    { color: COLORS.estimated, fontSize: FONT.xs, fontWeight: '700', marginTop: -2 },
+  durAutoRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  durAutoTitle: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '800' },
+  durAiRow:     { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+                  backgroundColor: COLORS.estimatedDim, borderRadius: RADIUS.sm,
+                  paddingVertical: 7, paddingHorizontal: SPACE.sm, marginTop: SPACE.md },
+  durAiTxt:     { flex: 1, color: COLORS.estimated, fontSize: FONT.xs, fontWeight: '700' },
   durView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   durValue:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
   durSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },

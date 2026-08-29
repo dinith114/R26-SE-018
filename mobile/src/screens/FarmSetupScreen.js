@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, ActivityIndicator, Alert,
@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
-import { setupFarm, addHouse, addSection, assignDevice, getOverview } from '../services/careV2';
+import { setupFarm, addHouse, addSection, assignDevice, getOverview, getHouse } from '../services/careV2';
 import LocationPicker from '../components/LocationPicker';
 import NodePicker from '../components/NodePicker';
 
@@ -34,6 +34,29 @@ export default function FarmSetupScreen({ route, navigation }) {
   const [houseType,setHouseType]= useState('shade-net');
   const [sections, setSections] = useState([newSection(), newSection()]);
   const [saving,   setSaving]   = useState(false);
+  /* Which section this will BE. In add mode the form renders one card out of a
+     list of one, so the index was always 0 and every new section - the ninth
+     included - was headed "Section 1". The number has to come from the house,
+     not from the position in a one-item array. null until the house answers, so
+     a slow network shows nothing rather than a confident wrong number. */
+  const [nextId,   setNextId]   = useState(null);
+
+  useEffect(() => {
+    if (!addToHouse) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await getHouse(addToHouse);
+        const existing = (r?.house?.sections) || {};
+        // The LOWEST FREE slot, matching how the backend picks the id. Counting
+        // would be wrong the moment a section had been deleted.
+        let n = 1;
+        while (existing[`S${n}`]) n += 1;
+        if (alive) setNextId(n);
+      } catch (_) { /* leave it null; the heading just omits the number */ }
+    })();
+    return () => { alive = false; };
+  }, [addToHouse]);
   /* Where the farm is. Asked once, here, because it decides which place the
      weather forecast is downloaded for - and that forecast feeds every watering
      decision. Before this the question was never asked and every farm silently
@@ -242,8 +265,14 @@ export default function FarmSetupScreen({ route, navigation }) {
         {(addToHouse ? sections.slice(0, 1) : sections).map((s, i) => (
           <View key={i} style={[styles.card, SHADOW.sm, { marginBottom: SPACE.md }]}>
             <View style={styles.secHead}>
-              <View style={styles.secNum}><Text style={styles.secNumTxt}>{i + 1}</Text></View>
-              <Text style={styles.secHeadTxt}>Section {i + 1}</Text>
+              <View style={styles.secNum}>
+                <Text style={styles.secNumTxt}>{addToHouse ? (nextId ?? '+') : i + 1}</Text>
+              </View>
+              <Text style={styles.secHeadTxt}>
+                {addToHouse
+                  ? (nextId ? `Section ${nextId} — new` : 'New section')
+                  : `Section ${i + 1}`}
+              </Text>
               {!addToHouse && sections.length > 1 && (
                 <TouchableOpacity onPress={() => delSec(i)}>
                   <Ionicons name="close-circle-outline" size={20} color={COLORS.textTertiary} />

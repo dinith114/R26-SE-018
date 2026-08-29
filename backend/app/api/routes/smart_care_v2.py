@@ -1203,7 +1203,7 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     manual = _manual_durations(section)
     model_dur = dur
     if manual.get("water"):
-        dur = max(30, min(120, int(manual["water"])))
+        dur = max(1, min(RELAY_MAX_SEC, int(manual["water"])))
 
     plan = {
         "date": now.strftime("%Y-%m-%d"),
@@ -1923,7 +1923,16 @@ async def add_section(house_id: str, s: SectionIn):
     if not house:
         raise HTTPException(404, f"House '{house_id}' not found")
     existing = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
-    sid = s.id or f"S{len(existing) + 1}"
+    # The lowest FREE slot, not len+1. Counting breaks the moment a section is
+    # deleted: remove S3 from S1-S8 and len becomes 7, so the next add computes
+    # S8, which still exists - a 409 that never clears, leaving the house unable
+    # to accept another section for as long as the gap is there.
+    sid = s.id
+    if not sid:
+        n = 1
+        while f"S{n}" in existing:
+            n += 1
+        sid = f"S{n}"
     if sid in existing:
         raise HTTPException(409, f"Section '{sid}' already exists in {house_id}")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1933,7 +1942,7 @@ async def add_section(house_id: str, s: SectionIn):
         "deviceId": f"{house_id}-{sid}", "createdAt": now})
     _fb_put(f"/farm/houses/{house_id}/sections/{sid}/control.json",
             {"mode": "auto", "trayEnabled": True})
-    house["sectionCount"] = len(existing) + 1
+    house["sectionCount"] = len(existing) + 1   # existing was read before the write
     _fb_put(f"/farm/houses/{house_id}/meta.json", house)
     return {"status": "success", "houseId": house_id, "sectionId": sid,
             "deviceId": f"{house_id}-{sid}"}
@@ -2658,8 +2667,13 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
     out = {}
     if body.waterDurationSec is not None:
         v = int(body.waterDurationSec)
-        if not (30 <= v <= RELAY_MAX_SEC):
-            raise HTTPException(400, f"Watering length must be 30-{RELAY_MAX_SEC} seconds.")
+        # 1 second, not 30. The 30 s floor was a guess at what the model's own
+        # range looked like, and there is no hardware reason for it: the relay
+        # switches in milliseconds and 2 s is 600 ml at the measured 300 ml/s,
+        # which is a real amount of water. RELAY_MAX_SEC is the only limit the
+        # board actually enforces, and it clamps there regardless of this check.
+        if not (1 <= v <= RELAY_MAX_SEC):
+            raise HTTPException(400, f"Watering length must be 1-{RELAY_MAX_SEC} seconds.")
         out["water"] = v
     if body.trayFillSec is not None:
         v = int(body.trayFillSec)
@@ -2692,7 +2706,7 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
     plan = _fb_get(f"{base}/plan.json") or {}
     if plan.get("modelDurationSec") is not None:
         model_dur = int(plan["modelDurationSec"])
-        dur = (max(30, min(RELAY_MAX_SEC, int(out["water"])))
+        dur = (max(1, min(RELAY_MAX_SEC, int(out["water"])))
                if out.get("water") else model_dur)
         plan["durationSec"] = dur
         plan["durationSetBy"] = "manual" if out.get("water") else "model"
@@ -2718,7 +2732,7 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
         _fb_put(f"{base}/tray.json", tray)
 
     return {"status": "success", "durations": out,
-            "limits": {"waterMin": 30, "waterMax": RELAY_MAX_SEC,
+            "limits": {"waterMin": 1, "waterMax": RELAY_MAX_SEC,
                        "trayMin": 1, "trayMax": TRAY_MAX_SEC},
             "message": ("Back to automatic." if not out else
                         "Saved. The models still choose when to water; these set how long.")}
