@@ -2166,7 +2166,13 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
     if not s:
         raise HTTPException(404, "Section not found")
     command = {"requested": True,
-               "durationSec": max(10, min(cmd.durationSec, RELAY_MAX_SEC)),
+               # 1, not 10. A ten second floor lived here, in a different
+               # endpoint from the one that validates a grower's saved lengths,
+               # so a section set to 2 s was quietly watered for 10 while the
+               # confirm sheet promised 2 - and the countdown, which reads the
+               # ack, showed the 10. Silently multiplying a pour by five is
+               # worse than refusing it.
+               "durationSec": max(1, min(cmd.durationSec, RELAY_MAX_SEC)),
                "withFertilizer": cmd.withFertilizer,
                "triggeredBy": cmd.triggeredBy,
                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
@@ -2395,7 +2401,11 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
         raise HTTPException(404, "Section not found")
     now = datetime.now(timezone.utc)
     command = {"requested": True,
-               "fillSeconds": max(1, min(cmd.fillSeconds, 60)),
+               # TRAY_MAX_SEC, not 60. Sixty seconds is 18 litres at the
+               # measured 300 ml/s, into a tray that holds 4.61 - this endpoint
+               # was a way to overflow the tray that went around the cap every
+               # other path respects.
+               "fillSeconds": max(1, min(cmd.fillSeconds, TRAY_MAX_SEC)),
                "triggeredBy": cmd.triggeredBy,
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)

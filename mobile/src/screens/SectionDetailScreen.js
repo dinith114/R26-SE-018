@@ -556,16 +556,26 @@ export default function SectionDetailScreen({ route, navigation }) {
         if (!alive || !run.id || st.ack?.id !== run.id) return;
 
         if (st.running) {
-          setRun((r) => (r && r.id === run.id
-            ? { ...r, phase: 'running',
-                // Clamped to the pour's own length. remainingSec is computed
-                // server-side as (node's start clock + duration - SERVER clock),
-                // so any disagreement between the two clocks lands straight in
-                // this number - which is how a 2 s pour counted down from 4.
-                remaining: st.remainingSec != null
-                  ? Math.min(r.secs, st.remainingSec)
-                  : r.remaining }
-            : r));
+          /* Believe the ACK's duration over the one we asked for.
+
+             A previous version of this clamped `remaining` to the requested
+             length, on the theory that a countdown longer than the pour meant
+             the node and server clocks disagreed. They do not. The server was
+             silently raising a 2 s manual pour to 10 s in the water endpoint,
+             and the ack said 10 - so the clamp was not fixing a display bug, it
+             was hiding a real one, and making the screen a more convincing liar
+             about how much water had just gone on the plants.
+
+             What the node acknowledges is what the hardware is doing. If that
+             ever differs from the request again, this shows it. */
+          setRun((r) => {
+            if (!r || r.id !== run.id) return r;
+            const acked = Number(st.ack?.durationSec) || r.secs;
+            return { ...r, phase: 'running', secs: acked,
+                     remaining: st.remainingSec != null
+                       ? Math.max(0, Math.min(acked, st.remainingSec))
+                       : r.remaining };
+          });
           return;
         }
 
