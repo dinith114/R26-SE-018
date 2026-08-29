@@ -381,15 +381,27 @@ async def plan_house(body: PlanIn) -> dict:
         ]
         curve.append(row)
 
-    # Where the curve flattens: the first count after which one more node buys
-    # less than 5% of the error still remaining. This is a recommendation, not a
-    # limit - the farmer picks from the table.
+    # The cheapest count that gets within 5% of the BEST error the curve reaches.
+    #
+    # Not "the first count the next one fails to improve on", which is what this
+    # was and which assumed the curve falls monotonically. SSPOR's does not: on a
+    # live run it went 0.356 at three sensors, 0.433 at four, then back down. The
+    # old rule saw the rise at four, concluded three was a plateau, and told the
+    # farmer three sensors was enough BECAUSE the estimate got worse - exactly
+    # backwards, and it would have sold them the weakest layout on the table.
+    #
+    # Comparing against the best achieved is immune to that. A bounce cannot end
+    # the search early, and the answer is still the cheapest count that buys
+    # essentially all the accuracy available.
+    errs = [(r["sensors"], r.get(r["placedBy"])) for r in curve]
+    errs = [(n, e) for n, e in errs if e is not None]
     rec = top
-    for a, b in zip(curve, curve[1:]):
-        ea, eb = a.get(a["placedBy"]), b.get(b["placedBy"])
-        if ea and eb and (ea - eb) / ea < 0.05:
-            rec = a["sensors"]
-            break
+    if errs:
+        floor = min(e for _, e in errs)
+        for n, e in errs:                      # ascending sensor count
+            if e <= floor * 1.05:
+                rec = n
+                break
 
     rec_row = next(r for r in curve if r["sensors"] == rec)
     best_positions = rec_row["positions"]
