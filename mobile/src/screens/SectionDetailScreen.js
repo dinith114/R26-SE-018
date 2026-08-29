@@ -104,6 +104,20 @@ export default function SectionDetailScreen({ route, navigation }) {
   const { houseId, sectionId, houseName } = route.params;
 
   const [sec,     setSec]     = useState(null);
+
+  /* Derived from `sec`, and declared HERE rather than beside the JSX.
+  
+     They used to sit three hundred lines lower, which meant any handler or
+     derived value written above them read `undefined` instead of the section.
+     That is not the crash it should be: Babel transpiles const to var for the
+     release build, so the name hoists as undefined rather than throwing, and
+     `undefined?.durationSetBy !== 'manual'` is simply true. The automatic
+     switch was built on exactly that and silently became `!durEdit`. */
+  const est    = sec?.estimated || null;
+  const plan   = sec?.plan   || {};
+  const tray   = sec?.tray   || {};
+  const meta   = sec?.meta   || {};
+  const fcast  = sec?.forecast || null;
   const [fert,    setFert]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(false);
@@ -348,15 +362,26 @@ export default function SectionDetailScreen({ route, navigation }) {
      prefilled with what the model last chose, so the grower edits a real number
      rather than an empty field and can see what they are overriding. Turning it
      ON writes nulls immediately, because "give it back" is not a draft. */
+  /* Read straight off `sec`, NOT off the `plan` / `tray` shorthands.
+  
+     Those are declared three hundred lines below this point, and referencing
+     them here should be a temporal-dead-zone crash. It is not, because Babel
+     transpiles const to var for the release build, so both hoist as undefined
+     instead of throwing - and `undefined?.durationSetBy !== 'manual'` is true,
+     as is `undefined?.manualSeconds == null`. The whole expression quietly
+     collapsed to `!durEdit`, so the switch tracked "am I editing right now"
+     rather than "who owns these lengths". Saving clears durEdit, so the switch
+     sprang back to automatic the instant a value was stored - while the value
+     itself had saved correctly all along. */
   const durAuto = !durEdit
-    && plan?.durationSetBy !== 'manual'
-    && tray?.manualSeconds == null;
+    && sec?.plan?.durationSetBy !== 'manual'
+    && sec?.tray?.manualSeconds == null;
 
   const setDurAuto = async (auto) => {
     if (!auto) {
       setDurEdit({
-        water: String(plan?.modelDurationSec ?? plan?.durationSec ?? ''),
-        tray:  tray?.modelSeconds ? String(tray.modelSeconds) : '',
+        water: String(sec?.plan?.modelDurationSec ?? sec?.plan?.durationSec ?? ''),
+        tray:  sec?.tray?.modelSeconds ? String(sec.tray.modelSeconds) : '',
       });
       return;
     }
@@ -647,11 +672,6 @@ export default function SectionDetailScreen({ route, navigation }) {
     </View>
   );
 
-  const est    = sec?.estimated || null;
-  const plan   = sec?.plan   || {};
-  const tray   = sec?.tray   || {};
-  const meta   = sec?.meta   || {};
-  const fcast  = sec?.forecast || null;
   /* An estimate is only worth showing while it still describes this hour. An
      hour-old kriging of a farm's microclimate is describing weather that has
      moved on, and it would look exactly as confident as a fresh one. */
