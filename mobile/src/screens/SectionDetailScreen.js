@@ -316,13 +316,12 @@ export default function SectionDetailScreen({ route, navigation }) {
     const w = parse(durEdit?.water);
     const t = parse(durEdit?.tray);
     if (w != null && (w < 30 || w > 120)) {
-      Alert.alert('Watering length', 'Must be between 30 and 120 seconds.');
+      setToast({ text: 'Watering must be 30 to 120 seconds.', kind: 'error' });
       return;
     }
     if (t != null && (t < 1 || t > (tray?.maxSeconds ?? 15))) {
-      Alert.alert('Tray fill length',
-                  `Must be between 1 and ${tray?.maxSeconds ?? 15} seconds — longer than `
-                  + `that overflows the tray.`);
+      setToast({ text: `Tray fill must be 1 to ${tray?.maxSeconds ?? 15} seconds — `
+                      + `longer overflows the tray.`, kind: 'error' });
       return;
     }
     try {
@@ -345,11 +344,13 @@ export default function SectionDetailScreen({ route, navigation }) {
     const x = parseFloat(String(posEdit?.x ?? '').trim());
     const y = parseFloat(String(posEdit?.y ?? '').trim());
     if (Number.isNaN(x) || Number.isNaN(y)) {
-      Alert.alert('Position', 'Enter both X and Y in metres, for example 3.5 and 8.');
+      setToast({ text: 'Enter both X and Y in metres, for example 3.5 and 8.',
+                 kind: 'error' });
       return;
     }
     if (x < 0 || y < 0 || x > 500 || y > 500) {
-      Alert.alert('Position', 'Coordinates are metres inside the house, 0 to 500.');
+      setToast({ text: 'Coordinates are metres inside the house, 0 to 500.',
+                 kind: 'error' });
       return;
     }
     try {
