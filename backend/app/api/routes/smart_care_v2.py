@@ -231,6 +231,29 @@ TRAY_AREA_CM2 = 32.0 * 48.0          # 1536 cm2 -> 1.536 L per cm of depth
 TRAY_MAX_DEPTH_CM = 3.0              # 4.61 L full
 
 
+def _ml_per_sec(section: dict) -> float:
+    """How fast water actually reaches THIS section, ml per second.
+
+    PUMP_ML_PER_SEC is one measurement of one pump discharging straight into a
+    jug. Once that pump feeds eight solenoid valves through pipe of different
+    lengths, the section nearest the pump and the section at the far end do not
+    receive the same flow, and a single figure would quietly over-water one and
+    under-water the other.
+
+    Per-section, measured the same way the 300 ml/s was: run the valve for a
+    known time, weigh or measure what comes out, divide. Falls back to the
+    pump's own rate where nobody has measured yet, which is the right default -
+    it is what the plumbing delivers with no pipe in the way.
+    """
+    try:
+        v = float(((section or {}).get("meta") or {}).get("mlPerSec"))
+        if 10.0 <= v <= 5000.0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return PUMP_ML_PER_SEC
+
+
 def _manual_durations(section: dict) -> dict:
     """A grower's own pour lengths for this section, where they have set any.
 
@@ -595,6 +618,51 @@ def _master_for_house(house_id: str) -> Optional[str]:
     return mac or None
 
 
+def _natural_key(sid: str):
+    """Sort S2 before S10.
+
+    NATURAL order, not lexicographic. sorted() puts S10, S11, S12 before S2, so
+    on a farm with more than nine sections the derived relay channels came out
+    scrambled - S12 landed on channel 4 in testing, which on correctly wired
+    hardware opens the wrong valve and looks like a plumbing fault rather than a
+    sort order. Module level because the calibration status endpoint lists
+    sections too, and two copies of this would eventually disagree.
+    """
+    digits = "".join(c for c in sid if c.isdigit())
+    return (0, int(digits)) if digits else (1, 0), sid
+
+
+def _channel_map(house_id: str) -> dict:
+    """{channel: [section ids]} for the whole house, explicit and derived.
+
+    Exists because two sections sharing a channel is not a cosmetic problem: the
+    relay board has one pin per channel and one valve per pin, so a duplicate
+    means watering section A physically waters section B. Nothing in the pour
+    path can detect that - the command is well formed, the firmware obeys it,
+    the ack comes back, and the water goes to the wrong plants.
+
+    It happens easily. Derived channels come from position in sorted order, so
+    setting ONE section explicitly to a number another section already derives
+    collides silently - which is exactly what happened when S8 was pinned to
+    channel 1 while S1 already derived it.
+    """
+    out: dict = {}
+    for sid in sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}),
+                      key=_natural_key):
+        ch = _relay_channel(house_id, sid)
+        if ch:
+            out.setdefault(ch, []).append(sid)
+    return out
+
+
+def _channel_conflicts(house_id: str) -> list:
+    """Human-readable warnings, one per shared channel. Empty when clean."""
+    return [f"Channel {ch} is claimed by {' and '.join(ids)} - "
+            f"they would open the same valve."
+            for ch, ids in sorted(_channel_map(house_id).items())
+            if len(ids) > 1]
+
+
 def _relay_channel(house_id: str, section_id: str) -> Optional[int]:
     """Which relay channel on the master opens this section's valve.
 
@@ -611,22 +679,20 @@ def _relay_channel(house_id: str, section_id: str) -> Optional[int]:
             return ch
     except (KeyError, TypeError, ValueError):
         pass
-    # NATURAL order, not lexicographic. sorted() puts S10, S11, S12 before S2,
-    # so on a farm with more than nine sections the derived channels come out
-    # scrambled - S12 landed on channel 4 in testing, which would have opened
-    # the wrong valve on correctly wired hardware and looked like a plumbing
-    # fault rather than a sort order.
-    def _natural(sid: str):
-        digits = "".join(c for c in sid if c.isdigit())
-        return (0, int(digits)) if digits else (1, 0), sid
-
     ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
-                 key=_natural)
+                 key=_natural_key)
     if section_id in ids:
         ch = ids.index(section_id) + 1
         if ch <= MASTER_MAX_CHANNELS:
             return ch
     return None
+
+
+# Actions that address a BOARD rather than a section's plumbing, and so are
+# never routed through the master's relay. Wi-Fi credentials reconfigure the
+# node that reads them; sending them to a relay board would hand them to the
+# wrong device entirely.
+DIRECT_ACTIONS = ("wifi",)
 
 
 def _issue_node_command(house_id: str, section_id: str, action: str,
@@ -659,23 +725,38 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
            "issuedAtSec": int(now.timestamp())}
     cmd.update(extra)
 
-    # A section with its own node keeps the direct path: that node polls exactly
-    # here and nothing else reads it.
-    if _own_device(house_id, section_id) or action == "wifi":
+    # Anything addressed to ONE BOARD rather than to a section's plumbing still
+    # goes straight to that board's own document. Wi-Fi credentials are the
+    # case that matters: they reconfigure the node that reads them, and routing
+    # them through a relay board would deliver them to the wrong device.
+    if action in DIRECT_ACTIONS:
         cmd["routedTo"] = None
         _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/command.json", cmd)
         return cmd
 
-    # No node of its own. If a master controller has been named for this house,
-    # its relay board can open this section's valve on its behalf.
+    # EVERY POUR GOES THROUGH THE MASTER, including a section that has a sensor
+    # node of its own.
+    #
+    # This used to branch: a section with its own node was commanded directly,
+    # and only nodeless sections went to the master. That matched a farm where
+    # every node had a pump wired to it. The farm being built does not work that
+    # way - there is ONE pump and a solenoid valve per section, and all eight
+    # valves sit on the master's relay board. A sensor node therefore has
+    # nothing to open: it measures, and that is all it does.
+    #
+    # Removing the branch makes this simpler rather than more complex, and it
+    # removes a whole class of bug - a command written to a node that has no
+    # valve would be obeyed by firmware and move no water, while the app
+    # reported success.
     master = _master_for_house(house_id)
     channel = _relay_channel(house_id, section_id) if master else None
     if not master or not channel:
         # Refusing is the point. Writing to the section's own path here would
         # produce a command nobody polls: not delayed, never seen, while the app
         # reports success and the log records a watering that did not happen.
-        print(f"[CMD] {house_id}/{section_id} has no node and "
-              f"{'no master' if not master else 'no relay channel'} - {action} not issued")
+        print(f"[CMD] {house_id}/{section_id}: "
+              f"{'no master controller assigned' if not master else 'no relay channel'}"
+              f" - {action} not issued")
         return None
 
     cmd["targetSection"] = section_id
@@ -1214,10 +1295,14 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         # override is visible rather than silently replacing the model.
         "modelDurationSec": model_dur,
         "durationSetBy": "manual" if manual.get("water") else "model",
-        # Derived from a single bench measurement of this pump (300 ml/s), so it
-        # is indicative and moves with the hardware. It is published because a
-        # grower can judge "25 litres" and cannot judge "84 seconds".
-        "litres": round(dur * PUMP_ML_PER_SEC / 1000.0, 2),
+        # Volume, using THIS section's own flow rate. One pump feeding eight
+        # solenoid valves does not deliver the same litres per second to the
+        # section beside it and the section at the far end of the pipe, so a
+        # single figure would over-state one and under-state the other. It is
+        # published because a grower can judge "25 litres" and cannot judge
+        # "84 seconds".
+        "litres": round(dur * _ml_per_sec(section) / 1000.0, 2),
+        "mlPerSec": _ml_per_sec(section),
         # A second watering is no longer part of the dawn plan. It is decided in
         # the afternoon from measured conditions - see second_session_due() - so
         # there is nothing about it to publish twelve hours in advance, and the
@@ -1640,8 +1725,8 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            # instead of only ever showing the air.
            # Seconds meant nothing physical until the pump was measured. Volume
            # is what a grower can sanity-check, and what the tray's own capacity
-           # is expressed in.
-           "litres": round(secs * PUMP_ML_PER_SEC / 1000.0, 2),
+           # is expressed in. Per-section rate: see _ml_per_sec.
+           "litres": round(secs * _ml_per_sec(section) / 1000.0, 2),
            "trayCapacityL": round(TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000.0, 2),
            "maxSeconds": TRAY_MAX_SEC,
            "trayLevel": level,
@@ -2564,6 +2649,161 @@ async def set_farm_location(body: LocationIn):
     return {"status": "success", "farm": meta}
 
 
+# A house that has never been through the planner has no lifecycle key, and
+# must keep working exactly as it did. Absent therefore means "active" - the
+# state where the system waters and estimates normally.
+LIFECYCLE_STATES = ("calibrating", "active")
+CALIBRATION_DAYS = 3
+# Readings a section must have contributed before its data is worth placing
+# sensors from. At the node's ~40 s report rate this is roughly half a day, so
+# it is the elapsed-days rule that normally binds - this exists to catch a
+# section that was offline for most of the window.
+CALIBRATION_MIN_READINGS = 400
+
+
+def _house_lifecycle(meta: dict) -> str:
+    """The house's state. Absent means active, so old houses are unaffected."""
+    v = ((meta or {}).get("lifecycle") or "").strip().lower()
+    return v if v in LIFECYCLE_STATES else "active"
+
+
+class FlowIn(BaseModel):
+    """Measured millilitres per second for one section, or null to reset."""
+    mlPerSec: Optional[float] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/flow")
+async def set_section_flow(house_id: str, section_id: str, body: FlowIn):
+    """Record what this section's valve actually delivers.
+
+    Measured the same way the pump's 300 ml/s was: open the valve for a known
+    time, collect the water, divide. Worth doing per section because one pump
+    through eight valves and different pipe runs is not one flow rate - the far
+    section receives measurably less, and every litres figure and every dose the
+    model chooses is computed from this number.
+
+    Cleared, it falls back to the pump's own rate.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if body.mlPerSec is None:
+        meta.pop("mlPerSec", None)
+    else:
+        v = float(body.mlPerSec)
+        if not (10.0 <= v <= 5000.0):
+            raise HTTPException(400, "Flow must be between 10 and 5000 ml/s.")
+        meta["mlPerSec"] = round(v, 1)
+    _fb_put(path, meta)
+    return {"status": "success",
+            "mlPerSec": meta.get("mlPerSec"),
+            "effective": _ml_per_sec({"meta": meta}),
+            "isDefault": "mlPerSec" not in meta}
+
+
+class LifecycleIn(BaseModel):
+    lifecycle: str
+
+
+@router.put("/houses/{house_id}/lifecycle")
+async def set_house_lifecycle(house_id: str, body: LifecycleIn):
+    """Move a house between calibrating and active.
+
+    Calibrating means sensors are spread out collecting the data that will
+    decide where they finally go. Active means that decision has been made.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    want = (body.lifecycle or "").strip().lower()
+    if want not in LIFECYCLE_STATES:
+        raise HTTPException(400, f"lifecycle must be one of {LIFECYCLE_STATES}")
+
+    meta["lifecycle"] = want
+    if want == "calibrating":
+        sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+        meta["calibration"] = {
+            "startedAt": _server_now_ms(),
+            "targetDays": CALIBRATION_DAYS,
+            "minReadings": CALIBRATION_MIN_READINGS,
+            "sectionCount": len(sections),
+        }
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id,
+            "lifecycle": want, "calibration": meta.get("calibration")}
+
+
+@router.get("/houses/{house_id}/calibration")
+async def calibration_status(house_id: str):
+    """How calibration is really going, counted from the stored readings.
+
+    Every number here is read from `/farm/history`, never from a timer. A
+    progress bar that advances while a node is unplugged is worse than no
+    progress bar: it promises data that will not exist when the analysis runs,
+    and the farmer finds out three days later.
+
+    `ready` needs BOTH the elapsed days and every section above minReadings, so
+    one dead node extends the wait for the house and says which node it was.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    cal = meta.get("calibration") or {}
+    started = float(cal.get("startedAt") or 0)
+    target_days = float(cal.get("targetDays") or CALIBRATION_DAYS)
+    min_readings = int(cal.get("minReadings") or CALIBRATION_MIN_READINGS)
+
+    now_ms = _server_now_ms()
+    days = (now_ms - started) / 86400000.0 if started else 0.0
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    rows, blockers = [], []
+    for sid in sorted(sections, key=_natural_key):
+        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
+        stamps = [r.get("timestamp") for r in hist.values()
+                  if isinstance(r, dict) and r.get("timestamp")]
+        last = max(stamps) if stamps else None
+        age_min = (now_ms - float(last)) / 60000.0 if last else None
+        ok = len(stamps) >= min_readings
+        rows.append({
+            "id": sid,
+            "name": ((sections[sid] or {}).get("meta") or {}).get("name") or sid,
+            "readings": len(stamps),
+            "needed": min_readings,
+            "lastSeenMinAgo": None if age_min is None else round(age_min, 1),
+            "ok": ok,
+        })
+        if not stamps:
+            blockers.append(f"{sid} has never reported.")
+        elif age_min is not None and age_min > 120:
+            blockers.append(f"{sid} stopped reporting {age_min / 60:.0f} hours ago.")
+        elif not ok:
+            blockers.append(f"{sid} has {len(stamps)} of {min_readings} readings.")
+
+    time_done = days >= target_days
+    data_done = bool(rows) and all(r["ok"] for r in rows)
+    if not time_done:
+        blockers.insert(0, f"{target_days - days:.1f} more days of data needed.")
+
+    return {
+        "status": "success",
+        "houseId": house_id,
+        "lifecycle": _house_lifecycle(meta),
+        # Wiring faults belong next to readiness: a house can finish calibrating
+        # perfectly and still water the wrong plants.
+        "masterMac": _master_for_house(house_id),
+        "channelConflicts": _channel_conflicts(house_id),
+        "daysElapsed": round(days, 2),
+        "targetDays": target_days,
+        "sections": rows,
+        "ready": bool(time_done and data_done),
+        "blockers": blockers,
+    }
+
+
 class MasterIn(BaseModel):
     """MAC of the controller that waters sections having no node, or null."""
     masterMac: Optional[str] = None
@@ -2623,10 +2863,19 @@ async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
         ch = int(body.relayChannel)
         if not (1 <= ch <= MASTER_MAX_CHANNELS):
             raise HTTPException(400, f"Relay channel must be 1-{MASTER_MAX_CHANNELS}.")
+        # Refuse a channel another section already holds. One valve per channel:
+        # letting two sections share one means watering the wrong plants, and
+        # nothing downstream could detect it.
+        taken = {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id}
+        if taken:
+            raise HTTPException(
+                409, f"Channel {ch} is already used by {', '.join(sorted(taken))}. "
+                     f"Give that section a different channel first, or pick another.")
         meta["relayChannel"] = ch
     _fb_put(path, meta)
     return {"status": "success", "relayChannel": meta.get("relayChannel"),
-            "effective": _relay_channel(house_id, section_id)}
+            "effective": _relay_channel(house_id, section_id),
+            "conflicts": _channel_conflicts(house_id)}
 
 
 class PositionIn(BaseModel):
@@ -2718,6 +2967,11 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
     # override can be re-applied to that, which is the same arithmetic the
     # model path does and cannot disagree with it.
     base = f"/farm/houses/{house_id}/sections/{section_id}"
+    # This section's own flow rate, for the litres figures below. Read here
+    # rather than assuming PUMP_ML_PER_SEC: the endpoint rewrites what the app
+    # displays, and displaying the wrong volume is how a grower loses trust in
+    # every other number on the screen.
+    rate = _ml_per_sec({"meta": _fb_get(f"{base}/meta.json") or {}})
 
     plan = _fb_get(f"{base}/plan.json") or {}
     if plan.get("modelDurationSec") is not None:
@@ -2726,7 +2980,8 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
                if out.get("water") else model_dur)
         plan["durationSec"] = dur
         plan["durationSetBy"] = "manual" if out.get("water") else "model"
-        plan["litres"] = round(dur * PUMP_ML_PER_SEC / 1000.0, 2)
+        plan["litres"] = round(dur * rate / 1000.0, 2)
+        plan["mlPerSec"] = rate
         _fb_put(f"{base}/plan.json", plan)
 
     tray = _fb_get(f"{base}/tray.json") or {}
@@ -2744,7 +2999,7 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
         tray["manualSeconds"] = out.get("tray")
         tray["decidedBy"] = ("manual" if out.get("tray") and secs > 0
                              else "model" if secs == model_secs else "safety-override")
-        tray["litres"] = round(secs * PUMP_ML_PER_SEC / 1000.0, 2)
+        tray["litres"] = round(secs * rate / 1000.0, 2)
         _fb_put(f"{base}/tray.json", tray)
 
     return {"status": "success", "durations": out,
