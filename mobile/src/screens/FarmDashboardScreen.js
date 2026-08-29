@@ -37,9 +37,17 @@ export default function FarmDashboardScreen({ navigation }) {
   const [busy, setBusy] = useState(null);
   // { kind: 'farm' } or { kind: 'house', id, name } — null when nothing is open
   const [renaming, setRenaming] = useState(null);
-  // houseId -> true when the farmer has folded that house away
-  const [collapsed, setCollapsed] = useState({});
-  const toggleHouse = (id) => setCollapsed(c => ({ ...c, [id]: !c[id] }));
+  /* houseId -> the farmer's explicit choice for that house. UNSET means
+     collapsed, not expanded.
+  
+     Every house opening at once buries the screen: with four houses of eight
+     sections the farmer scrolls past thirty-two cards to reach the second
+     house's name. Folded, the whole farm is one screen and they open the one
+     they came for. An explicit expand is remembered for as long as the screen
+     is, so this costs a tap once rather than every refresh. */
+  const [expanded, setExpanded] = useState({});
+  const isCollapsed = (id) => !expanded[id];
+  const toggleHouse = (id) => setExpanded(c => ({ ...c, [id]: !c[id] }));
   // live: auto-refresh every 15 s while this screen is open
   const { data, loading, error, refreshing, refresh: pullRefresh, reload: load } =
     useLiveData(getOverview, LIVE_MS);
@@ -192,10 +200,10 @@ export default function FarmDashboardScreen({ navigation }) {
                     onPress={() => toggleHouse(h.houseId)}
                     activeOpacity={0.7}
                     accessibilityRole="button"
-                    accessibilityState={{ expanded: !collapsed[h.houseId] }}
+                    accessibilityState={{ expanded: !isCollapsed(h.houseId) }}
                     accessibilityLabel={
                       `${h.meta?.name || h.houseId}, ${h.sections?.length || 0} sections. `
-                      + `${collapsed[h.houseId] ? 'Collapsed. Tap to expand.' : 'Expanded. Tap to collapse.'}`
+                      + `${isCollapsed(h.houseId) ? 'Collapsed. Tap to expand.' : 'Expanded. Tap to collapse.'}`
                     }>
                     <View style={styles.houseIcon}>
                       <Ionicons name={TYPE_ICON[h.meta?.type] || 'home-outline'} size={19} color={COLORS.primary} />
@@ -223,7 +231,7 @@ export default function FarmDashboardScreen({ navigation }) {
                       </Text>
                     </View>
                     <Ionicons
-                      name={collapsed[h.houseId] ? 'chevron-down' : 'chevron-up'}
+                      name={isCollapsed(h.houseId) ? 'chevron-down' : 'chevron-up'}
                       size={18} color={COLORS.textTertiary} style={{ marginRight: SPACE.sm }} />
                   </TouchableOpacity>
 
@@ -270,7 +278,7 @@ export default function FarmDashboardScreen({ navigation }) {
                   </TouchableOpacity>
                 </View>
 
-                {collapsed[h.houseId] ? (
+                {isCollapsed(h.houseId) ? (
                   <Text style={styles.collapsedNote}>
                     {(() => {
                       const secs = h.sections || [];

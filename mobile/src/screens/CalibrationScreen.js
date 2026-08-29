@@ -34,6 +34,7 @@ export default function CalibrationScreen({ route, navigation }) {
   const [cal,     setCal]     = useState(null);
   const [house,   setHouse]   = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
   const [refresh, setRefresh] = useState(false);
   const [busy,    setBusy]    = useState(false);
   const [toast,   setToast]   = useState(null);
@@ -46,7 +47,9 @@ export default function CalibrationScreen({ route, navigation }) {
       ]);
       setCal(c);
       setHouse(h?.house || null);
+      setError(null);
     } catch (e) {
+      setError(e.message);
       setToast({ text: e.message, kind: 'error' });
     } finally {
       setLoading(false);
@@ -97,6 +100,34 @@ export default function CalibrationScreen({ route, navigation }) {
       <View style={styles.container}>
         <ScreenHeader title="Calibrating" navigation={navigation} showBack />
         <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
+      </View>
+    );
+  }
+
+  /* THE CRASH THIS GUARD EXISTS FOR.
+  
+     `loading` is cleared in a finally block, so it goes false whether the fetch
+     succeeded or threw. With only that guard, a failed request fell straight
+     into a render that reads cal.daysElapsed.toFixed(1) on null - and an
+     unhandled TypeError in a release build does not show an error screen, it
+     closes the app. A house with no calibration block, an offline backend or a
+     404 all took that path.
+  
+     Showing what went wrong and a way to retry is the least this can do; dying
+     silently is the worst. */
+  if (!cal) {
+    return (
+      <View style={styles.container}>
+        <ScreenHeader title="Calibrating" navigation={navigation} showBack />
+        <View style={styles.center}>
+          <Ionicons name="cloud-offline-outline" size={26} color={COLORS.textTertiary} />
+          <Text style={styles.errTitle}>Could not load calibration</Text>
+          <Text style={styles.errTxt}>{error || 'No calibration data for this house.'}</Text>
+          <TouchableOpacity style={styles.retry} onPress={() => { setLoading(true); load(); }}
+            activeOpacity={0.8}>
+            <Text style={styles.retryTxt}>Try again</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -241,7 +272,15 @@ export default function CalibrationScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
-  center:    { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center:    { flex: 1, alignItems: 'center', justifyContent: 'center',
+               padding: SPACE.xl, gap: SPACE.sm },
+  errTitle:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  errTxt:    { color: COLORS.textTertiary, fontSize: FONT.xs, textAlign: 'center',
+               lineHeight: 18 },
+  retry:     { backgroundColor: COLORS.primary, borderRadius: RADIUS.sm,
+               paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm,
+               marginTop: SPACE.sm },
+  retryTxt:  { color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
   scroll:    { padding: SPACE.lg, paddingBottom: SPACE.xl * 3 },
 
   h: { color: COLORS.textSecondary, fontSize: FONT.xs, fontWeight: '800',

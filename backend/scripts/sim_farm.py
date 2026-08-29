@@ -73,10 +73,16 @@ def _fb_post(path: str, data: dict) -> bool:
 HOUSE = "HSIM"
 HOUSE_W, HOUSE_L = 10.0, 14.0        # metres
 
-# Which of the nine get a pretend node. Five anchors leaves one spare above
-# MIN_ANCHORS, so the house keeps working if one is switched off to see what
-# happens - which is the more interesting demo.
-SENSORED = {"S1", "S3", "S5", "S7", "S9"}
+# Which sections keep a node AFTER calibration. Five anchors leaves one spare
+# above MIN_ANCHORS, so the house keeps working if one is switched off - which
+# is the more interesting demo.
+#
+# DURING calibration every section has one: that is what a calibration window
+# is, and it is the data the placement decision is made from. --phase selects
+# which set reports, because pushing only these five made four sections read
+# "No node" on a house that was supposedly mid-calibration.
+KEPT_AFTER = {"S1", "S3", "S5", "S7", "S9"}
+SENSORED = KEPT_AFTER          # replaced at startup when --phase calib
 
 RNG = random.Random(7)               # fixed, so the layout is the same each run
 
@@ -298,10 +304,24 @@ def main() -> None:
     ap.add_argument("--every", type=int, default=60, help="seconds between pushes")
     ap.add_argument("--hour", type=float, default=None,
                     help="pretend it is this hour (0-24), so the sun-driven gradient shows")
+    ap.add_argument("--phase", choices=("calib", "active"), default="active",
+                    help="calib: every section reports, as during calibration. "
+                         "active: only the sections that keep a node, so the "
+                         "rest are estimated by kriging.")
     ap.add_argument("--backfill", type=float, default=None, metavar="DAYS",
                     help="write DAYS of history dated into the past, so the "
                          "calibration flow can be tested without waiting")
     a = ap.parse_args()
+
+    global SENSORED
+    if a.phase == "calib":
+        SENSORED = set(layout().keys())
+        print("phase: calibrating - all %d sections reporting\n"
+              % len(SENSORED))
+    else:
+        SENSORED = set(KEPT_AFTER)
+        print("phase: active - %d sections reporting, %d estimated\n"
+              % (len(SENSORED), len(layout()) - len(SENSORED)))
 
     if a.remove:
         remove()
