@@ -104,6 +104,10 @@ export default function HousePlannerScreen({ navigation }) {
       }));
       const r = await addHouse({
         name: name.trim(), type, plantCount: 0, sections,
+        // The dimensions were asked for on this very screen and then dropped at
+        // creation, so every later map had nothing to draw the house to scale
+        // with - a section at (7, 9) is meaningless without them.
+        width, length,
       });
       const houseId = r.houseId || r.id;
 
