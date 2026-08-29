@@ -579,6 +579,20 @@ class PlanIn(BaseModel):
     maxSensors: int = Field(8, ge=MIN_SENSORS, le=MAX_SENSORS_CAP)
 
 
+# NOT PART OF THE APP FLOW ANY MORE.
+#
+# This placed sensors from a field GENERATED out of house geometry, and the app
+# called it the moment a farmer typed in the dimensions - producing a confident
+# table and an "optimal placement" before a single sensor existed. That number
+# was an assumption about where the sun falls, dressed as a result, and a farmer
+# could install to it and never learn it was a guess. Phase 1 now lays sections
+# on an even grid and says so, and the placement worth acting on comes from
+# analyze-placement once real readings exist.
+#
+# It is kept because it is the VALIDATION the report rests on: a field whose
+# ground truth is known is the only place PySensors can be measured against a
+# regular grid and against random placement, and that comparison is what makes
+# the accuracy figure defensible. Called by the thesis, not by the app.
 @router.post("/plan")
 async def plan_house(body: PlanIn) -> dict:
     """Best sensor positions for a house, with the evidence for the choice.
