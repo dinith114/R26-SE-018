@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-29T06:04:13.123423",
+  "timestamp": "2026-08-30T23:37:05.470237",
   "evaluation": "StratifiedGroupKFold by plant; masked features",
   "feature_sets_compared": [
     "handcrafted",
@@ -9,8 +9,8 @@
   "traits": {
     "leaf_condition": {
       "trait": "leaf_condition",
-      "best_model": "Random Forest",
-      "feature_set": "combined",
+      "best_model": "Extra Trees",
+      "feature_set": "cnn",
       "baseline": 0.5014,
       "n_plants": 28,
       "n_images": 357,
@@ -27,32 +27,9 @@
       ],
       "models": {
         "Random Forest": {
-          "accuracy": 0.6331,
-          "balanced_accuracy": 0.4635,
-          "f1": 0.6113,
-          "beats_baseline": true,
-          "confusion_matrix": [
-            [
-              93,
-              58,
-              0
-            ],
-            [
-              46,
-              132,
-              1
-            ],
-            [
-              11,
-              15,
-              1
-            ]
-          ]
-        },
-        "Extra Trees": {
-          "accuracy": 0.619,
-          "balanced_accuracy": 0.4761,
-          "f1": 0.6053,
+          "accuracy": 0.5406,
+          "balanced_accuracy": 0.403,
+          "f1": 0.5234,
           "beats_baseline": true,
           "confusion_matrix": [
             [
@@ -61,131 +38,154 @@
               1
             ],
             [
-              56,
-              122,
+              82,
+              96,
               1
             ],
             [
-              11,
-              13,
+              7,
+              19,
+              1
+            ]
+          ]
+        },
+        "Extra Trees": {
+          "accuracy": 0.5574,
+          "balanced_accuracy": 0.4247,
+          "f1": 0.5456,
+          "beats_baseline": true,
+          "confusion_matrix": [
+            [
+              96,
+              52,
               3
+            ],
+            [
+              74,
+              101,
+              4
+            ],
+            [
+              10,
+              15,
+              2
             ]
           ]
         },
         "Logistic Regression": {
-          "accuracy": 0.5462,
-          "balanced_accuracy": 0.4361,
-          "f1": 0.5452,
-          "beats_baseline": true,
+          "accuracy": 0.4482,
+          "balanced_accuracy": 0.3577,
+          "f1": 0.4496,
+          "beats_baseline": false,
           "confusion_matrix": [
             [
-              90,
-              49,
-              12
+              82,
+              59,
+              10
             ],
             [
-              70,
-              101,
-              8
+              84,
+              75,
+              20
             ],
             [
-              10,
-              13,
-              4
+              9,
+              15,
+              3
             ]
           ]
         },
         "SVM (RBF)": {
-          "accuracy": 0.6134,
-          "balanced_accuracy": 0.4574,
-          "f1": 0.5927,
-          "beats_baseline": true,
+          "accuracy": 0.4986,
+          "balanced_accuracy": 0.371,
+          "f1": 0.487,
+          "beats_baseline": false,
           "confusion_matrix": [
             [
-              83,
-              68,
-              0
+              84,
+              63,
+              4
             ],
             [
-              45,
-              134,
-              0
+              82,
+              93,
+              4
             ],
             [
-              9,
-              16,
-              2
+              7,
+              19,
+              1
             ]
           ]
         }
       },
       "all_feature_sets": {
         "handcrafted": {
-          "accuracy": 0.5518,
-          "balanced_accuracy": 0.4392,
-          "f1": 0.5494,
+          "accuracy": 0.5154,
+          "balanced_accuracy": 0.4157,
+          "f1": 0.5163,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              88,
-              53,
-              10
+              90,
+              48,
+              13
             ],
             [
-              68,
-              105,
-              6
+              80,
+              90,
+              9
             ],
             [
-              16,
-              7,
+              18,
+              5,
               4
             ]
           ]
         },
         "cnn": {
-          "accuracy": 0.6218,
-          "balanced_accuracy": 0.4759,
-          "f1": 0.6061,
+          "accuracy": 0.5574,
+          "balanced_accuracy": 0.4247,
+          "f1": 0.5456,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              90,
-              61,
-              0
-            ],
-            [
-              49,
-              129,
-              1
-            ],
-            [
-              8,
-              16,
+              96,
+              52,
               3
+            ],
+            [
+              74,
+              101,
+              4
+            ],
+            [
+              10,
+              15,
+              2
             ]
           ]
         },
         "combined": {
-          "accuracy": 0.6331,
-          "balanced_accuracy": 0.4635,
-          "f1": 0.6113,
+          "accuracy": 0.5462,
+          "balanced_accuracy": 0.425,
+          "f1": 0.5369,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              93,
-              58,
-              0
+              88,
+              59,
+              4
             ],
             [
-              46,
-              132,
-              1
+              73,
+              104,
+              2
             ],
             [
               11,
-              15,
-              1
+              13,
+              3
             ]
           ]
         }
@@ -211,14 +211,14 @@
       ],
       "models": {
         "Random Forest": {
-          "accuracy": 0.6583,
-          "balanced_accuracy": 0.469,
-          "f1": 0.6346,
+          "accuracy": 0.6723,
+          "balanced_accuracy": 0.4775,
+          "f1": 0.6471,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              156,
-              39,
+              161,
+              34,
               0
             ],
             [
@@ -227,62 +227,62 @@
               0
             ],
             [
-              18,
-              5,
+              20,
+              3,
               1
             ]
           ]
         },
         "Extra Trees": {
-          "accuracy": 0.6835,
-          "balanced_accuracy": 0.5008,
-          "f1": 0.6635,
+          "accuracy": 0.6975,
+          "balanced_accuracy": 0.5143,
+          "f1": 0.6793,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              158,
-              37,
+              156,
+              38,
+              1
+            ],
+            [
+              47,
+              91,
               0
             ],
             [
-              54,
-              84,
-              0
-            ],
-            [
-              15,
-              7,
+              17,
+              5,
               2
             ]
           ]
         },
         "Logistic Regression": {
-          "accuracy": 0.5378,
-          "balanced_accuracy": 0.4205,
-          "f1": 0.5372,
-          "beats_baseline": false,
+          "accuracy": 0.6218,
+          "balanced_accuracy": 0.4796,
+          "f1": 0.6179,
+          "beats_baseline": true,
           "confusion_matrix": [
             [
-              110,
-              72,
-              13
+              129,
+              55,
+              11
             ],
             [
-              55,
-              79,
+              44,
+              90,
               4
             ],
             [
-              12,
-              9,
+              19,
+              2,
               3
             ]
           ]
         },
         "SVM (RBF)": {
-          "accuracy": 0.6415,
-          "balanced_accuracy": 0.4559,
-          "f1": 0.6175,
+          "accuracy": 0.6835,
+          "balanced_accuracy": 0.4921,
+          "f1": 0.6617,
           "beats_baseline": true,
           "confusion_matrix": [
             [
@@ -291,13 +291,13 @@
               0
             ],
             [
-              64,
-              74,
+              49,
+              89,
               0
             ],
             [
-              17,
-              6,
+              21,
+              2,
               1
             ]
           ]
@@ -305,70 +305,70 @@
       },
       "all_feature_sets": {
         "handcrafted": {
-          "accuracy": 0.4818,
-          "balanced_accuracy": 0.416,
-          "f1": 0.4824,
+          "accuracy": 0.5294,
+          "balanced_accuracy": 0.4232,
+          "f1": 0.5271,
           "beats_baseline": false,
           "confusion_matrix": [
             [
-              113,
-              76,
-              6
+              96,
+              85,
+              14
             ],
             [
-              75,
-              52,
-              11
+              44,
+              90,
+              4
             ],
             [
-              5,
-              12,
-              7
+              13,
+              8,
+              3
             ]
           ]
         },
         "cnn": {
-          "accuracy": 0.6835,
-          "balanced_accuracy": 0.5008,
-          "f1": 0.6635,
+          "accuracy": 0.6975,
+          "balanced_accuracy": 0.5143,
+          "f1": 0.6793,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              158,
-              37,
+              156,
+              38,
+              1
+            ],
+            [
+              47,
+              91,
               0
             ],
             [
-              54,
-              84,
-              0
-            ],
-            [
-              15,
-              7,
+              17,
+              5,
               2
             ]
           ]
         },
         "combined": {
-          "accuracy": 0.6359,
-          "balanced_accuracy": 0.4782,
-          "f1": 0.6203,
+          "accuracy": 0.6807,
+          "balanced_accuracy": 0.5176,
+          "f1": 0.6674,
           "beats_baseline": true,
           "confusion_matrix": [
             [
-              148,
-              47,
+              147,
+              46,
+              2
+            ],
+            [
+              45,
+              93,
               0
             ],
             [
-              62,
-              76,
-              0
-            ],
-            [
-              12,
-              9,
+              16,
+              5,
               3
             ]
           ]

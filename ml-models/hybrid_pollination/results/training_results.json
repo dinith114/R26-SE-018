@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-28T21:27:10.949859",
+  "timestamp": "2026-08-30T23:44:02.085545",
   "evaluation": {
     "method": "StratifiedGroupKFold cross-validation",
     "grouped_by": "sample_id (physical plant)",
@@ -31,102 +31,102 @@
   ],
   "models": {
     "Random Forest": {
-      "accuracy": 0.6359,
-      "balanced_accuracy": 0.5175,
-      "precision": 0.6197,
-      "recall": 0.6359,
-      "f1": 0.6105,
+      "accuracy": 0.5294,
+      "balanced_accuracy": 0.4042,
+      "precision": 0.5288,
+      "recall": 0.5294,
+      "f1": 0.5246,
       "beats_baseline": false,
       "confusion_matrix": [
         [
-          1,
-          8,
-          35
-        ],
-        [
           0,
-          73,
-          12
+          3,
+          41
         ],
         [
-          8,
-          67,
-          153
+          5,
+          52,
+          28
+        ],
+        [
+          27,
+          64,
+          137
         ]
       ]
     },
     "SVM (RBF)": {
-      "accuracy": 0.6527,
-      "balanced_accuracy": 0.5165,
-      "precision": 0.6236,
-      "recall": 0.6527,
-      "f1": 0.6286,
-      "beats_baseline": true,
+      "accuracy": 0.479,
+      "balanced_accuracy": 0.405,
+      "precision": 0.5212,
+      "recall": 0.479,
+      "f1": 0.4789,
+      "beats_baseline": false,
       "confusion_matrix": [
         [
-          1,
-          8,
-          35
+          0,
+          7,
+          37
         ],
         [
-          1,
-          69,
-          15
+          4,
+          63,
+          18
         ],
         [
-          11,
-          54,
-          163
+          37,
+          83,
+          108
         ]
       ]
     },
     "Logistic Regression": {
-      "accuracy": 0.7283,
-      "balanced_accuracy": 0.5892,
-      "precision": 0.74,
-      "recall": 0.7283,
-      "f1": 0.733,
+      "accuracy": 0.6975,
+      "balanced_accuracy": 0.5633,
+      "precision": 0.7023,
+      "recall": 0.6975,
+      "f1": 0.6947,
       "beats_baseline": true,
       "confusion_matrix": [
         [
           0,
-          6,
-          38
+          9,
+          35
         ],
         [
-          0,
-          85,
+          4,
+          81,
           0
         ],
         [
-          50,
-          3,
-          175
+          39,
+          21,
+          168
         ]
       ]
     },
     "XGBoost": {
-      "accuracy": 0.7339,
-      "balanced_accuracy": 0.5896,
-      "precision": 0.7461,
-      "recall": 0.7339,
-      "f1": 0.7392,
+      "accuracy": 0.7171,
+      "balanced_accuracy": 0.5784,
+      "precision": 0.7187,
+      "recall": 0.7171,
+      "f1": 0.7148,
       "beats_baseline": true,
       "confusion_matrix": [
         [
           0,
-          8,
-          36
+          9,
+          35
         ],
         [
-          0,
-          84,
+          1,
+          83,
           1
         ],
         [
-          50,
-          0,
-          178
+          43,
+          12,
+          173
         ]
       ]
     }
