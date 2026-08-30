@@ -1,0 +1,28 @@
+seed_parent,pollen_parent,grex,seed_genus,pollen_genus,cross_type,year,source
+V. coerulea,V. sanderiana,V. Rothschildiana,Vanda,Vanda,interspecific,1931,RHS
+V. Rothschildiana,V. sanderiana,V. Onomea,Vanda,Vanda,interspecific,,RHS
+V. luzonica,V. sanderiana,V. Manila,Vanda,Vanda,interspecific,,RHS
+V. merrillii,V. sanderiana,V. Mary Foster,Vanda,Vanda,interspecific,,RHS
+V. dearei,V. sanderiana,V. Ellen Noa,Vanda,Vanda,interspecific,,RHS
+V. sanderiana,V. denisoniana,V. Denisander,Vanda,Vanda,interspecific,,RHS
+V. tessellata,V. denisoniana,V. Golden Doubloon,Vanda,Vanda,interspecific,,RHS
+V. tessellata,V. testacea,V. Stephen-Scott Young,Vanda,Vanda,interspecific,,RHS
+V. coerulea,V. tessellata,V. Violeta,Vanda,Vanda,interspecific,1959,RHS
+V. coerulea,V. tessellata,V. x amoena,Vanda,Vanda,interspecific,,natural hybrid
+V. sanderiana,V. tricolor,V. Tatzeri,Vanda,Vanda,interspecific,1919,RHS
+V. sanderiana,V. suavis,V. Burgeffii,Vanda,Vanda,interspecific,,RHS
+V. tessellata,V. Fat Tuesday,V. Alexander Bristol,Vanda,Vanda,interspecific,2026,RHS
+V. tessellata,V. wightii,V. Allison Craig Scanlan,Vanda,Vanda,interspecific,2021,RHS
+V. tessellata,Aerides lawrenceae,Aeridovanda Frank Johnston,Vanda,Aerides,intergeneric,1963,RHS
+V. tessellata,Aerides leeana,Aeridovanda Les Miller,Vanda,Aerides,intergeneric,1962,RHS
+V. tessellata,Aranda Redland Sunset,Aranda Michael Coronado,Vanda,Aranda,intergeneric,1993,RHS
+V. tessellata,Luisia macrantha,Luisanda Sarojini Menon,Vanda,Luisia,intergeneric,2018,RHS
+V. tessellata,Papilionanthe Poepoe,Papilionanda Rosanna,Vanda,Papilionanthe,intergeneric,2004,RHS
+V. tessellata,Paraphalaenopsis denevei,Paravanda Genevieve Tan,Vanda,Paraphalaenopsis,intergeneric,1970,RHS
+V. tessellata,Renanopsis Lena Rowold,Renvanvanda Sian Hee Wee,Vanda,Renanopsis,intergeneric,1978,RHS
+Aerides flabellata,V. tessellata,Aeridovanda Happiness,Aerides,Vanda,intergeneric,2025,RHS
+Aerides maculosa,V. tessellata,Aeridovanda Mem. Nilkanth Bhide,Aerides,Vanda,intergeneric,2023,RHS
+Aerides odorata,V. tessellata,Aeridovanda Mem. Premier Chou,Aerides,Vanda,intergeneric,1981,RHS
+Aeridovanda Suwannaphum Sun,V. tessellata,Aeridovanda Suwannaphum Willow,Aeridovanda,Vanda,intergeneric,2025,RHS
+Arachnis flos-aeris,V. tessellata,Aranda Bussaracum,Arachnis,Vanda,intergeneric,1975,RHS
+Aranda Blue Star,V. tessellata,Aranda Darwin Peh,Aranda,Vanda,intergeneric,1982,RHS
