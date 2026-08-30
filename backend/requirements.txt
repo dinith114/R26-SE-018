@@ -23,7 +23,15 @@ numpy==1.26.4
 pandas==2.2.2
 joblib==1.4.2
 
-# TensorFlow Lite (for model inference)
+# Model inference (Component 1 -- disease detection)
+# Loads the .keras files in ml-models/disease_detection/models/.
+# tensorflow-cpu, not tensorflow: the API server does not need a GPU, and the
+# CPU build is a much smaller install. Version matches the local training
+# environment -- a .keras file saved by a newer TensorFlow may not load on an
+# older one.
+tensorflow-cpu==2.21.0
+
+# TensorFlow Lite (future: on-device inference in the mobile app)
 # tflite-runtime==2.14.0
 
 # File Upload
