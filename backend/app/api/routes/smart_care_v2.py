@@ -2401,6 +2401,88 @@ def command_status(house_id: str, section_id: str,
     cmd = _fb_get(f"{base}/command.json") or {}
     ack = _fb_get(f"{base}/commandAck.json") or {}
 
+    # THE COMMAND IS PROBABLY NOT HERE ANY MORE.
+    #
+    # Every pour now goes through the master's queue - see _issue_node_command,
+    # which stopped writing the section's own command document for water and
+    # tray. This function was never updated to match, so it kept reading a
+    # section path that only Wi-Fi commands still touch, compared the id it was
+    # asked about against an ack from days earlier, found no match, and reported
+    # "sent, not yet confirmed" forever. The pours themselves were running
+    # perfectly: on 30 Aug the board acked three of them - 2 s, 8 s, 2 s - in
+    # the master's ledger while the app sat on "Waiting for the node to pick
+    # this up".
+    #
+    # The issuing was unified and the OBSERVING was not, which is the same gap
+    # in reverse that the command-path work closed a fortnight ago.
+    if id and ack.get("id") != id:
+        master = _master_for_house(house_id)
+        if master:
+            # Is it pouring RIGHT NOW? The controller publishes this the moment
+            # before it opens the valve and deletes it when the valve shuts, so
+            # `startedAt` is the node's own clock rather than a moment the phone
+            # guessed. That is the only honest basis for a countdown.
+            run = _fb_get(f"/farm/masters/{master}/running.json") or {}
+            pouring = run.get("id") == id
+            if pouring:
+                started = run.get("startedAt")
+                secs_r = int(run.get("durationSec") or 0)
+                ack = {"id": id, "action": cmd.get("action"),
+                       "durationSec": secs_r, "started": True, "done": False,
+                       "stopped": False, "at": started, "routed": True}
+                cmd = {**cmd, "id": id, "durationSec": secs_r}
+                m_ack = {}
+            else:
+                m_ack = _fb_get(f"/farm/masters/{master}/acks/{id}.json") or {}
+            if m_ack and m_ack.get("id") == id:
+                outcome = m_ack.get("outcome")
+                ran = int(m_ack.get("ranSec") or 0)
+                # The final word on the pour. Until validation-1.9 this was
+                # the ONLY thing the controller ever said - written at the end,
+                # with nothing at the start - so a routed pour had no moment it
+                # could honestly be called running and no start time to count
+                # down from. The running marker read above closed that gap; the
+                # countdown comes from the node's clock, never from the phone's.
+                ack = {"id": id,
+                       "action": cmd.get("action") or m_ack.get("action"),
+                       "durationSec": ran,
+                       "started": True,
+                       # ANY outcome in this ledger means the run is over.
+                       #
+                       # First cut listed only done/ok, so a pour the farmer
+                       # stopped came back done=False and the app went straight
+                       # back to waiting forever - the exact bug being fixed,
+                       # reintroduced one line lower down. The refusals
+                       # (invalid, unsupported, stale, zero) are terminal too:
+                       # the controller saw the command and declined it, and a
+                       # farmer left watching a spinner learns nothing.
+                       #
+                       # What separates them is not `done` but `ranSec` and
+                       # `outcome`: a refusal reports 0 seconds, so nothing here
+                       # can be mistaken for water that moved.
+                       "done": True,
+                       # The controller now distinguishes a pour that ran its
+                       # course from one the farmer cut short, and the ledger
+                       # must not report the second as the first.
+                       "stopped": outcome == "stopped",
+                       "at": m_ack.get("at"),
+                       "routed": True,
+                       "outcome": outcome,
+                       "ranSec": ran}
+                cmd = {**cmd, "id": id, "durationSec": ran}
+            elif not pouring and _fb_get(f"/farm/masters/{master}/queue/{id}.json"):
+                # Still in the controller's queue: accepted, not yet poured.
+                # Distinguishing this from "never arrived" is the difference
+                # between a farmer waiting and a farmer going to check a board.
+                #
+                # Guarded by `pouring` because the entry is NOT removed when the
+                # pour starts - the firmware deletes it only after acking, so it
+                # sits there for the whole pour. Without the guard this branch
+                # overwrote the live countdown with "queued" on every poll, and
+                # the app went back to saying nothing was happening while water
+                # was moving. Caught in test, not in the field.
+                ack = {"id": None, "queued": True}
+
     cid = cmd.get("id")
 
     # Which command is the caller asking about?
@@ -2459,6 +2541,11 @@ def command_status(house_id: str, section_id: str,
                     "action": cmd.get("action"),
                     "durationSec": cmd.get("durationSec"),
                     "issuedAt": cmd.get("issuedAt")},
+        # True when this pour was carried out by the house's relay controller
+        # rather than by the section's own board, which is now the normal case.
+        "routed": bool(ack.get("routed")),
+        "queuedAtController": bool(ack.get("queued")),
+        "outcome": ack.get("outcome"),
         "ack": {"id": ack.get("id"),
                 "action": ack.get("action"),
                 "durationSec": ack.get("durationSec"),
@@ -2489,6 +2576,29 @@ def stop_section(house_id: str, section_id: str) -> dict:
     """
     if not _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json"):
         raise HTTPException(404, f"Section '{house_id}/{section_id}' not found")
+
+    # A ROUTED pour is stopped through the controller, not through the section.
+    #
+    # Sending "stop" into the master queue is what used to happen, and the
+    # firmware answered `unsupported` because masterRunOne only accepts water
+    # and tray - so the button did nothing and the pump ran its full length.
+    # Two acks recorded exactly that on 30 Aug. The controller now watches
+    # /farm/masters/{mac}/stop while it pours, so the stop goes there, naming
+    # the run it is meant for.
+    master = _master_for_house(house_id)
+    if master:
+        run = _fb_get(f"/farm/masters/{master}/running.json") or {}
+        if run.get("targetSection") == section_id and run.get("id"):
+            _fb_put(f"/farm/masters/{master}/stop.json", run["id"])
+            return {"status": "success",
+                    "command": {"id": run["id"], "action": "stop",
+                                "routedTo": master},
+                    "message": "Stop sent to the controller. It checks every "
+                               "few seconds while pouring."}
+        # Nothing of ours is running there. Say so rather than writing a stop
+        # that would sit around and cut short the NEXT pour.
+        return {"status": "success", "command": None,
+                "message": "Nothing is pouring in this section right now."}
 
     cmd = _issue_node_command(house_id, section_id, "stop", 0)
     if not cmd:
@@ -3230,11 +3340,50 @@ async def edit_house(house_id: str, body: HouseEdit):
 
 @router.delete("/houses/{house_id}")
 async def delete_house(house_id: str):
-    """Remove a house and everything under it."""
+    """Remove a house, its readings, and the claim its nodes have on it.
+
+    RELEASING THE NODES IS NOT TIDYING UP - it is what makes the delete stick.
+
+    Deleting the subtree alone left every node still holding
+    `assignedTo: "H3/S4"`. Firebase creates whatever path you write to, so on
+    their next cycle those boards PUT `/farm/houses/H3/sections/S4/latest.json`
+    and the house came back - and the automation engine added `/tray` beside it.
+    What returned had no `meta`, so the app showed a nameless "H3" full of
+    sections that could not be opened, and deleting it again did nothing,
+    because the writers were never the house.
+
+    Observed on 30 Aug 2026: H3 was deleted and reappeared with six sections
+    whose only keys were `latest` and `tray`, still being written a minute
+    later.
+
+    `delete_section` has done this per-section for months and says why. This
+    endpoint never got the same treatment.
+    """
     if not _fb_get(f"/farm/houses/{house_id}/meta.json"):
         raise HTTPException(404, f"House '{house_id}' not found")
+
+    # Release first. A node freed before the delete cannot recreate what the
+    # delete is about to remove; the other order leaves exactly the gap above.
+    freed = []
+    try:
+        devs = _fb_get("/devices.json") or {}
+        for mac, rec in devs.items():
+            assigned = (rec or {}).get("assignedTo") or ""
+            if assigned.startswith(f"{house_id}/"):
+                _fb_delete(f"/devices/{mac}/assignedTo.json")
+                freed.append(mac)
+    except Exception:
+        # Never block the delete on registry cleanup - a stale link is
+        # recoverable, a house that refuses to delete is not.
+        pass
+
     _fb_delete(f"/farm/houses/{house_id}.json")
-    return {"status": "success", "deleted": house_id}
+    # The archive lives outside the house subtree since the history move, so it
+    # survives the line above and would otherwise be orphaned forever.
+    _fb_delete(f"/farm/history/{house_id}.json")
+    _fb_delete(f"/farm/events/{house_id}.json")
+    _DEVICE_CACHE["devices"] = None
+    return {"status": "success", "deleted": house_id, "nodesFreed": freed}
 
 
 @router.delete("/houses/{house_id}/sections/{section_id}")
