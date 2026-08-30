@@ -655,8 +655,28 @@ def _channel_map(house_id: str) -> dict:
     return out
 
 
+def _shared_pumps(house_id: str) -> bool:
+    """Is this house plumbed as ONE pump per job rather than a valve per section?"""
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    return hmeta.get("waterChannel") is not None or hmeta.get("trayChannel") is not None
+
+
 def _channel_conflicts(house_id: str) -> list:
-    """Human-readable warnings, one per shared channel. Empty when clean."""
+    """Human-readable warnings, one per shared channel. Empty when clean.
+
+    SILENT WHEN THE HOUSE IS ON SHARED PUMPS, because then sharing is the
+    wiring, not a fault. This farm runs one watering pump and one tray pump for
+    the whole house, so every section legitimately resolves to the same two
+    channels; reporting that as a conflict would have put a permanent red
+    warning on a correctly plumbed house - and would have made the real warning
+    worthless the moment a house did get per-section valves.
+
+    It also retires a warning that was never a fault: H1 was flagged because S8
+    was pinned to channel 1 while S1 derived it. With one pump they are supposed
+    to share it.
+    """
+    if _shared_pumps(house_id):
+        return []
     return [f"Channel {ch} is claimed by {' and '.join(ids)} - "
             f"they would open the same valve."
             for ch, ids in sorted(_channel_map(house_id).items())
@@ -695,6 +715,28 @@ def _relay_channel(house_id: str, section_id: str,
             return ch
     except (KeyError, TypeError, ValueError):
         pass
+
+    # TWO PUMPS SERVING THE WHOLE HOUSE is how this farm is actually plumbed:
+    # one pump for watering, a separate one for the trays, wired to IN1/D25 and
+    # IN2/D26 - which are channels 1 and 2 in CHANNEL_PIN, and the same two pins
+    # the single-node build calls RELAY_WATER and RELAY_TRAY.
+    #
+    # So a section does not normally own a channel at all; it shares the house's.
+    # Modelling this only per-section would have been wrong twice: every section
+    # would need the same numbers copied into it, and the duplicate-channel guard
+    # would then refuse the correct wiring as a conflict.
+    #
+    # A house with a valve per section still overrides per-section above, so the
+    # eight-channel design is unaffected - it just is not what is on the bench.
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    hkey = "trayChannel" if action == "tray" else "waterChannel"
+    try:
+        ch = int(hmeta[hkey])
+        if 1 <= ch <= MASTER_MAX_CHANNELS:
+            return ch
+    except (KeyError, TypeError, ValueError):
+        pass
+
     if action == "tray":
         return None
     ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
@@ -3180,6 +3222,58 @@ async def set_house_master(house_id: str, body: MasterIn):
                         "Cleared. Sections without a node can no longer be watered.")}
 
 
+class PumpsIn(BaseModel):
+    """The two relay channels this house's pumps sit on."""
+    waterChannel: Optional[int] = None
+    trayChannel: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/pumps")
+async def set_house_pumps(house_id: str, body: PumpsIn):
+    """Which channels drive the watering pump and the tray pump.
+
+    This farm has TWO PUMPS, not one pump behind eight valves: watering runs off
+    IN1/D25 and the trays off IN2/D26, which are channels 1 and 2 and the same
+    pins the single-node build calls RELAY_WATER and RELAY_TRAY. They serve the
+    whole house, so they belong to the house rather than being copied into every
+    section.
+
+    Setting them is what stops Fill Tray opening the watering line. Until a tray
+    channel exists somewhere - here or on the section - tray fills are refused
+    rather than sent to whatever valve happened to be known.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    for field, key in (("waterChannel", "waterChannel"), ("trayChannel", "trayChannel")):
+        val = getattr(body, field)
+        if val is None:
+            meta.pop(key, None)
+            continue
+        ch = int(val)
+        if not (1 <= ch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"{field} must be 1-{MASTER_MAX_CHANNELS}.")
+        meta[key] = ch
+
+    # One relay cannot be two pumps. Sharing a channel here would mean Fill Tray
+    # and Water Now driving the same motor, which is the bug this whole change
+    # exists to remove.
+    if (meta.get("waterChannel") is not None
+            and meta.get("waterChannel") == meta.get("trayChannel")):
+        raise HTTPException(
+            409, "The watering pump and the tray pump cannot share a channel - "
+                 "one relay drives one motor, so they would be the same pump.")
+
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id,
+            "waterChannel": meta.get("waterChannel"),
+            "trayChannel": meta.get("trayChannel"),
+            "message": ("Tray fills will now use their own pump."
+                        if meta.get("trayChannel") else
+                        "No tray pump set, so tray fills stay refused.")}
+
+
 class ChannelIn(BaseModel):
     relayChannel: Optional[int] = None
     # The valve that fills this section's humidity tray. A SEPARATE output from
@@ -3209,7 +3303,8 @@ async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
         # Refuse a channel another section already holds. One valve per channel:
         # letting two sections share one means watering the wrong plants, and
         # nothing downstream could detect it.
-        taken = {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id}
+        taken = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id})
         if taken:
             raise HTTPException(
                 409, f"Channel {ch} is already used by {', '.join(sorted(taken))}. "
@@ -3225,7 +3320,8 @@ async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
         # A tray valve that is also somebody's watering valve is the bug this
         # whole change exists to stop, so it is refused here too - including
         # against this section's own watering channel.
-        clash = {sid for sid in _channel_map(house_id).get(tch, []) if sid != section_id}
+        clash = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(tch, []) if sid != section_id})
         if clash:
             raise HTTPException(
                 409, f"Channel {tch} is already used by {', '.join(sorted(clash))}.")
