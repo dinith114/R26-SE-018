@@ -40,7 +40,7 @@ import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
 import { FarmSkeleton } from '../components/Skeleton';
-import { FreshnessBadge, FarmStaleBanner, STATE_STYLE } from '../components/Freshness';
+import { FreshnessBadge, FarmStaleBanner, STATE_STYLE, isFault } from '../components/Freshness';
 import RenameDialog from '../components/RenameDialog';
 import SelectSheet from '../components/SelectSheet';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -540,7 +540,11 @@ export default function FarmDashboardScreen({ navigation }) {
                 const ra = attentionOf(a)?.rank ?? 99, rb = attentionOf(b)?.rank ?? 99;
                 return ra - rb;
               });
-              const bad  = secs.filter(z => z.freshness && !z.freshness.trusted).length;
+              // isFault, not !trusted: an estimated zone carries trusted:false
+              // because it is not a measurement, and counting those made a
+              // correctly working house report "4 not reporting".
+              const bad  = secs.filter(z => isFault(z.freshness)).length;
+              const est  = secs.filter(z => z.freshness?.state === 'estimated').length;
               const need = secs.filter(z => z.tray?.status === 'fill').length;
 
               return (
@@ -641,6 +645,9 @@ export default function FarmDashboardScreen({ navigation }) {
                       const bits = [];
                       if (bad)  bits.push(`${bad} not reporting`);
                       if (need) bits.push(`${need} need water`);
+                      // Stated, but as a fact rather than a problem - and only
+                      // when there is nothing wrong to say instead.
+                      if (!bits.length && est) return `${est} estimated, the rest are fine`;
                       return bits.length ? bits.join(', ') : 'All sections are fine';
                     })()}
                   </Text>
@@ -658,7 +665,13 @@ export default function FarmDashboardScreen({ navigation }) {
                      Trust decides the colour now; humidity only decides it
                      once the reading is trustworthy. */
                   const fx   = s.freshness;
-                  const good = fx?.trusted !== false;
+                  /* `good` drives whether the numbers are shown in colour. An
+                     estimate is not a measurement, but it is also not stale -
+                     greying it out put a working interpolated zone in the same
+                     visual state as a dead node. It gets its own treatment
+                     below: readable, in the estimated colour, badged. */
+                  const est  = fx?.state === 'estimated';
+                  const good = fx?.trusted !== false || est;
                   const fst  = STATE_STYLE[fx?.state] || STATE_STYLE.never;
                   const accent = good ? rh.color : fst.color;
                   return (
@@ -705,6 +718,7 @@ export default function FarmDashboardScreen({ navigation }) {
                                 so they kept signalling good or bad. */}
                             <Text style={[styles.envVal,
                                           { color: !good ? COLORS.textTertiary
+                                                 : est ? COLORS.estimated
                                                  : col || COLORS.text }]}
                               numberOfLines={1}>{val}</Text>
                             <Text style={styles.envLbl} numberOfLines={1}

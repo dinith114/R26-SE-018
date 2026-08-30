@@ -21,7 +21,9 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import DigitalTwin from '../components/DigitalTwin';
 import Toast from '../components/Toast';
-import { applyPlacement, getHouse } from '../services/careV2';
+import {
+  applyPlacement, getHouse, getDevices, setHouseMaster,
+} from '../services/careV2';
 
 export default function PlacementResultScreen({ route, navigation }) {
   const houseId = route.params?.houseId;
@@ -32,6 +34,14 @@ export default function PlacementResultScreen({ route, navigation }) {
   const [busy,   setBusy]   = useState(false);
   const [toast,  setToast]  = useState(null);
   const [house,  setHouse]  = useState(route.params?.house || null);
+  /* THE LAST STEP OF THE FLOW, not a card somewhere else.
+     Freeing sensors is what makes a controller compulsory: the zones they leave
+     can only be watered through the relay board. Told once in a toast, that
+     lands while the farmer is already walking away - so the flow does not end
+     until it is answered. */
+  const [step,    setStep]    = useState('table');   // 'table' | 'master'
+  const [devices, setDevices] = useState(null);
+  const [savingMaster, setSavingMaster] = useState(false);
 
   React.useEffect(() => {
     if (!house) getHouse(houseId).then((r) => setHouse(r?.house || null)).catch(() => {});
@@ -83,13 +93,109 @@ export default function PlacementResultScreen({ route, navigation }) {
             : `${house?.meta?.name || houseId} is now active.`,
         kind: r.needsMaster ? 'info' : 'success',
       });
-      setTimeout(() => navigation.navigate('MainTabs'), r.needsMaster ? 2600 : 1600);
+      if (r.needsMaster) {
+        setStep('master');
+        getDevices()
+          .then((d) => setDevices(d.devices || []))
+          .catch((e) => { setDevices([]); setToast({ text: e.message, kind: 'error' }); });
+      } else {
+        setTimeout(() => navigation.navigate('MainTabs'), 1600);
+      }
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
       setBusy(false);
     }
   };
+
+  /* Two kinds of board can run the valves, and the difference is physical. A
+     node still IN this house does both jobs. A spare belonging to no house can
+     only be a controller - it sits in no section, so anything it "measured"
+     would describe wherever it happens to be. Boards from ANOTHER house are not
+     offered: taking one would strip that house of a sensor. */
+  const masterChoices = () => {
+    const list = devices || [];
+    return [
+      ...list.filter((d) => d.house === houseId).map((d) => ({
+        ...d, why: `In ${d.section} · keeps sensing and runs the valves` })),
+      ...list.filter((d) => !d.assignedTo).map((d) => ({
+        ...d, why: 'Spare board · runs the valves only, gives no readings' })),
+    ];
+  };
+
+  const chooseMaster = async (mac) => {
+    setSavingMaster(true);
+    try {
+      await setHouseMaster(houseId, mac);
+      setToast({ text: 'Controller set. The house is ready.', kind: 'success' });
+      setTimeout(() => navigation.navigate('MainTabs'), 1200);
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+      setSavingMaster(false);
+    }
+  };
+
+  if (step === 'master') {
+    const choices = masterChoices();
+    return (
+      <View style={styles.container}>
+        <ScreenHeader title="Choose the controller"
+          subtitle={house?.meta?.name || houseId} navigation={navigation} />
+        <Toast text={toast?.text} kind={toast?.kind} onDone={() => setToast(null)} />
+        <ScrollView contentContainerStyle={styles.scroll}>
+          <View style={[styles.card, styles.sourceCard, SHADOW.sm]}>
+            <Ionicons name="git-network" size={16} color={COLORS.primary} />
+            <Text style={styles.sourceTxt}>
+              The zones you just freed have no sensor of their own, so they are
+              watered through one board's relay. Pick that board — without it
+              nothing can water them.
+            </Text>
+          </View>
+
+          <Text style={styles.h}>Boards that can do it</Text>
+          <View style={[styles.card, SHADOW.sm]}>
+            {devices === null ? (
+              <View style={{ paddingVertical: SPACE.xl, alignItems: 'center' }}>
+                <ActivityIndicator color={COLORS.primary} />
+              </View>
+            ) : choices.length ? choices.map((d) => (
+              <TouchableOpacity key={d.mac} style={styles.masterRow}
+                disabled={savingMaster} activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Use node ${d.shortId || d.mac.slice(-4)} as the controller`}
+                onPress={() => chooseMaster(d.mac)}>
+                <Ionicons name="hardware-chip-outline" size={20}
+                  color={d.online ? COLORS.primary : COLORS.textTertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.masterName}>
+                    Node {d.shortId || d.mac.slice(-4)}
+                    {!d.online && <Text style={styles.masterOff}>  offline</Text>}
+                  </Text>
+                  <Text style={styles.masterWhy}>{d.why}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            )) : (
+              <Text style={styles.masterWhy}>
+                No board is available. A controller must be a node already in this
+                house, or a spare that belongs to no house — taking one from
+                another house would leave that house a sensor short.
+              </Text>
+            )}
+          </View>
+
+          {/* Skippable, because refusing to let someone leave a screen is worse
+              than a farm that is briefly not wired up - and the dashboard
+              carries the same blocker until it is done. */}
+          <TouchableOpacity style={styles.skip} disabled={savingMaster}
+            onPress={() => navigation.navigate('MainTabs')}>
+            <Text style={styles.skipTxt}>Set this up later</Text>
+          </TouchableOpacity>
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -228,6 +334,15 @@ const styles = StyleSheet.create({
 
   tnote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
            marginTop: SPACE.md },
+
+  masterRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
+               paddingVertical: SPACE.md, borderTopWidth: 1,
+               borderTopColor: COLORS.borderLight },
+  masterName:{ color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
+  masterOff: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '500' },
+  masterWhy: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginTop: 1 },
+  skip:      { alignItems: 'center', paddingVertical: SPACE.lg, marginTop: SPACE.sm },
+  skipTxt:   { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700' },
 
   removeCard: { backgroundColor: COLORS.estimatedDim, marginTop: SPACE.lg },
   removeHead: { color: COLORS.estimated, fontSize: FONT.sm, fontWeight: '800',
