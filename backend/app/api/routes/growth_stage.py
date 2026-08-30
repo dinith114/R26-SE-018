@@ -13,8 +13,8 @@ import numpy as np
 from PIL import Image
 import io
 
-# Use absolute path directly
-ML_PATH = Path("D:/Research/Project/Project_002/R26-SE-018/ml-models/growth_stage")
+# Repo root is four levels up from backend/app/api/routes/
+ML_PATH = Path(__file__).resolve().parents[4] / "ml-models" / "growth_stage"
 
 print(f"[INFO] Looking for ML module at: {ML_PATH}")
 print(f"[INFO] ML_PATH exists: {ML_PATH.exists()}")
