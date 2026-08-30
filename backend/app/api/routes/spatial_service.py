@@ -40,6 +40,15 @@ from app.api.routes.smart_care_v2 import (
 # last fill, not of the air, and does not vary smoothly across the house.
 FIELDS = ("temperature", "humidity", "light")
 
+# Below this spread across ALL anchors, a field has no structure a variogram can
+# describe - the differences are inside what the instrument can resolve.
+#
+# DHT22 is specified at +/-0.5 C and +/-2 % RH, so two sensor errors is the point
+# at which a difference stops being a measurement of the house and starts being a
+# measurement of the sensors. Light has no such floor worth setting: it varies by
+# thousands of lux across a house and a flat light field means night.
+FLAT_FIELD_SPAN = {"temperature": 1.0, "humidity": 4.0}
+
 # Below this there is no variogram worth fitting. Four is already generous for
 # kriging - geostatistics texts want dozens - but it is the point at which the
 # result stops being "copy the one reading you have".
@@ -244,16 +253,69 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
         fields[f] = (vals, var)
         models[f] = model
 
+    # ── WHEN THERE IS NOTHING TO INTERPOLATE ─────────────────────────────────
+    #
+    # A variogram cannot be fitted to a field that is FLAT, and that is not a
+    # failure - it is the honest shape of the data. Measured on house H2,
+    # 30 Aug 2026, four anchors reporting fresh:
+    #
+    #     temperature  [24.4, 25.3, 25.3, 24.4]   spread 0.9 C   fit failed
+    #     humidity     [90.5, 88.8, 89.8, 91.0]   spread 2.2 %   fit failed
+    #     light        [4149, 646, 1390, 1739]    wide           fit fine
+    #
+    # PyKrige had no semivariance structure to work with, so the whole house was
+    # reported "kriging-failed" and the two unmonitored zones got NO estimate at
+    # all - they showed as if no data existed, while four sensors sat there
+    # agreeing with each other.
+    #
+    # With a spread inside two sensor errors the best available estimate for an
+    # unmonitored zone genuinely IS the anchor mean, and saying so is correct
+    # rather than lazy.
+    #
+    # THIS IS NOT THE OLD BUG RETURNING. The variogram bug returned the mean
+    # while a real gradient existed, invisibly, with confidence intervals. This
+    # returns the mean ONLY when the measured spread is below what the
+    # instruments can resolve, says `method: "uniform-field"`, and reports the
+    # span it saw so the claim can be checked.
+    flat = {}
+    for f in FIELDS:
+        if f in fields or f not in FLAT_FIELD_SPAN:
+            continue
+        zs = [a["r"].get(f) for a in anchors]
+        if any(z is None for z in zs):
+            continue
+        span = max(zs) - min(zs)
+        if span <= FLAT_FIELD_SPAN[f]:
+            mean = sum(zs) / len(zs)
+            # Spread across the house, as a standard deviation, rather than a
+            # kriging variance - there is no kriging here and pretending there
+            # was would overstate what this is.
+            sd = (sum((z - mean) ** 2 for z in zs) / len(zs)) ** 0.5
+            flat[f] = (mean, sd, span)
+
     if "temperature" not in fields or "humidity" not in fields:
-        result["status"] = "kriging-failed"
-        result["message"] = ("Could not fit a variogram to the anchor layout - "
-                             "they may be collinear.")
-        return result
+        missing = [f for f in ("temperature", "humidity") if f not in fields]
+        if all(f in flat for f in missing):
+            result["status"] = "uniform-field"
+            result["message"] = ("No variogram could be fitted because the field is "
+                                 "flat: " + ", ".join(
+                                     f"{f} varies {flat[f][2]:.1f} across the house"
+                                     for f in sorted(flat)) +
+                                 ". Estimates are the anchor mean, which is the "
+                                 "honest answer when every sensor agrees.")
+        else:
+            result["status"] = "kriging-failed"
+            result["message"] = ("Could not fit a variogram to the anchor layout - "
+                                 "they may be collinear.")
+            return result
 
     stamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     written = 0
     for i, t in enumerate(targets):
         est = {}
+        for f, (mean, sd, _span) in flat.items():
+            est[f] = round(float(mean), 2)
+            est[f + "Sd"] = round(float(sd), 3)
         for f, (vals, var) in fields.items():
             v = float(vals[i])
             if f == "humidity":
@@ -275,7 +337,11 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
         est.update({
             "estimatedAt": stamp,
             "timestampMs": int(_server_now_ms()),
-            "method": "ordinary-kriging",
+            "method": "uniform-field" if flat and not fields.get("temperature")
+                      else "ordinary-kriging",
+            # Which fields were the anchor mean rather than kriged, so no screen
+            # can present one as the other.
+            "uniformFields": sorted(flat) or None,
             "variogram": models.get("temperature"),
             "anchors": [a["id"] for a in anchors],
             "anchorCount": len(anchors),

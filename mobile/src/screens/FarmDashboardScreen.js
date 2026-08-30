@@ -301,6 +301,18 @@ export default function FarmDashboardScreen({ navigation }) {
      unlike the count this replaced, this one can actually be non-zero. */
   const estimated   = flat.filter(s => s.freshness?.state === 'estimated').length;
   const urgent      = needing.filter(x => x.a.rank <= 1).length;
+
+  /* HOUSES THAT CANNOT WATER ANYTHING THEY NO LONGER MEASURE.
+     After the placement decision a house's unmonitored zones are reachable only
+     through the relay controller, so a master stops being optional at exactly
+     that moment - and nothing told the farmer. They were left with sections no
+     command could reach and no way to work out why, because the control that
+     fixes it is an icon on a house card with no label. A house that never gave
+     up a sensor is not nagged: every one of its sections has its own board. */
+  const needMaster = houses.filter(h =>
+    !h.meta?.masterMac
+    && (h.sections || []).some(x => x.freshness?.state === 'nonode'
+                                 || x.freshness?.state === 'estimated'));
   const alertCount  = needing.length;
 
   /* The next thing the farm will do on its own. Buried in a chip inside an
@@ -404,6 +416,30 @@ export default function FarmDashboardScreen({ navigation }) {
                 </Text>
               )}
             </View>
+
+            {/* The one blocker the farm cannot route around. Above the section
+                list because no amount of section-level action fixes it. */}
+            {needMaster.map(h => (
+              <TouchableOpacity key={`nm-${h.houseId}`}
+                style={[styles.card, styles.blockCard, SHADOW.sm]}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`Choose a master controller for ${h.meta?.name || h.houseId}`}
+                onPress={() => openMaster(h)}>
+                <View style={styles.blockHead}>
+                  <Ionicons name="git-network" size={18} color={COLORS.warning} />
+                  <Text style={styles.blockTitle}>
+                    {h.meta?.name || h.houseId} needs a master controller
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={COLORS.warning} />
+                </View>
+                <Text style={styles.blockTxt}>
+                  Its zones without a sensor of their own are watered through the
+                  relay board. Until one board is named as the controller, nothing
+                  can water them — the command has nowhere to go. Tap to choose.
+                </Text>
+              </TouchableOpacity>
+            ))}
 
             {/* ── 2. What needs doing, lifted out of the houses ──────────── */}
             {needing.length > 0 && (
@@ -988,6 +1024,13 @@ const styles = StyleSheet.create({
   /* ── generic section card used by Needs-you-now and Automation ─────── */
   card:      { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.lg,
                padding: SPACE.lg, marginBottom: SPACE.lg },
+  blockCard: { backgroundColor: COLORS.warningDim, borderWidth: 1,
+               borderColor: COLORS.warning },
+  blockHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  blockTitle:{ flex: 1, color: COLORS.warning, fontSize: FONT.md, fontWeight: '800' },
+  blockTxt:  { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19,
+               marginTop: SPACE.sm },
+
   cardTitle: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '800',
                letterSpacing: 0.6, textTransform: 'uppercase',
                marginBottom: SPACE.md },
