@@ -21,7 +21,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import DigitalTwin from '../components/DigitalTwin';
 import Toast from '../components/Toast';
-import { setLifecycle, getHouse } from '../services/careV2';
+import { applyPlacement, getHouse } from '../services/careV2';
 
 export default function PlacementResultScreen({ route, navigation }) {
   const houseId = route.params?.houseId;
@@ -56,12 +56,25 @@ export default function PlacementResultScreen({ route, navigation }) {
 
   const removed = allSections.filter((n) => !keepIds.has(n.id));
 
+  /* Applying the decision is what makes it real.
+     This used to set the lifecycle to active and stop, so the farmer was told
+     which sensors to take out and the system carried on believing all twelve
+     were still installed. The server now frees those nodes and clears their
+     sections' last reading in one call, which is what lets kriging take over
+     the zones instead of them sitting frozen on the reading they had when the
+     sensor was pulled. */
   const confirm = async () => {
     try {
       setBusy(true);
-      await setLifecycle(houseId, 'active');
-      setToast({ text: `${house?.meta?.name || houseId} is now active.`, kind: 'success' });
-      setTimeout(() => navigation.navigate('MainTabs'), 1200);
+      const r = await applyPlacement(houseId, [...keepIds]);
+      const n = (r.freed || []).length;
+      setToast({
+        text: n
+          ? `${n} sensor${n === 1 ? '' : 's'} freed — take them out of the house.`
+          : `${house?.meta?.name || houseId} is now active.`,
+        kind: 'success',
+      });
+      setTimeout(() => navigation.navigate('MainTabs'), 1600);
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {

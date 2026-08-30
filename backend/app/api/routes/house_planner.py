@@ -64,10 +64,22 @@ WALL_MARGIN_M = 0.6
 N_SNAPSHOTS = 120
 TEST_FRACTION = 0.4
 
-# Sensor counts the curve is computed over. Below 3 kriging has nothing to work
-# with; above 10 a house this size is saturated and the farmer is buying
-# hardware that changes nothing.
-MIN_SENSORS = 3
+# Sensor counts the curve is computed over.
+#
+# The floor is IMPORTED from the spatial service rather than guessed here, and
+# the two used to disagree: this file said 3 with a comment claiming "below 3
+# kriging has nothing to work with", while spatial_service.MIN_ANCHORS is 4 and
+# returns "insufficient-anchors" below it. So a farmer could be shown a 3-sensor
+# row, choose it, and end up with a house where every unmonitored zone stayed
+# permanently blank - while the result screen promised those sections would
+# "keep working, estimated from the ones that kept theirs". Measured on a
+# 6-section test house: keep 3, and kriging wrote 0 estimates for all 3 targets.
+#
+# One number, owned by the module that enforces it.
+from app.api.routes.spatial_service import MIN_ANCHORS as _MIN_ANCHORS
+MIN_SENSORS = _MIN_ANCHORS
+# Above 10 a house this size is saturated and the farmer is buying hardware that
+# changes nothing.
 MAX_SENSORS_CAP = 10
 
 # One node: NodeMCU ESP32 + DHT22 + BH1750 + capacitive probe, from the

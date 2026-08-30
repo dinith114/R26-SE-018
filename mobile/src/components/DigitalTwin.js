@@ -37,6 +37,12 @@ export const NODE_KINDS = {
   estimated: { color: COLORS.estimated, icon: 'analytics-outline', label: 'Estimated' },
   planned:   { color: COLORS.info,      icon: 'add-circle-outline', label: 'Suggested' },
   offline:   { color: COLORS.textTertiary, icon: 'close-circle-outline', label: 'Not reporting' },
+  /* No node has been LINKED here yet - which is not the same as a node that has
+     gone quiet, and the fix is different: bring a board, rather than check the
+     battery on one that is already there. During calibration this is the normal
+     state of most of a new house, and painting it "Not reporting" made a house
+     that was simply not wired up yet look like a farm full of dead hardware. */
+  nonode:    { color: COLORS.textTertiary, icon: 'add-outline', label: 'No node yet' },
 };
 
 /* Grid spacing that keeps the drawing readable at any house size. A 6 m house
