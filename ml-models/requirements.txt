@@ -7,6 +7,7 @@ numpy==1.26.4
 pandas==2.2.2
 matplotlib==3.9.0
 seaborn==0.13.2
+openpyxl==3.1.5           # Required to read bloom_prediction's .xlsx sensor logs
 
 # Machine Learning
 scikit-learn==1.5.0
@@ -14,8 +15,13 @@ xgboost==2.1.0
 joblib==1.4.2
 
 # Deep Learning
-tensorflow==2.16.0
-# torch==2.3.0           # Alternative: PyTorch
+tensorflow==2.16.2         # 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch
+torch==2.3.1              # Required by shared/object_detection (zero-shot orchid object detector)
+torchvision==0.18.1
+
+# Object Detection
+transformers==4.44.2       # Zero-shot detector (OWLv2) - still used for the bud class
+ultralytics==8.2.103       # Custom YOLOv8 detector for orchid_plant/flower_bunch/seed_pod - see shared/object_detection/train.py
 
 # Image Processing
 opencv-python==4.10.0.84

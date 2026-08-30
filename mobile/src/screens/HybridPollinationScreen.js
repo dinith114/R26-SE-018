@@ -527,7 +527,7 @@ const HybridPollinationScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Hybrid Pollination" subtitle="Readiness & Compatibility" navigation={navigation} />
+      <ScreenHeader title="Hybrid Pollination" subtitle="Readiness & Compatibility" navigation={navigation} showSettings />
 
       {/* Tab Bar */}
       <View style={styles.tabBar}>

@@ -1,0 +1,3 @@
+Mean Absolute Error: 3.59 days
+Root Mean Squared Error: 4.72 days
+R^2 Score: -0.0770

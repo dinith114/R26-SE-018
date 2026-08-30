@@ -1,53 +1,20 @@
-import { Platform, NativeModules } from 'react-native';
+import { Platform } from 'react-native';
 
 /**
  * API Client Service
  * Handles communication with the FastAPI backend.
  */
 
-// Set this ONLY if auto-detection fails. Find it by running `ipconfig` on
-// Windows and taking the Wi-Fi IPv4 address.
-const MANUAL_HOST = '';
-
-// Used when nothing else works. Update if the laptop's Wi-Fi address changes.
-const FALLBACK_HOST = '192.168.1.2';
-
 /**
- * Work out where the FastAPI backend is.
+ * The backend address comes from the shared config, which is the only place it
+ * is written down for the whole app. This module used to derive it from the
+ * Metro bundle URL so a laptop's changing LAN IP would not break Expo Go
+ * testing; that is exactly the per-file divergence config/backend.js exists to
+ * prevent, so it was dropped in favour of the shared value.
  *
- * On a physical phone "localhost" means the PHONE, not the development machine,
- * so the PC's LAN address is needed. Metro already serves the JS bundle from
- * exactly that address, so it is read back from the bundle URL rather than
- * hard-coded — which keeps the app working when the laptop's IP changes, as it
- * does on most Wi-Fi networks.
- *
- * `NativeModules.SourceCode` is part of React Native itself, so this needs no
- * extra package. (expo-constants would also work but is not resolvable from the
- * app root in this project.)
+ * For local testing against a laptop, change HOST in config/backend.js once.
  */
-const getBaseUrl = () => {
-  if (MANUAL_HOST) return `http://${MANUAL_HOST}:8000`;
-  if (Platform.OS === 'web') return 'http://localhost:8000';
-
-  try {
-    const scriptURL = NativeModules?.SourceCode?.getConstants?.().scriptURL
-      || NativeModules?.SourceCode?.scriptURL;
-
-    if (scriptURL) {
-      // e.g. "http://192.168.1.2:8081/index.bundle?platform=android"
-      const host = scriptURL.split('://')[1]?.split(':')[0];
-      if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        return `http://${host}:8000`;
-      }
-    }
-  } catch (e) {
-    // Fall through to the fallback below
-  }
-
-  return `http://${FALLBACK_HOST}:8000`;
-};
-
-const BASE_URL = getBaseUrl();
+import BASE_URL from '../config/backend';
 const API_PREFIX = '/api/v1/pollination';
 
 /**
@@ -131,13 +98,13 @@ export const assessSuitability = async (imageUri, traits = {}, closeupUri = null
     console.error('Suitability assessment error:', error);
 
     // A network failure here is indistinguishable from a server error unless
-    // the address being dialled is reported. BASE_URL is derived from the
-    // Metro bundle URL at startup, so if the laptop's IP changed the app can
-    // be calling the wrong host with no way for the user to tell.
+    // the address being dialled is reported. BASE_URL is set once in
+    // config/backend.js, so naming it turns "could not connect" into something
+    // the reader can actually check.
     if (error.message === 'Network request failed') {
       const reachErr = new Error(
         `Could not reach the server at ${BASE_URL}. ` +
-        `Check that the backend is running and that the phone is on the same Wi-Fi.`
+        `Check that the backend is running and reachable from this device.`
       );
       reachErr.baseUrl = BASE_URL;
       throw reachErr;
