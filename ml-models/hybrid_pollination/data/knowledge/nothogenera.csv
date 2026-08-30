@@ -1,0 +1,18 @@
+# Nothogenera (intergeneric hybrid genus names) in the Vanda Alliance.
+#
+# A nothogenus name is registered ONLY when the cross has actually been made.
+# Its existence is therefore verifiable evidence that the genus combination is
+# reproductively feasible. It is NOT evidence of a success RATE - the register
+# records successes only and has no denominator. See docs/research/.
+nothogenus,parent_genera,involves_vanda,note
+Aranda,Arachnis|Vanda,yes,Commercially important cut-flower group
+Mokara,Arachnis|Ascocentrum|Vanda,yes,Trigeneric; widely grown
+Renantanda,Renanthera|Vanda,yes,
+Kagawara,Ascocentrum|Renanthera|Vanda,yes,Trigeneric
+Aeridovanda,Aerides|Vanda,yes,
+Ascocenda,Ascocentrum|Vanda,yes,Ascocentrum now sunk into Vanda; these are now Vanda hybrids
+Papilionanda,Papilionanthe|Vanda,yes,Terete-leaved Vandas were moved to Papilionanthe
+Luisanda,Luisia|Vanda,yes,
+Paravanda,Paraphalaenopsis|Vanda,yes,
+Renanopsis,Renanthera|Vandopsis,no,Used as a parent in Renvanvanda
+Renvanvanda,Renanthera|Vanda|Vandopsis,yes,Trigeneric

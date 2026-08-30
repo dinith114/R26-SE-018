@@ -1,0 +1,41 @@
+# Parentage for grex names that appear on the project's plant tags WITHOUT
+# their parentage written on them.
+#
+# VERIFICATION STATUS - read before citing any of this in the report
+# ------------------------------------------------------------------
+# verified = page_fetched : the grex page was retrieved and read directly.
+#                           Parentage and year are quoted from that page.
+# verified = search_only  : taken from a search-result summary, NOT read from
+#                           the source page. Treat as a lead, not a fact.
+# verified = not_found    : searched and not located. Do not guess.
+#
+# direction_confirmed tells you whether the SOURCE explicitly stated which
+# parent is the pod (seed) parent. Orchid convention writes the pod parent
+# first, but some pages print the cross without saying so. Where this is "no",
+# the order shown is the order the source printed and may not be the true
+# pod x pollen direction.
+#
+# ACTION REQUIRED BEFORE SUBMISSION: spot-check every row you actually cite
+# against the RHS International Orchid Register:
+#   https://apps.rhs.org.uk/horticulturaldatabase/orchidregister/
+# The register is the naming authority; orchids.org mirrors it but is not it.
+grex,seed_parent,pollen_parent,registrant,year,verified,direction_confirmed,source,note
+Vanda Pakchong Blue,V. Doctor Anek,V. coerulea,P.Kran Som Prot,1995,page_fetched,no,https://www.orchids.org/grexes/vanda-pakchong-blue,Matches tag "V. Pak Chong Blue 3n". Links Dr Anek (the collection's most-used parent) to V. coerulea.
+Vanda Noppadol Delight,V. Manuvadee,V. Gardner Violet,N.Phuttaratraksa,2011,page_fetched,no,https://www.orchids.org/grexes/vanda-noppadol-delight,Matches two tags: "V. Noppadon Delight" and "V. noppadol delight".
+Vanda Kulwadee Fragrance,V. Gordon Dillon,V. Guo Chia Long,Sujit Sutthawas,2004,page_fetched,yes,https://www.orchids.org/grexes/vanda-kulwadee-fragrance,Appears as the pollen parent of tag "V.(Wirat pink x Blitz) X Kulwadee Fragrance".
+Vanda Pachara Delight,V. Karulea,V. Gordon Dillon,P.Pacharapong,1999,page_fetched,yes,https://www.orchids.org/grexes/vanda-pachara-delight,"NOT the same grex as the tag ""V. Pachara Blue"". Recorded because it appears in the nursery purchase register and shares the Gordon Dillon parent."
+Vanda Suvarnabhumi,V. Thonglorsand,V. sanderiana,T.Orchids,2006,search_only,no,https://www.orchids.org/grexes/vanda-suvarnabhumi,"Tag reads ""V. Suwannabhumi Butterfly"" which is a DIFFERENT grex. Do not substitute."
+Vanda Butterfly,V. Danny Low,V. Pimsai,Phairot's,1984,search_only,no,https://www.orchids.org/grexes/vanda-butterfly,Listed only because the tag contains the word Butterfly. Almost certainly a different grex.
+Vanda Kulwadee Maroon,,,,,not_found,,,"Searched orchids.org; not located. Tag may be a nursery name rather than a registered grex, or spelled differently in the register."
+Vanda Pachara Blue,,,,,not_found,,,Searched; only Vanda Pachara Delight was found. Do not assume they are the same grex.
+Vanda Ruchiroj,,,,,not_found,,,Not located in searches.
+Vanda Centenaria,,,,,not_found,,,Not located in searches.
+Vanda Two Tone Wonder,,,,,not_found,,,Not located in searches.
+Vanda Red,,,,,not_found,,,"Tag reads ""Vanda Red #77"". #77 is a clone number, not part of the grex name."
+Vanda Yellow Butterfly,,,,,not_found,,,"Tag reads ""V. Yellow Butterfly #463""."
+Vanda Siriporn Pink,,,,,not_found,,,Not located in searches.
+Vanda Manuel Torres,,,,,not_found,,,"Tag reads ""V .manuel torres""."
+Vanda Tung Tung Diamond Blue,,,,,not_found,,,"Tag reads ""V.Tung Tung Diamond Blue"". The purchase register writes it as a cross: V. Tung Tung x Diamond Blue."
+Vanda Orchidaceae,,,,,not_found,,,"Tag reads ""V. Orchidaceae"". Orchidaceae is the plant FAMILY, not a grex - the tag is almost certainly a transcription error."
+Vanda miniata,,,,,species,,,"Not a grex. A species, formerly Ascocentrum miniatum, now placed in Vanda."
+Vanda tessellata,,,,,species,,,"Not a grex. The native Sri Lankan species; already in parent_traits.csv."

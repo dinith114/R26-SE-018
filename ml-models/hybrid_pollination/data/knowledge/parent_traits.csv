@@ -1,0 +1,17 @@
+# Trait contributions of key Vanda parent species.
+#
+# Sources: RHS/OrchidRoots compilation and the Peradeniya breeder interview
+# (docs/research/peradeniya_breeder_interview.md).
+#
+# flower_size / spike / longevity are ordinal: small|medium|large, low|medium|high.
+# These describe what a parent TENDS to contribute to offspring. They are
+# horticultural consensus, not measurements - treat as priors, not ground truth.
+species,flower_size,dominant_colour,pattern,fragrance,vigour,breeding_note
+V. sanderiana,large,pink-brown,tessellated,low,high,Most important parent in modern Vanda breeding; contributes size and flat broad petals
+V. coerulea,medium,blue-violet,tessellated,low,medium,Essential for blue hybrids; cold tolerant
+V. tessellata,small,dark-brown-green,tessellated,high,high,Native to Sri Lanka; robust and broadly compatible; reduces offspring flower size
+V. tricolor,medium,cream-spotted,spotted,high,high,Fragrance and spotting; cold tolerant
+V. denisoniana,medium,yellow-white,plain,high,medium,Colour diversity and fragrance
+V. dearei,large,yellow,plain,medium,medium,Used for golden hybrids
+V. luzonica,medium,pink-white,marked,low,medium,Pattern diversity
+V. spathulata,small,yellow,plain,low,medium,Native to Sri Lanka (now Taprobanea spathulata); compact growth

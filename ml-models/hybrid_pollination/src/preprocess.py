@@ -12,7 +12,6 @@ import os
 import sys
 import joblib
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
 
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,6 +31,10 @@ TRAIT_COLUMNS = ["leaf_condition", "plant_strength", "disease_visible", "flower_
 
 # Target column
 TARGET_COLUMN = "suitability_label"
+
+# Group column: images sharing this value are the SAME physical plant and must
+# never be split across train and test.
+GROUP_COLUMN = "sample_id"
 
 
 def extract_image_features_for_dataset(df: pd.DataFrame) -> pd.DataFrame:
@@ -144,17 +147,39 @@ def prepare_feature_matrix(df: pd.DataFrame) -> tuple:
 
 def prepare_dataset(
     csv_path: str = None,
-    test_size: float = 0.15,
-    val_size: float = 0.15,
     random_state: int = 42,
     save_features: bool = True
 ):
     """
     Full preprocessing pipeline.
 
+    EVALUATION DESIGN - read this before changing anything here
+    -----------------------------------------------------------
+    This function used to shuffle all 357 images and split them randomly. That
+    was data leakage: the images come from only 28 distinct plants, so photo #7
+    of a plant trained the model while photo #8 of the SAME plant tested it.
+    The model memorised individual plants and reported 100% test accuracy.
+
+    It no longer produces a train/val/test split at all, for a concrete reason:
+
+        plants per class -   Suitable 17,  Not Suitable 9,  Moderate 2
+
+    With only TWO plants labelled Moderate, no grouped three-way split can put
+    that class in train, validation and test simultaneously. Any such split
+    would either leak or silently drop a class.
+
+    So the honest design is grouped CROSS-VALIDATION over all data, with the
+    plant (`sample_id`) as the group. This function therefore returns the full
+    unscaled X, y and groups, and `train.py` performs StratifiedGroupKFold.
+
+    Scaling is deliberately NOT applied here. Fitting a scaler on all data
+    before cross-validation leaks test-fold statistics into training. The
+    scaler belongs inside a Pipeline, fitted per fold. The scaler saved to
+    preprocessors.pkl is fitted on all data for INFERENCE ONLY.
+
     Returns:
-        dict with X_train, X_val, X_test, y_train, y_val, y_test,
-              feature_names, encoders, scaler, label_encoder
+        dict with X, y, groups, feature_names, trait_encoders, scaler,
+        label_encoder, class_plant_counts
     """
     if csv_path is None:
         csv_path = CLEAN_CSV
@@ -179,35 +204,41 @@ def prepare_dataset(
     # Prepare X, y
     X, y, feature_names = prepare_feature_matrix(df)
 
+    # Groups: which plant each image came from. This is what makes the
+    # evaluation honest - all images of one plant stay together.
+    if GROUP_COLUMN not in df.columns:
+        raise ValueError(
+            f"'{GROUP_COLUMN}' column is required for grouped evaluation but is "
+            "missing. Without it every metric would be inflated by leakage."
+        )
+    groups = df[GROUP_COLUMN].values
+
     # Encode target labels
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
     print(f"  Label mapping: {dict(zip(label_encoder.classes_, label_encoder.transform(label_encoder.classes_)))}")
 
-    # Scale features
+    # ── Group diagnostics ─────────────────────
+    plant_labels = df.groupby(GROUP_COLUMN)[TARGET_COLUMN].first()
+    class_plant_counts = plant_labels.value_counts().to_dict()
+
+    print(f"\n[STEP] Grouped evaluation setup:")
+    print(f"  Images : {len(X)}")
+    print(f"  Plants : {len(plant_labels)}   <- the TRUE sample size")
+    print(f"  Plants per class:")
+    for cls, n in sorted(class_plant_counts.items()):
+        warn = "  <- too few to validate" if n < 5 else ""
+        print(f"    {cls:15s}: {n:2d} plants{warn}")
+
+    thin = [c for c, n in class_plant_counts.items() if n < 5]
+    if thin:
+        print(f"\n  [WARN] {', '.join(thin)} cannot be reliably validated at plant level.")
+        print(f"         Per-class results for these classes are indicative only.")
+
+    # Scaler fitted on all data for INFERENCE ONLY. Cross-validation must not
+    # use it - train.py scales inside each fold via a Pipeline.
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    # Split: first into train+val and test, then train+val into train and val
-    X_trainval, X_test, y_trainval, y_test = train_test_split(
-        X_scaled, y_encoded,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=y_encoded
-    )
-
-    val_ratio = val_size / (1 - test_size)  # Adjust ratio for second split
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_trainval, y_trainval,
-        test_size=val_ratio,
-        random_state=random_state,
-        stratify=y_trainval
-    )
-
-    print(f"\n[STEP] Dataset split:")
-    print(f"  Train: {X_train.shape[0]} samples ({X_train.shape[0] / len(X) * 100:.0f}%)")
-    print(f"  Val:   {X_val.shape[0]} samples ({X_val.shape[0] / len(X) * 100:.0f}%)")
-    print(f"  Test:  {X_test.shape[0]} samples ({X_test.shape[0] / len(X) * 100:.0f}%)")
+    scaler.fit(X)
 
     # Save preprocessors
     os.makedirs(MODELS_DIR, exist_ok=True)
@@ -222,17 +253,21 @@ def prepare_dataset(
     print(f"\n[SAVED] Preprocessors -> {os.path.basename(preprocessor_path)}")
 
     return {
-        "X_train": X_train, "X_val": X_val, "X_test": X_test,
-        "y_train": y_train, "y_val": y_val, "y_test": y_test,
+        "X": X, "y": y_encoded, "groups": groups,
         "feature_names": feature_names,
         "trait_encoders": trait_encoders,
         "scaler": scaler,
         "label_encoder": label_encoder,
+        "class_plant_counts": class_plant_counts,
+        "n_plants": len(plant_labels),
+        "random_state": random_state,
     }
 
 
 if __name__ == "__main__":
     result = prepare_dataset()
-    print("\n✅ Preprocessing complete!")
-    print(f"   X_train shape: {result['X_train'].shape}")
-    print(f"   Classes: {result['label_encoder'].classes_}")
+    print("\n[DONE] Preprocessing complete")
+    print(f"   X shape : {result['X'].shape}")
+    print(f"   Plants  : {result['n_plants']}")
+    print(f"   Classes : {list(result['label_encoder'].classes_)}")
+    print("   Evaluation is grouped by plant; run train.py for cross-validated results.")

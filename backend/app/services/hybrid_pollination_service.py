@@ -47,6 +47,7 @@ class HybridPollinationService:
         self.label_encoder = None
         self.feature_names = None
         self.model_name = ""
+        self._resolver = None
         self._load_model()
 
     def _load_model(self):
@@ -79,16 +80,74 @@ class HybridPollinationService:
     def is_loaded(self) -> bool:
         return self.model is not None
 
-    def predict_suitability(self, image_path: str, traits: dict = None) -> dict:
+    def check_input(self, image_path: str) -> dict:
+        """
+        Is this photograph an orchid plant at all?
+
+        The suitability model has three classes and no way to express "this is
+        not a plant" - during testing a photograph of a laptop screen came back
+        as Suitable with 98.7% confidence. Every upload is therefore screened
+        first. See ml-models/hybrid_pollination/src/orchid_gate.py.
+
+        A missing gate model does not block the app: check_image reports
+        gate_available=False and the image is allowed through, which is the
+        behaviour that existed before the gate was added.
+        """
+        try:
+            from orchid_gate import check_image
+            return check_image(image_path)
+        except Exception as e:
+            print(f"[WARN] Input gate unavailable: {e}")
+            return {"is_orchid": True, "gate_available": False,
+                    "message": f"Input validation unavailable: {e}"}
+
+    def resolve_traits(self, image_path: str, leaf_closeup_path: str = None,
+                       user_traits: dict = None) -> dict:
+        """
+        Derive plant traits from the image before any prediction is made.
+
+        This is what removes the requirement for the grower to diagnose their
+        own plant: traits are measured, and the user is asked only where the
+        measurement is too weak to act on. See ml-models/hybrid_pollination/
+        src/trait_resolution.py for the resolution rules and their limits.
+
+        Returns:
+            The ResolutionReport as a dict, or None if resolution is unavailable.
+        """
+        try:
+            from trait_resolution import TraitResolver
+        except ImportError as e:
+            print(f"[WARN] Trait resolution unavailable: {e}")
+            return None
+
+        if self._resolver is None:
+            self._resolver = TraitResolver()
+
+        return self._resolver.resolve(
+            image_path, leaf_closeup_path=leaf_closeup_path, user_traits=user_traits
+        ).to_dict()
+
+    def predict_suitability(self, image_path: str, traits: dict = None,
+                            leaf_closeup_path: str = None,
+                            auto_traits: bool = True,
+                            input_check: dict = None) -> dict:
         """
         Predict pollination suitability for a plant image.
 
         Args:
             image_path: Path to the saved image file
-            traits: dict with leaf_condition, plant_strength, disease_visible, flower_condition
+            traits: Any trait values the grower supplied. These are treated as
+                    CORRECTIONS to the measured values, not as required input.
+            leaf_closeup_path: Optional leaf close-up, used for disease
+            auto_traits: Measure traits from the image before predicting
+            input_check: Result of check_input, passed in so the gate is not
+                    run twice. When it reports the photograph as unusual for
+                    the reference collection, the verdict is damped and
+                    labelled as extrapolation.
 
         Returns:
             dict with suitability, confidence, probabilities, recommendation
+            and trait_resolution (where each trait value came from)
         """
         if not self.is_loaded:
             return {
@@ -97,19 +156,30 @@ class HybridPollinationService:
                 "probabilities": {},
                 "recommendation": "Model not loaded. Please train the model first.",
                 "features_extracted": 0,
+                "trait_resolution": None,
             }
 
         # Import here to avoid circular imports
         from feature_extraction import extract_all_features
+
+        # Measure traits from the image first; user-supplied values override
+        resolution = None
+        effective_traits = dict(traits or {})
+        if auto_traits:
+            resolution = self.resolve_traits(image_path, leaf_closeup_path, traits)
+            if resolution:
+                effective_traits = {
+                    name: t["value"] for name, t in resolution["traits"].items()
+                }
 
         # Extract image features
         image_features = extract_all_features(image_path)
 
         # Encode trait features
         trait_features = {}
-        if traits:
+        if effective_traits:
             for col, encoder in self.trait_encoders.items():
-                val = traits.get(col, "unknown")
+                val = effective_traits.get(col, "unknown")
                 val = str(val).strip().lower()
                 if val in encoder.classes_:
                     trait_features[f"{col}_encoded"] = encoder.transform([val])[0]
@@ -147,7 +217,34 @@ class HybridPollinationService:
             confidence = round(float(max(proba)), 4)
 
         # Recommendation
-        recommendation = self._get_recommendation(label, confidence, traits)
+        recommendation = self._get_recommendation(label, confidence, effective_traits)
+
+        # Consistency check between the suitability model and the trait models.
+        #
+        # These are separate models trained on different feature sets, so they
+        # can disagree - and a verdict of "Suitable" sitting next to measured
+        # traits of "weak" would rightly destroy a user's trust. When they
+        # conflict, the conflict is surfaced and the confidence is cut rather
+        # than quietly presenting the more optimistic of the two.
+        conflict = self._trait_conflict(label, resolution)
+        if conflict:
+            recommendation = f"{conflict}\n\n{recommendation}"
+            confidence = round(confidence * 0.5, 4)
+
+        # A photograph unlike the reference collection gets its verdict damped
+        # and labelled. Measured reason: all 58 internet orchid photographs that
+        # passed the gate were called "Suitable" at a median confidence of 0.99,
+        # while the same model recalls 99% of Not Suitable images on this
+        # nursery's own plants under grouped CV. The model is not broken, it is
+        # extrapolating - so the number shown to the grower should say so.
+        if (input_check or {}).get("familiarity") == "unusual":
+            recommendation = (
+                "This photograph is unlike the plants this model was trained on "
+                "(different setting, framing or lighting). The verdict below is "
+                "an extrapolation and should be treated as indicative only.\n\n"
+                + recommendation
+            )
+            confidence = round(confidence * 0.6, 4)
 
         return {
             "suitability": label,
@@ -155,7 +252,34 @@ class HybridPollinationService:
             "probabilities": probabilities,
             "recommendation": recommendation,
             "features_extracted": len(image_features),
+            "trait_resolution": resolution,
         }
+
+    @staticmethod
+    def _trait_conflict(label: str, resolution: dict) -> str:
+        """
+        Detect a suitability verdict that contradicts the measured traits.
+
+        Returns a warning string, or "" when the two agree.
+        """
+        if not resolution:
+            return ""
+
+        traits = resolution.get("traits", {})
+        weak = []
+        for name in ("leaf_condition", "plant_strength"):
+            t = traits.get(name) or {}
+            if t.get("source") == "measured" and t.get("value") in ("weak",):
+                weak.append(name.replace("_", " "))
+
+        if weak and label == "Suitable":
+            joined = " and ".join(weak)
+            return (f"NOTE: the suitability model says Suitable, but image analysis "
+                    f"measured {joined} as weak. These are separate models and they "
+                    f"disagree here, so treat this result with caution and inspect "
+                    f"the plant yourself.")
+
+        return ""
 
     def _get_recommendation(self, label: str, confidence: float, traits: dict = None) -> str:
         """Generate human-readable recommendation."""
