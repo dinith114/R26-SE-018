@@ -12,7 +12,7 @@ ORCHID INPUT GATE - build and measurement
 
 [3] Grouped cross-validation - false refusals on real orchid photos
   5-fold GroupKFold over 1190 images
-  genuine orchid photos refused: 2.3%
+  genuine orchid photos refused: 2.2%
   (threshold is set to keep 98% of training photos)
 
 [4] Fitting the final gate on all project photographs
