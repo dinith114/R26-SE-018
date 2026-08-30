@@ -1,0 +1,456 @@
+{
+  "schema_version": "1.0",
+  "last_updated": "2026-08-29",
+  "scope": "Vanda orchids, Nuwara Eliya highland region, Sri Lanka",
+
+  "_readme": [
+    "Rule-based treatment knowledge base keyed by (disease, severity).",
+    "This is NOT a model. It is a lookup table, and that is a deliberate design",
+    "decision: treatment advice must be auditable and correctable by a human",
+    "expert, and there is no dataset of treatment outcomes to train on.",
+    "",
+    "IMPORTANT -- FIELDS MARKED \"VERIFY\" ARE NOT YET SOURCED.",
+    "Cultural and sanitation practices below are standard, well-established",
+    "orchid husbandry. Chemical DOSAGES and SPRAY INTERVALS are deliberately",
+    "left as \"VERIFY\" rather than filled with plausible-looking numbers,",
+    "because prescribing an unverified agrochemical rate is unsafe and would be",
+    "indefensible in a viva. Fill each one from:",
+    "  1. the product label of the formulation actually sold in Sri Lanka, and",
+    "  2. the Department of Agriculture / Office of the Registrar of Pesticides",
+    "     registered-product list, and",
+    "  3. your cited reference book.",
+    "Then set \"verified\": true and record the page or URL in \"source_ref\".",
+    "",
+    "Anything still marked VERIFY at submission time must be shown to the user",
+    "as 'consult your agricultural extension officer for application rates',",
+    "which src/treatment.py does automatically."
+  ],
+
+  "grading_protocol": {
+    "basis": "percentage of leaf area showing lesions, chlorosis or necrosis",
+    "mild": "under 10%",
+    "moderate": "10% to 40%",
+    "severe": "over 40%",
+    "note": "Graded by measured area rather than impression, so that labels stay consistent across all 427 diseased images. State this protocol in the report."
+  },
+
+  "safety": {
+    "always_show": [
+      "Read the product label before mixing. The label is the legal instruction.",
+      "Wear gloves, mask and eye protection when mixing or spraying.",
+      "Observe the pre-harvest and re-entry interval printed on the label.",
+      "Do not spray in direct midday sun or when temperature is above 30 C -- Vanda leaves scorch.",
+      "Test any new product on two or three plants and wait seven days before treating a whole collection."
+    ],
+    "resistance_management": "Rotate between fungicide groups with different FRAC codes. Using one active ingredient repeatedly selects for resistant strains and the product stops working."
+  },
+
+  "sources": [
+    {
+      "id": "doa_lk",
+      "type": "government guidance",
+      "citation": "Department of Agriculture, Sri Lanka -- floriculture crop protection guidance",
+      "status": "TO CITE -- add the exact publication, year and page"
+    },
+    {
+      "id": "ref_book",
+      "type": "reference book",
+      "citation": "Orchid pest and disease reference used in this project",
+      "status": "TO CITE -- add author, title, year, page numbers"
+    },
+    {
+      "id": "note_outdated",
+      "type": "caveat",
+      "citation": "Reference-book chemical recommendations may predate current registrations. Where a modern alternative exists it is listed and flagged.",
+      "status": "standing caveat for the report"
+    }
+  ],
+
+  "treatments": {
+
+    "black_leaf_spot": {
+      "display_name": "Black Leaf Spot",
+      "pathogen": "fungal leaf-spotting complex",
+      "pathogen_type": "fungus",
+      "pathogen_note": "Confirm the causal organism with the research institute before publishing a species name. Several fungi produce visually similar black lesions on Vanda, and naming the wrong one in the report is an easy correction to be caught on.",
+      "affected_parts": ["leaf"],
+      "favourable_conditions": "Prolonged leaf wetness, crowded plants, poor air movement, overhead watering late in the day.",
+
+      "severity_levels": {
+        "mild": {
+          "summary": "A few small lesions. Cultural correction is usually enough; no spraying needed yet.",
+          "immediate_actions": [
+            "Cut off affected leaf sections with a blade sterilised in flame or 70% alcohol.",
+            "Sterilise the blade again before moving to the next plant -- an unsterilised blade spreads infection faster than the fungus does.",
+            "Bag and destroy the removed material. Do not compost it near the collection.",
+            "Move the plant to a better-ventilated position and isolate it for two weeks."
+          ],
+          "cultural_control": [
+            "Water at the base early in the day so leaves dry before nightfall.",
+            "Increase spacing so leaves of neighbouring plants do not touch.",
+            "Dust cut surfaces with cinnamon powder as a mild natural antifungal."
+          ],
+          "chemical_control": {
+            "recommended": false,
+            "rationale": "At under 10% leaf area, sanitation plus improved airflow normally halts spread. Spraying at this stage adds cost and selects for resistance without adding benefit.",
+            "options": []
+          },
+          "monitoring": "Re-inspect every 3 days for 2 weeks. If new lesions appear, treat as moderate.",
+          "escalate_to_expert": false
+        },
+
+        "moderate": {
+          "summary": "Established infection spreading across the leaf. Sanitation plus a protectant fungicide.",
+          "immediate_actions": [
+            "Isolate the plant from the collection immediately.",
+            "Remove all affected leaf tissue, cutting into healthy tissue beyond the lesion margin.",
+            "Sterilise tools between every cut.",
+            "Destroy removed material away from the growing area."
+          ],
+          "cultural_control": [
+            "Stop overhead watering entirely until the infection is controlled.",
+            "Improve air movement -- a slow-moving fan is more effective than opening more vents.",
+            "Reduce humidity at night, which is when leaf wetness persists longest.",
+            "Check that pots and mounts drain freely."
+          ],
+          "chemical_control": {
+            "recommended": true,
+            "rationale": "Protects the healthy tissue that remains and stops lesion expansion.",
+            "options": [
+              {
+                "active_ingredient": "Mancozeb",
+                "frac_group": "M03 (multi-site protectant)",
+                "type": "protectant",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Broad-spectrum protectant with low resistance risk. Protects uninfected tissue; it does not cure established lesions."
+              },
+              {
+                "active_ingredient": "Thiophanate-methyl",
+                "frac_group": "1 (MBC)",
+                "type": "systemic",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Systemic, so it reaches tissue a spray cannot coat. FRAC group 1 has a known resistance history -- do not use it alone repeatedly."
+              }
+            ]
+          },
+          "monitoring": "Re-inspect every 3 days. Keep the plant isolated until no new lesions appear for 2 weeks.",
+          "escalate_to_expert": false
+        },
+
+        "severe": {
+          "summary": "Over 40% of leaf area lost. The plant is at risk; treat aggressively and consider whether it is worth saving.",
+          "immediate_actions": [
+            "Isolate immediately and well away from healthy plants.",
+            "Inspect every other plant in the collection -- at this severity, spread has usually already happened.",
+            "Remove all badly affected leaves even if this leaves the plant sparse.",
+            "If the crown or stem is involved, the prognosis is poor; consider destroying the plant to protect the collection."
+          ],
+          "cultural_control": [
+            "Stop overhead watering completely.",
+            "Maximise air movement and reduce night humidity.",
+            "Do not fertilise heavily -- soft new growth is more susceptible.",
+            "Repot into fresh medium only after the infection is under control, not during."
+          ],
+          "chemical_control": {
+            "recommended": true,
+            "rationale": "A systemic product is needed; a protectant alone cannot reach infection already inside the tissue.",
+            "options": [
+              {
+                "active_ingredient": "Boscalid + Pyraclostrobin",
+                "frac_group": "7 + 11",
+                "type": "systemic, two modes of action",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Modern combination product. Two modes of action in one formulation slow resistance development. Confirm it is registered for ornamentals in Sri Lanka before recommending it to a grower."
+              },
+              {
+                "active_ingredient": "Thiophanate-methyl",
+                "frac_group": "1 (MBC)",
+                "type": "systemic",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Alternate with a different FRAC group between applications."
+              }
+            ]
+          },
+          "monitoring": "Inspect every 2 days. If lesions continue spreading after two full applications, stop and seek expert diagnosis -- the causal organism may have been misidentified.",
+          "escalate_to_expert": true,
+          "escalation_reason": "At this severity a wrong diagnosis is costly, and continued spread after treatment suggests the pathogen is not what was assumed."
+        }
+      }
+    },
+
+    "phyllosticta_leaf_spot": {
+      "display_name": "Phyllosticta Leaf Spot",
+      "pathogen": "Phyllosticta spp. (Guignardia teleomorph)",
+      "pathogen_type": "fungus",
+      "affected_parts": ["leaf"],
+      "favourable_conditions": "Warm, consistently humid conditions with water sitting on leaves. Spores spread in splashing water, so overhead irrigation is the main vector.",
+      "distinguishing_note": "Lesions typically begin as small purple-black flecks that enlarge into elongated sunken spots, often with a yellow halo, running along the leaf axis.",
+
+      "severity_levels": {
+        "mild": {
+          "summary": "Scattered small flecks. Correct the watering and airflow before reaching for chemicals.",
+          "immediate_actions": [
+            "Trim affected leaf tips or sections with a sterilised blade.",
+            "Sterilise between cuts and between plants.",
+            "Destroy the removed tissue.",
+            "Isolate the plant for observation."
+          ],
+          "cultural_control": [
+            "Switch to base watering. Splashing water is how this spreads.",
+            "Water early enough that leaves are dry before dark.",
+            "Increase spacing and air movement.",
+            "Dust cut surfaces with cinnamon powder."
+          ],
+          "chemical_control": {
+            "recommended": false,
+            "rationale": "Under 10% leaf area, cultural correction alone usually stops it. Spraying here trains resistance without a benefit to show for it.",
+            "options": []
+          },
+          "monitoring": "Re-inspect every 3 days for 2 weeks.",
+          "escalate_to_expert": false
+        },
+
+        "moderate": {
+          "summary": "Lesions coalescing and spreading. Sanitation plus a protectant or systemic fungicide.",
+          "immediate_actions": [
+            "Isolate the plant.",
+            "Remove affected tissue, cutting beyond the lesion margin into healthy tissue.",
+            "Sterilise tools between cuts.",
+            "Check neighbouring plants -- splash spread means the nearest plants are most at risk."
+          ],
+          "cultural_control": [
+            "Stop overhead watering entirely.",
+            "Improve air circulation with gentle continuous movement.",
+            "Lower night-time humidity.",
+            "Avoid heavy nitrogen feeding while the infection is active."
+          ],
+          "chemical_control": {
+            "recommended": true,
+            "rationale": "Protects remaining healthy tissue and limits new infection sites.",
+            "options": [
+              {
+                "active_ingredient": "Mancozeb",
+                "frac_group": "M03 (multi-site protectant)",
+                "type": "protectant",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Low resistance risk, good rotation partner."
+              },
+              {
+                "active_ingredient": "Chlorothalonil",
+                "frac_group": "M05 (multi-site protectant)",
+                "type": "protectant",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Check current registration status for ornamentals in Sri Lanka -- registrations for this active ingredient have changed in several countries."
+              }
+            ]
+          },
+          "monitoring": "Re-inspect every 3 days; keep isolated until 2 weeks pass with no new lesions.",
+          "escalate_to_expert": false
+        },
+
+        "severe": {
+          "summary": "Extensive leaf loss. Systemic treatment, and reassess whether the plant is worth keeping.",
+          "immediate_actions": [
+            "Isolate well away from the collection.",
+            "Inspect the entire collection -- assume spread has already occurred.",
+            "Remove all heavily affected leaves.",
+            "If the crown is affected, consider destroying the plant."
+          ],
+          "cultural_control": [
+            "No overhead watering under any circumstances.",
+            "Maximise airflow; reduce night humidity.",
+            "Hold off on fertiliser until recovery is under way.",
+            "Do not repot while the infection is active."
+          ],
+          "chemical_control": {
+            "recommended": true,
+            "rationale": "Established internal infection needs a systemic product with more than one mode of action.",
+            "options": [
+              {
+                "active_ingredient": "Boscalid + Pyraclostrobin",
+                "frac_group": "7 + 11",
+                "type": "systemic, two modes of action",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Modern option, more effective than older reference-book recommendations for this pathogen. Confirm ornamental registration in Sri Lanka."
+              },
+              {
+                "active_ingredient": "Thiophanate-methyl",
+                "frac_group": "1 (MBC)",
+                "type": "systemic",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Effective but resistance-prone. Alternate FRAC groups between applications."
+              },
+              {
+                "active_ingredient": "Azoxystrobin",
+                "frac_group": "11 (QoI)",
+                "type": "systemic",
+                "dose": "VERIFY",
+                "interval_days": "VERIFY",
+                "applications": "VERIFY",
+                "verified": false,
+                "source_ref": "doa_lk",
+                "notes": "Rotation partner. Do not follow with another group 11 product."
+              }
+            ]
+          },
+          "monitoring": "Inspect every 2 days. No improvement after two applications means the diagnosis should be re-examined.",
+          "escalate_to_expert": true,
+          "escalation_reason": "Severe cases justify expert confirmation of the pathogen before further chemical use."
+        }
+      }
+    },
+
+    "healthy": {
+      "display_name": "Healthy",
+      "pathogen": null,
+      "pathogen_type": null,
+      "affected_parts": [],
+      "severity_levels": {
+        "none": {
+          "summary": "No disease detected. Advice here is preventive maintenance.",
+          "immediate_actions": [
+            "No treatment needed. Do not spray fungicide preventively on a healthy plant -- it costs money and builds resistance for no benefit."
+          ],
+          "cultural_control": [
+            "Water at the base in the morning so leaves are dry by nightfall.",
+            "Keep plants spaced so leaves do not touch.",
+            "Maintain steady gentle air movement.",
+            "Sterilise cutting tools between plants as routine practice, not just when disease appears.",
+            "Quarantine any newly acquired plant for 3 to 4 weeks before adding it to the collection."
+          ],
+          "chemical_control": {
+            "recommended": false,
+            "rationale": "Preventive spraying of healthy plants selects for resistant pathogen strains and offers no measurable benefit at collection scale.",
+            "options": []
+          },
+          "monitoring": "Inspect weekly, paying attention to leaf undersides and the crown where early lesions are easiest to miss.",
+          "escalate_to_expert": false
+        }
+      }
+    },
+
+    "unidentified": {
+      "display_name": "Unidentified condition",
+      "pathogen": null,
+      "pathogen_type": null,
+      "affected_parts": [],
+      "_note": "Returned when the classifier's highest softmax probability falls below the operating threshold. There is no trained 'other' class -- there were not enough images of any fourth condition to train one. This entry exists so the system never names a disease it cannot advise on.",
+      "severity_levels": {
+        "unknown": {
+          "summary": "The plant does not appear healthy, but the system is not confident enough to name the condition. Do not treat on a guess.",
+          "immediate_actions": [
+            "Isolate the plant from the rest of the collection as a precaution.",
+            "Photograph the affected area clearly in daylight, including a whole-plant shot for context.",
+            "Do not apply any chemical until the condition is identified -- the wrong product wastes money, can damage the plant, and can make a correct later diagnosis harder.",
+            "Contact an agricultural extension officer or the orchid research institute with the photographs."
+          ],
+          "cultural_control": [
+            "Reduce leaf wetness and improve airflow. These help against almost every foliar problem and harm nothing.",
+            "Withhold fertiliser until the cause is known."
+          ],
+          "chemical_control": {
+            "recommended": false,
+            "rationale": "Treating an unidentified condition is guessing. If the cause is an oomycete such as Phytophthora rather than a true fungus, standard fungicides will not work at all.",
+            "options": []
+          },
+          "monitoring": "Photograph daily to record progression -- a clear progression sequence greatly helps an expert diagnose it.",
+          "escalate_to_expert": true,
+          "escalation_reason": "Low classifier confidence means the condition is outside the three trained classes, or the photograph is unclear."
+        }
+      }
+    }
+  },
+
+  "out_of_scope_reference": {
+    "_note": [
+      "Not produced by the classifier -- these three classes were dropped for lack of training images.",
+      "Kept in the knowledge base for two reasons: the admin can enter these diagnoses manually,",
+      "and the Phytophthora distinction below is a genuine trap that the report should record."
+    ],
+
+    "phytophthora_black_rot": {
+      "display_name": "Phytophthora Black Rot",
+      "pathogen": "Phytophthora spp.",
+      "pathogen_type": "oomycete",
+      "critical_note": "Phytophthora is an OOMYCETE (water mould), NOT a true fungus. Its cell walls are cellulose rather than chitin, so most standard fungicides -- mancozeb, thiophanate-methyl, the strobilurins -- have little or no effect on it. This distinction is the single most important thing in this file: treating black rot with an ordinary fungicide loses the plant while appearing to be doing something.",
+      "correct_chemical_classes": [
+        {
+          "active_ingredient": "Metalaxyl / Mefenoxam",
+          "example_products": ["Subdue"],
+          "notes": "Phenylamide, specifically active against oomycetes.",
+          "dose": "VERIFY",
+          "verified": false
+        },
+        {
+          "active_ingredient": "Fosetyl-aluminium",
+          "example_products": ["Aliette"],
+          "notes": "Systemic, moves both up and down the plant.",
+          "dose": "VERIFY",
+          "verified": false
+        },
+        {
+          "active_ingredient": "Etridiazole",
+          "example_products": ["Truban", "Terrazole"],
+          "notes": "Soil and medium drench for root and crown infection.",
+          "dose": "VERIFY",
+          "verified": false
+        }
+      ],
+      "natural_option": "Cinnamon powder or cinnamon paste applied to cut surfaces is a widely used natural treatment among orchid growers, appropriate for small lesions and for sealing cuts after removing rotted tissue.",
+      "cultural_control": [
+        "Reduce water immediately -- this organism needs free water to spread.",
+        "Improve drainage and air movement.",
+        "Cut well beyond the rot margin into clean tissue; the rot front runs ahead of the visible discolouration.",
+        "Isolate and inspect neighbours; spread through shared water is rapid."
+      ]
+    },
+
+    "anthracnose": {
+      "display_name": "Anthracnose",
+      "pathogen": "Colletotrichum spp.",
+      "pathogen_type": "fungus",
+      "status": "Out of scope for the classifier. 791 images exist from an earlier collection but the class was excluded when scope narrowed to three classes on 29 Aug 2026.",
+      "note": "If reinstated, it needs its own treatment entry filled in before the classifier is allowed to predict it -- otherwise the system names a disease it cannot advise on."
+    },
+
+    "sooty_mold": {
+      "display_name": "Sooty Mold",
+      "pathogen": "various saprophytic fungi",
+      "pathogen_type": "fungus",
+      "status": "Out of scope for the classifier.",
+      "note": "Sooty mold grows on honeydew excreted by sap-sucking insects. It is a SYMPTOM, not the primary problem -- controlling the insects (scale, mealybug, aphid) removes the cause. Treating the mold alone achieves nothing lasting."
+    }
+  }
+}

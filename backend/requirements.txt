@@ -24,6 +24,8 @@ pandas==2.2.2
 joblib==1.4.2
 tensorflow==2.16.2         # Required by growth_stage's src.predict (was missing - route import would fail without it). 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch and matches Colab's Keras 3 save format
 
+# Model inference (Component 1 -- disease detection)
+
 # TensorFlow was pinned TWICE, to 2.16.2 above and 2.20.0 here. pip cannot
 # satisfy both, so a fresh `pip install -r requirements.txt` failed or resolved
 # unpredictably - which would have stopped any deployment at the first step.

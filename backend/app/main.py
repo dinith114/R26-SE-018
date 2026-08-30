@@ -117,8 +117,22 @@ if __name__ == "__main__":
 # -------------------------------------------------------------------
 # Route imports (uncomment as components are developed)
 # -------------------------------------------------------------------
-# from app.api.routes import disease_detection
+from app.api.routes import disease_detection
+
+app.include_router(
+    disease_detection.router,
+    prefix="/api/v1/disease",
+    tags=["Disease Detection"],
+)
+
+# Still stubs -- leave commented until each component is implemented.
 # from app.api.routes import growth_stage
+# from app.api.routes import smart_watering
+# from app.api.routes import hybrid_pollination
+#
+# app.include_router(growth_stage.router,      prefix="/api/v1/growth",       tags=["Growth Stage"])
+# app.include_router(smart_watering.router,     prefix="/api/v1/watering",     tags=["Smart Watering"])
+# app.include_router(hybrid_pollination.router,  prefix="/api/v1/pollination",  tags=["Hybrid Pollination"])
 from app.api.routes import devices
 from app.api.routes import smart_watering
 from app.api.routes import hybrid_pollination
