@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "639162302186",
+    "firebase_url": "https://orchid-smart-care-default-rtdb.firebaseio.com",
+    "project_id": "orchid-smart-care",
+    "storage_bucket": "orchid-smart-care.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:639162302186:android:130943c482c6410a682193",
+        "android_client_info": {
+          "package_name": "lk.ac.sliit.r26se018.orchidcare"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCk5enpArtFDAd54aVraj6kQ8gtVpz9-NY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

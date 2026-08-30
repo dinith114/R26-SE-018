@@ -7,12 +7,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, SHADOW } from '../config/theme';
 
 import HomeScreen from '../screens/HomeScreen';
-import WateringScreen from '../screens/WateringScreen';
 import DiseaseDetectionScreen from '../screens/DiseaseDetectionScreen';
 import GrowthStageScreen from '../screens/GrowthStageScreen';
 import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
+import FarmDashboardScreen from '../screens/FarmDashboardScreen';
+import FarmTabScreen from '../screens/FarmTabScreen';
+import SectionDetailScreen from '../screens/SectionDetailScreen';
+import RunScreen from '../screens/RunScreen';
+import AlarmScreen from '../screens/AlarmScreen';
+import HousePlannerScreen from '../screens/HousePlannerScreen';
+import CalibrationScreen from '../screens/CalibrationScreen';
+import HouseMapScreen from '../screens/HouseMapScreen';
+import PlacementResultScreen from '../screens/PlacementResultScreen';
+import FarmSetupScreen from '../screens/FarmSetupScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -52,7 +61,7 @@ const HomeFAB = ({ onPress, focused }) => {
 
 function CustomTabBar({ state, descriptors, navigation }) {
   const tabConfig = {
-    Care: { icon: 'water', outline: 'water-outline', label: 'Care' },
+    Farm: { icon: 'business', outline: 'business-outline', label: 'My Farm' },
     Disease: { icon: 'search', outline: 'search-outline', label: 'Detect' },
     Home: null,
     Hybrid: { icon: 'git-merge', outline: 'git-merge-outline', label: 'Hybrid' },
@@ -84,9 +93,18 @@ function CustomTabBar({ state, descriptors, navigation }) {
 }
 
 function MainTabs() {
+  /* initialRouteName is explicit because a tab navigator otherwise opens on its
+     FIRST declared screen, which put the app on the farm's section list. Home is
+     the dashboard - today's plan, alerts and quick nav - and is the centre tab,
+     so landing anywhere else made the tab bar look mis-selected on launch. The
+     declaration order below is left alone: it sets the left-to-right order of
+     the tabs themselves. */
   return (
-    <Tab.Navigator tabBar={(props) => <CustomTabBar {...props} />} screenOptions={{ headerShown: false }}>
-      <Tab.Screen name="Care" component={WateringScreen} />
+    <Tab.Navigator
+      initialRouteName="Home"
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}>
+      <Tab.Screen name="Farm" component={FarmTabScreen} />
       <Tab.Screen name="Disease" component={DiseaseDetectionScreen} />
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Hybrid" component={HybridPollinationScreen} />
@@ -95,13 +113,27 @@ function MainTabs() {
   );
 }
 
-export default function AppNavigator() {
+/* `navRef` and `onReady` come from App.js, which routes a tapped notification.
+   This used to take NO props at all while App.js passed `navRef={navRef}`, so
+   the ref was never attached, navRef.current stayed null forever, and every
+   `navRef.current?.navigate(...)` was silently swallowed by the optional chain.
+   Tapping any notification did nothing. */
+export default function AppNavigator({ navRef, onReady }) {
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navRef} onReady={onReady}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        <Stack.Screen name="FarmDashboard" component={FarmDashboardScreen} />
+        <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />
+        <Stack.Screen name="Run" component={RunScreen} />
+        <Stack.Screen name="Alarm" component={AlarmScreen} />
+        <Stack.Screen name="FarmSetup" component={FarmSetupScreen} />
+        <Stack.Screen name="HousePlanner" component={HousePlannerScreen} />
+        <Stack.Screen name="Calibration" component={CalibrationScreen} />
+        <Stack.Screen name="HouseMap" component={HouseMapScreen} />
+        <Stack.Screen name="PlacementResult" component={PlacementResultScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

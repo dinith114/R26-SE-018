@@ -12,6 +12,7 @@ build/
 .Python
 env/
 venv/
+venv*/
 .venv/
 pip-log.txt
 pip-delete-this-directory.txt
@@ -40,51 +41,30 @@ mlruns/
 
 # Large datasets (store in cloud, not git)
 ml-models/*/data/raw/
+ml-models/*/data/raw.zip
 ml-models/*/data/processed/
+ml-models/*/data/images/
 ml-models/*/data/split/
 ml-models/*/data/split_augmented/
 ml-models/*/data/pending/
 datasets/
 
-# Generated data is regenerable from raw/ with seed 42, so it is never
-# committed. The small CSVs that DO belong in git are re-included below.
-!ml-models/*/data/split/split_manifest.csv
-!ml-models/*/data/severity_labels.csv
+# Raw annotated photos for the object detector (~300MB) - regenerate the
+# trainable dataset from these with prepare_dataset.py
+ml-models/shared/object_detection/data/flowers/
+ml-models/shared/object_detection/data/plants/
+ml-models/shared/object_detection/data/seeds/
+ml-models/shared/object_detection/data/buds/
 
-# ===========================
-# Component 1 - disease detection (R26-SE-018)
-# ===========================
+# Generated YOLO dataset (regenerate with prepare_dataset.py) and training runs
+ml-models/shared/object_detection/data/yolo/
+ml-models/shared/object_detection/runs/
 
-# Colab upload package. 133 MB of images + scripts, rebuilt in seconds by
-# re-zipping data/processed/ with the src and tools scripts. GitHub REFUSES
-# any file over 100 MB, so committing this would break the push outright.
-ml-models/*/orchid_colab.zip
-ml-models/*/orchid_results.zip
-ml-models/*/orchid_final.zip
-
-# Timestamped safety copies written by make_labels_template.py and
-# label_severity.py every time they run. The real file, severity_labels.csv,
-# IS tracked -- these are just its backups and would accumulate forever.
-ml-models/*/data/severity_labels.before_labelling_*.csv
-ml-models/*/data/severity_labels.backup_*.csv
-
-# Written by update_manifest_severity.py before it rewrites a manifest.
-*.csv.bak
-
-# Temporary file compare_models.py writes to measure model size on disk.
-ml-models/*/models/_size_probe.keras
-
-# Scratch folders from the one-image augmentation demo in HOW_TO_RUN.md.
-ml-models/*/tools/demo_in/
-ml-models/*/tools/demo_out/
-
-# NOTE ON THE TRAINED MODELS -- deliberately NOT ignored.
-# disease_model.keras (21 MB) and severity_model.keras (9 MB) ARE committed so
-# that anyone who clones the repository gets a working backend instead of a 503
-# from the /detect endpoint. That is worth 30 MB. The .weights.h5 fallbacks are
-# already excluded by the *.h5 rule above, since they duplicate the .keras files.
-# If you retrain repeatedly, be aware each committed model stays in git history
-# permanently -- consider committing only the final one.
+# Colab upload/download bundles - regenerate with prepare_for_colab.py /
+# zip_for_colab.py, or re-download from Drive; too large for git anyway
+# (growth_stage/bloom_prediction colab zips exceed GitHub's 100MB file limit)
+*_colab.zip
+ml-models/trained models/
 
 # ===========================
 # React Native / Node.js
@@ -157,3 +137,14 @@ Thumbs.db
 # ===========================
 iot/esp32/.pio/
 iot/esp32/.vscode/
+
+# Firebase service-account keys. These grant server-side access to the whole
+# project - unlike google-services.json, which is only client config. The real
+# one lives OUTSIDE this repo at ~/.orchid-secrets/firebase-admin.json; this
+# pattern only exists so a stray copy cannot be committed by accident.
+*firebase-adminsdk*.json
+firebase-admin.json
+serviceAccountKey.json
+
+# The API key. The repo is PUBLIC - never commit the real one.
+mobile/src/config/secret.js

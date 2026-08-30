@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Deliberately plain. This is read at arm's length, on a phone that has just
+  woken the user up, so it is one line of what is wrong and two large targets.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#0F2A1E"
+    android:padding="28dp">
+
+    <TextView
+        android:id="@+id/alarm_kicker"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ORCHID FARM"
+        android:textColor="#7FD1A6"
+        android:textSize="13sp"
+        android:letterSpacing="0.18"
+        android:textStyle="bold"
+        android:layout_marginBottom="14dp" />
+
+    <TextView
+        android:id="@+id/alarm_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="27sp"
+        android:textStyle="bold"
+        android:gravity="center" />
+
+    <TextView
+        android:id="@+id/alarm_body"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#C8E6D6"
+        android:textSize="17sp"
+        android:gravity="center"
+        android:lineSpacingExtra="5dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="40dp" />
+
+    <Button
+        android:id="@+id/alarm_open"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:text="Open the app"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        android:textColor="#0F2A1E"
+        android:backgroundTint="#7FD1A6" />
+
+    <Button
+        android:id="@+id/alarm_dismiss"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:text="Not now"
+        android:textSize="16sp"
+        android:textColor="#C8E6D6"
+        android:backgroundTint="#1C3A2C"
+        android:layout_marginTop="12dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="This keeps reminding you until it is dealt with in the app."
+        android:textColor="#6F9683"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:layout_marginTop="22dp" />
+
+</LinearLayout>

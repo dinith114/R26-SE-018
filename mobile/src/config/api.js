@@ -1,60 +1,40 @@
 /**
- * api.js — backend connection settings.
+ * API configuration for Component 2 (growth stage and bloom prediction).
  *
- * COMPONENT 1 (disease detection). Only this component's screens read this file.
+ * The backend address is NOT chosen here any more. This module used to pick
+ * ENV.DEV.ANDROID_URL (10.0.2.2) on Android - the emulator's alias for the host
+ * machine, unreachable from a real phone - and in a release build __DEV__ is
+ * false, so it fell through to a 'your-api-domain.com' placeholder. Either way
+ * this component could not reach the backend from an installed APK.
  *
- * ---------------------------------------------------------------------------
- * IF THE APP SAYS IT CANNOT REACH THE SERVER, CHANGE ONE LINE: API_HOST BELOW.
- * ---------------------------------------------------------------------------
- *
- * Why this is not just "localhost":
- *
- * When Expo Go runs on your phone, `localhost` means THE PHONE ITSELF, not your
- * laptop. The phone has no server on it, so the request fails instantly. You
- * must give the phone your laptop's address on the Wi-Fi network.
- *
- * How to find it (Windows):
- *     ipconfig
- * Look under your Wi-Fi adapter for "IPv4 Address", e.g. 192.168.1.101
- *
- * Two things must both be true:
- *   1. The phone and the laptop are on the SAME Wi-Fi network.
- *   2. The backend was started with --host 0.0.0.0, not the default. The
- *      default only accepts connections from the laptop itself.
- *
- *      cd backend
- *      .venv/Scripts/python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
- *
- * If it still fails, Windows Firewall is usually the cause — allow Python on
- * private networks when the prompt appears.
+ * One constant now, shared with every other screen and service.
  */
+import BASE_URL from './backend';
 
-// Your laptop's Wi-Fi IPv4 address. Detected as 192.168.1.101 on 30 Aug 2026.
-// This changes when you join a different Wi-Fi network, so re-check with ipconfig.
-export const API_HOST = '192.168.1.101';
-export const API_PORT = 8000;
+export const API_CONFIG = {
+    BASE_URL: BASE_URL,
+    ENDPOINTS: {
+        // Growth Stage Recognition (Component 2)
+        GROWTH_IDENTIFY: '/api/v1/growth/identify',
+        GROWTH_IDENTIFY_OBJECTS: '/api/v1/growth/identify-objects',
+        GROWTH_STAGES: '/api/v1/growth/stages',
+        GROWTH_STAGE_INFO: '/api/v1/growth/stage',
+        GROWTH_HEALTH: '/api/v1/growth/health',
 
-export const API_BASE_URL = `http://${API_HOST}:${API_PORT}`;
-export const DISEASE_API = `${API_BASE_URL}/api/v1/disease`;
+        // Bloom Date Prediction (Component 2)
+        BLOOM_PREDICT: '/api/v1/bloom/predict',
+        BLOOM_PREDICT_OBJECTS: '/api/v1/bloom/predict-objects',
+        BLOOM_HEALTH: '/api/v1/bloom/health',
 
-/**
- * Request timeout in milliseconds.
- *
- * Generous on purpose. The very first /detect call after the server starts has
- * to load two TensorFlow models from disk, which takes several seconds. Every
- * call after that is fast because the models stay cached in memory.
- */
-export const REQUEST_TIMEOUT_MS = 60000;
-
-/** Largest photo the backend accepts. Matches MAX_UPLOAD_BYTES in the API. */
-export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
-
-/**
- * Confidence below which the backend reports "unidentified" instead of naming a
- * disease. Chosen from the validation sweep, not the test set.
- * See PROJECT_CONTEXT.md section 4c.
- *
- * Sent as a query parameter so the value is visible and adjustable from the app
- * rather than hidden in the server.
- */
-export const CONFIDENCE_THRESHOLD = 0.7;
+        // Disease Detection (Component 1)
+        DISEASE_DETECT: '/api/v1/disease/detect',
+        
+        // Smart Watering (Component 3)
+        WATERING_PREDICT: '/api/v1/watering/predict',
+        
+        // Hybrid Pollination (Component 4)
+        POLLINATION_COMPATIBILITY: '/api/v1/pollination/compatibility',
+    },
+    TIMEOUT: 30000, // 30 seconds
+    MAX_RETRIES: 3,
+};
