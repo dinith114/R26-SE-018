@@ -21,6 +21,7 @@ import HousePlannerScreen from '../screens/HousePlannerScreen';
 import CalibrationScreen from '../screens/CalibrationScreen';
 import HouseMapScreen from '../screens/HouseMapScreen';
 import PlacementResultScreen from '../screens/PlacementResultScreen';
+import AddSensorScreen from '../screens/AddSensorScreen';
 import FarmSetupScreen from '../screens/FarmSetupScreen';
 
 const Tab = createBottomTabNavigator();
@@ -134,6 +135,7 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="Calibration" component={CalibrationScreen} />
         <Stack.Screen name="HouseMap" component={HouseMapScreen} />
         <Stack.Screen name="PlacementResult" component={PlacementResultScreen} />
+        <Stack.Screen name="AddSensor" component={AddSensorScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

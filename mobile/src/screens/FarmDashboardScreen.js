@@ -714,6 +714,19 @@ export default function FarmDashboardScreen({ navigation }) {
                       Sections are fixed while this house calibrates
                     </Text>
                   </View>
+                ) : h.meta?.placement ? (
+                  /* A house the planner built already HAS all its sections -
+                     the placement decision named them and then said which ones
+                     keep a sensor. So "add" here does not mean create a zone,
+                     it means put hardware into one that is being estimated, and
+                     sending the farmer to the section-creation wizard would
+                     have them making a thirteenth zone in a house with twelve.
+                     Same screen the map uses; one flow, two doors. */
+                  <TouchableOpacity style={styles.addSec}
+                    onPress={() => navigation.navigate('AddSensor', { houseId: h.houseId })}>
+                    <Ionicons name="add" size={16} color={COLORS.primary} />
+                    <Text style={styles.addSecText}>Add a sensor to {h.meta?.name || h.houseId}</Text>
+                  </TouchableOpacity>
                 ) : (
                   <TouchableOpacity style={styles.addSec}
                     onPress={() => navigation.navigate('FarmSetup', { addToHouse: h.houseId })}>

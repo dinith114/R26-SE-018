@@ -732,7 +732,7 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.8\"" +
+                ",\"fw\":\"validation-1.9\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node
