@@ -1,4 +1,4 @@
-Grouped cross-validation results - 2026-08-28 21:27
+Grouped cross-validation results - 2026-08-30 23:44
 2-fold StratifiedGroupKFold, grouped by plant
 Majority-class baseline: 0.6387
 Best model: XGBoost
@@ -7,76 +7,76 @@ Best model: XGBoost
 --------------------------------------------------------
 Random Forest
 --------------------------------------------------------
-Accuracy (grouped): 0.6359
-Balanced accuracy : 0.5175
-Weighted F1       : 0.6105
+Accuracy (grouped): 0.5294
+Balanced accuracy : 0.4042
+Weighted F1       : 0.5246
 Beats baseline    : False
 
               precision    recall  f1-score   support
 
-    Moderate       0.11      0.02      0.04        44
-Not Suitable       0.49      0.86      0.63        85
-    Suitable       0.77      0.67      0.71       228
+    Moderate       0.00      0.00      0.00        44
+Not Suitable       0.44      0.61      0.51        85
+    Suitable       0.67      0.60      0.63       228
 
-    accuracy                           0.64       357
-   macro avg       0.46      0.52      0.46       357
-weighted avg       0.62      0.64      0.61       357
+    accuracy                           0.53       357
+   macro avg       0.37      0.40      0.38       357
+weighted avg       0.53      0.53      0.52       357
 
 
 --------------------------------------------------------
 SVM (RBF)
 --------------------------------------------------------
-Accuracy (grouped): 0.6527
-Balanced accuracy : 0.5165
-Weighted F1       : 0.6286
-Beats baseline    : True
+Accuracy (grouped): 0.4790
+Balanced accuracy : 0.4050
+Weighted F1       : 0.4789
+Beats baseline    : False
 
               precision    recall  f1-score   support
 
-    Moderate       0.08      0.02      0.04        44
-Not Suitable       0.53      0.81      0.64        85
-    Suitable       0.77      0.71      0.74       228
+    Moderate       0.00      0.00      0.00        44
+Not Suitable       0.41      0.74      0.53        85
+    Suitable       0.66      0.47      0.55       228
 
-    accuracy                           0.65       357
-   macro avg       0.46      0.52      0.47       357
-weighted avg       0.62      0.65      0.63       357
+    accuracy                           0.48       357
+   macro avg       0.36      0.40      0.36       357
+weighted avg       0.52      0.48      0.48       357
 
 
 --------------------------------------------------------
 Logistic Regression
 --------------------------------------------------------
-Accuracy (grouped): 0.7283
-Balanced accuracy : 0.5892
-Weighted F1       : 0.7330
+Accuracy (grouped): 0.6975
+Balanced accuracy : 0.5633
+Weighted F1       : 0.6947
 Beats baseline    : True
 
               precision    recall  f1-score   support
 
     Moderate       0.00      0.00      0.00        44
-Not Suitable       0.90      1.00      0.95        85
-    Suitable       0.82      0.77      0.79       228
+Not Suitable       0.73      0.95      0.83        85
+    Suitable       0.83      0.74      0.78       228
 
-    accuracy                           0.73       357
-   macro avg       0.58      0.59      0.58       357
-weighted avg       0.74      0.73      0.73       357
+    accuracy                           0.70       357
+   macro avg       0.52      0.56      0.54       357
+weighted avg       0.70      0.70      0.69       357
 
 
 --------------------------------------------------------
 XGBoost  * BEST
 --------------------------------------------------------
-Accuracy (grouped): 0.7339
-Balanced accuracy : 0.5896
-Weighted F1       : 0.7392
+Accuracy (grouped): 0.7171
+Balanced accuracy : 0.5784
+Weighted F1       : 0.7148
 Beats baseline    : True
 
               precision    recall  f1-score   support
 
     Moderate       0.00      0.00      0.00        44
-Not Suitable       0.91      0.99      0.95        85
-    Suitable       0.83      0.78      0.80       228
+Not Suitable       0.80      0.98      0.88        85
+    Suitable       0.83      0.76      0.79       228
 
-    accuracy                           0.73       357
-   macro avg       0.58      0.59      0.58       357
-weighted avg       0.75      0.73      0.74       357
+    accuracy                           0.72       357
+   macro avg       0.54      0.58      0.56       357
+weighted avg       0.72      0.72      0.71       357
 
 

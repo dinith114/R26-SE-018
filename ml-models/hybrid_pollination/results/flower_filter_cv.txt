@@ -9,20 +9,20 @@ STAGE 2 RETRAINED - now including non-orchid foliage as negatives
   8089
 
 [3] Negatives - foliage
-  392 downloaded (aloe, agave - independent of the test set)
+  396 downloaded (aloe, agave - independent of the test set)
   99 ferns and houseplants from the validation set - CROSS-VALIDATED
   below, never scored by a model that trained on them
 
 [4] Cross-validated foliage refusal (the honest foliage number)
-  foliage refused: 175/491 = 35.6%   (was 16% before)
+  foliage refused: 175/495 = 35.4%   (was 16% before)
 
 [5] Final model, fitted on everything
-  1190 positives vs 8580 negatives, threshold 0.1736
+  1190 positives vs 8584 negatives, threshold 0.1741
 
 [6] Still fully held out - never in training at any point
   orchids (Vanda + other genera)     n=88   ACCEPTED 82%
   roses, tulips, sunflowers          n=45   REFUSED  78%
-  ROC AUC orchid vs other flower (third source): 0.867
+  ROC AUC orchid vs other flower (third source): 0.868
 
 [7] Per-category, final model
   cars                   n=42   called orchid  88%

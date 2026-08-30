@@ -318,13 +318,17 @@ image. Both use masked features and grouped cross-validation by plant.
 
 | Trait | Accuracy | F1 | Baseline | Features |
 |---|---|---|---|---|
-| `plant_strength` | **0.683** | **0.663** | 0.546 | frozen ResNet18 embeddings |
-| `leaf_condition` | **0.633** | **0.611** | 0.501 | handcrafted + CNN combined |
+| `plant_strength` | **0.698** | **0.679** | 0.546 | frozen ResNet18 embeddings |
+| `leaf_condition` | **0.557** | **0.546** | 0.501 | frozen ResNet18 embeddings |
 
 Transfer learning mattered. Hand-crafted colour and contour statistics scored
 0.482 on `plant_strength` — *below* its 0.546 baseline. Frozen ImageNet
-features reached 0.683. Whatever a breeder means by "weak" is apparently not
+features reached 0.698. Whatever a breeder means by "weak" is apparently not
 captured by colour and contour statistics.
+
+`leaf_condition` sits close to its baseline — 0.557 against 0.501. That margin
+is thin, and the app says so rather than hiding it: every leaf reading is shown
+with its confidence and the model's own accuracy beside it.
 
 The network is **frozen**, not fine-tuned: with 28 distinct plants, training a
 CNN end-to-end would memorise them, which is the failure that produced the
@@ -334,16 +338,72 @@ Honest limits, both flagged in `trait_predictor.py`:
 - The `weak` class has only 3–4 training plants. A `weak` prediction has its
   confidence halved because that class is not reliably learned.
 - Confidence is bounded by cross-validated accuracy, so a 0.9 softmax from a
-  63%-accurate model reports ~0.57, not 0.9.
+  56%-accurate model reports ~0.50, not 0.9.
+
+## All models were refitted in the deployment environment
+
+Every figure in this file comes from models fitted with the exact versions the
+server pins, **not** the versions on the development machine:
+
+| | development | deployment |
+|---|---|---|
+| Python | 3.14 | 3.9 |
+| numpy | 2.4.2 | **1.26.4** |
+| scikit-learn | 1.8.0 | **1.5.0** |
+| xgboost | 3.2.0 | **2.1.1** |
+
+This was forced by a deployment failure, and the failure had two layers.
+
+**`No module named 'xgboost'`** — the suitability model is an `XGBClassifier`
+and loading a pickle needs the library that wrote it, but `xgboost` was never
+added to `backend/requirements.txt`. Now pinned at 2.1.1, not 3.x, because 3.x
+requires numpy>=2 and this project pins numpy 1.26.4 for its saved models.
+
+**Underneath that, a worse one.** All six models were numpy>=2 pickles. numpy
+2.0 renamed `numpy.core` to `numpy._core`, so those pickles raise
+`ModuleNotFoundError` on numpy 1.26 — they could never have loaded on the
+server, xgboost or no xgboost. Bumping the server's numpy was not an option:
+the pin exists for other components' saved models.
+
+Refitting in the pinned environment moved the numbers, and the shifts are
+larger than "same data, same seed" suggests:
+
+| Model | before | after |
+|---|---|---|
+| Suitability accuracy | 0.734 | **0.717** |
+| `plant_strength` accuracy | 0.683 | **0.698** |
+| `leaf_condition` accuracy | 0.633 | **0.557** |
+
+`leaf_condition` also changed its winning configuration, from Random Forest on
+combined features to Extra Trees on CNN features alone. These are the figures
+that describe the models that actually run.
+
+It also exposed a bug that only appears on the pinned version:
+
+    ValueError: Invalid classes inferred from unique values of `y`.
+                Expected: [0 1], got [1 2]
+
+With two Moderate plants, a grouped CV fold's training split can contain none
+of them. xgboost 3.x quietly remapped the labels; 2.1.1 refuses. `LabelSafeXGB`
+in `train.py` encodes labels per fit so the same code runs on both. The
+deployment fit is unwrapped back to a plain `XGBClassifier` before saving —
+a pickle carrying a class defined in the training script would fail to load
+anywhere `train.py` is not importable.
 
 ## Suitability model
 
 | Metric | Score |
 |---|---|
-| Accuracy | 0.734 |
-| Weighted F1 | 0.739 |
-| Balanced accuracy | 0.590 |
+| Accuracy | 0.717 |
+| Weighted F1 | 0.715 |
+| Balanced accuracy | 0.578 |
 | Majority baseline | 0.639 |
+
+| Class | Precision | Recall | F1 | Support |
+|---|---|---|---|---|
+| Not Suitable | 0.80 | **0.98** | 0.88 | 85 |
+| Suitable | 0.83 | 0.76 | 0.79 | 228 |
+| Moderate | 0.00 | 0.00 | 0.00 | 44 |
 
 `Moderate` scores **0.00** on precision, recall and F1 — there are only 2
 Moderate plants, so the class cannot be learned. Report this rather than hiding
@@ -504,7 +564,7 @@ non-plants:
 The threshold was tightened to 0.98 after a non-orchid houseplant - an anthurium
 photographed on a white background - came back "Suitable, 97.9%". Extending
 stage 2 with foliage negatives was tried first and was not enough on its own:
-cross-validated foliage refusal reached only 21.5%, because 191 foliage images
+cross-validated foliage refusal reached only 35.4%, because 191 foliage images
 cannot outweigh 8089 flowers and 1190 orchids inside the fit. The stage-1
 threshold turned out to be the effective lever, taking foliage refusal from 77%
 to 94%.
@@ -561,14 +621,14 @@ class that matters:
 
 | Class | Precision | Recall | Predicted |
 |---|---|---|---|
-| Not Suitable | 0.91 | **0.99** | 92 |
-| Suitable | 0.83 | 0.78 | 215 |
+| Not Suitable | 0.80 | **0.98** | 92 |
+| Suitable | 0.83 | 0.76 | 215 |
 | Moderate | 0.00 | 0.00 | 50 |
 
-It recalls 84 of 85 Not Suitable images. So the model is not broken - it is
+It recalls 83 of 85 Not Suitable images. So the model is not broken - it is
 **extrapolating** onto photographs from outside the collection it was fitted to,
 and reporting 0.99 confidence while doing it. A system whose honest balanced
-accuracy is 0.59 should not print 0.99 on a photograph it has no basis to judge.
+accuracy is 0.58 should not print 0.99 on a photograph it has no basis to judge.
 
 **The fix reuses a measurement already being taken.** The gate computes a
 novelty distance for every upload. The 90th percentile of the training distances

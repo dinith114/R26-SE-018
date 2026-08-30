@@ -22,6 +22,13 @@ scikit-learn==1.5.0
 numpy==1.26.4
 pandas==2.2.2
 joblib==1.4.2
+xgboost==2.1.1             # Component 4's suitability model is an XGBClassifier.
+                           # Loading a pickle needs the library that made it, so
+                           # without this the model fails with
+                           #   No module named 'xgboost'
+                           # and /api/v1/pollination/assess answers "Model not
+                           # loaded". 2.1.1, not 3.x: 3.x needs numpy>=2 and this
+                           # project pins numpy==1.26.4 for its saved models.
 tensorflow==2.16.2         # Required by growth_stage's src.predict (was missing - route import would fail without it). 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch and matches Colab's Keras 3 save format
 
 # Model inference (Component 1 -- disease detection)

@@ -33,6 +33,7 @@ Usage:
 """
 
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 import os
 import sys
 import joblib
@@ -73,6 +74,52 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 DEFAULT_FOLDS = 5
 
 
+class LabelSafeXGB(BaseEstimator, ClassifierMixin):
+    """
+    XGBoost that survives a fold whose training split is missing a class.
+
+    Moderate has only 2 plants, so under grouped cross-validation a training
+    split can legitimately contain none of them. XGBoost requires its labels to
+    be a contiguous 0..n-1 range: given [1, 2] it raises
+
+        ValueError: Invalid classes inferred from unique values of `y`.
+                    Expected: [0 1], got [1 2]
+
+    xgboost 3.x quietly remapped the labels; 2.1.1 - the version pinned on the
+    deployment server - does not. Training therefore worked on the development
+    machine and could not run where it is deployed. The labels are encoded here
+    instead, so the same code runs on both.
+
+    predict_proba returns a column for EVERY class seen in the full dataset,
+    not only those in the fold, with zeros for the absent ones. Without that,
+    probability columns would silently shift between folds.
+    """
+
+    def __init__(self, **params):
+        self.params = params
+
+    def get_params(self, deep=True):
+        return dict(self.params)
+
+    def set_params(self, **params):
+        self.params.update(params)
+        return self
+
+    def fit(self, X, y):
+        y = np.asarray(y)
+        self.classes_ = np.unique(y)
+        self._encoder = {c: i for i, c in enumerate(self.classes_)}
+        y_enc = np.array([self._encoder[v] for v in y])
+        self._model = XGBClassifier(**self.params).fit(X, y_enc)
+        return self
+
+    def predict(self, X):
+        return self.classes_[self._model.predict(X)]
+
+    def predict_proba(self, X):
+        return self._model.predict_proba(X)
+
+
 def get_models() -> dict:
     """
     The models to compare, each wrapped in a Pipeline so that scaling is fitted
@@ -97,7 +144,7 @@ def get_models() -> dict:
     }
 
     if HAS_XGBOOST:
-        models["XGBoost"] = pipe(XGBClassifier(
+        models["XGBoost"] = pipe(LabelSafeXGB(
             n_estimators=200, max_depth=8, learning_rate=0.1,
             subsample=0.8, colsample_bytree=0.8, random_state=42,
             eval_metric="mlogloss",
@@ -215,6 +262,19 @@ def fit_final_model(results: dict, best_name: str, data: dict):
     a performance measure and is deliberately not reported.
     """
     model = results[best_name]["model"]
+
+    # LabelSafeXGB exists only to survive a CV fold that is missing a class.
+    # The deployment fit sees every class, so it is unwrapped back to a plain
+    # XGBClassifier before saving: a pickle carrying a class defined in this
+    # training script would need train.py importable wherever the model is
+    # loaded, and the backend would fail with
+    #     Can't get attribute 'LabelSafeXGB' on <module '__main__'>
+    if HAS_XGBOOST and isinstance(model, Pipeline):
+        final = model.named_steps.get("model")
+        if isinstance(final, LabelSafeXGB):
+            model = Pipeline([("scaler", StandardScaler()),
+                              ("model", XGBClassifier(**final.get_params()))])
+
     model.fit(data["X"], data["y"])
 
     os.makedirs(MODELS_DIR, exist_ok=True)
