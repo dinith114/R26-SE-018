@@ -8,7 +8,7 @@
   ------------
   Twenty sensor boards cost about LKR 47,000 and take a week to build. This page
   stands in for them: each virtual node speaks the SAME Firebase protocol as
-  firmware validation-1.8, on the same paths, with the same payload keys. The
+  firmware validation-1.9, on the same paths, with the same payload keys. The
   mobile app has no way to tell one of these from a board on the bench, and that
   is the entire point - a simulator the app knows about tests the simulator, not
   the app.
@@ -25,7 +25,14 @@
     section cmd   GET   /farm/houses/{h}/sections/{s}/command.json
                   PUT   .../commandAck.json
     master queue  GET   /farm/masters/{MAC}/queue.json
+                  PUT   /farm/masters/{MAC}/running.json    before the valve opens
+                  GET   /farm/masters/{MAC}/stop.json       while it pours
                   PUT   /farm/masters/{MAC}/acks/{id}.json  then DELETE the entry
+
+  The running/stop pair is new in validation-1.9 and is what makes a countdown
+  and a Stop button possible for a routed pour. Before it, the controller said
+  nothing between accepting a command and finishing it, so the app had no start
+  time to count down from and Stop was answered "unsupported".
 
   PATCH, never PUT, on the device record. A PUT wipes `assignedTo`, which the
   APP owns; the firmware comments on this and so does this file, because it is
@@ -197,7 +204,7 @@
    this same public repository. Putting it here exposes nothing new. */
 const FB = 'https://orchid-smart-care-default-rtdb.firebaseio.com';
 
-const FW = 'validation-1.8';   // must stay >= 1.6 or the backend treats these
+const FW = 'validation-1.9';   // must stay >= 1.6 or the backend treats these
                                // nodes as legacy and widens the online window
 
 /* ══════════════════════════════════════ Firebase REST ═════════════════════ */
@@ -588,11 +595,50 @@ async function pollMasterQueue(n) {
   n.busy = true; renderPool();
   log('t-cmd', n.mac.slice(-4) + ' MASTER ' + c.action + ' ' + target
       + ' ch' + ch + ' ' + secs + 's');
-  await pourSeconds(secs);
+
+  /* Say the pour has STARTED, before it starts. validation-1.9 publishes this
+     the moment before the valve opens and deletes it when the valve shuts, so
+     the app can count down against the node's clock instead of guessing. A
+     simulator that skipped it would let the app look correct here and fail
+     against the real board, which is the one thing this bench must never do. */
+  const startedAt = Math.floor(Date.now() / 1000);
+  await fbPut('/farm/masters/' + n.mac + '/running.json', {
+    id: id, targetSection: target, channel: ch,
+    durationSec: secs, startedAt: startedAt
+  });
+
+  /* Cooperative, like the firmware: a Stop naming this run cuts it short. The
+     real board can only check every STOP_POLL_MS because a TLS handshake costs
+     it seconds; here a check is free, so it polls faster - the OUTCOME is
+     identical, and pretending to be slow would only make the bench worse at
+     finding bugs. */
+  const stopped = await pourWatchingForStop(n, id, secs);
+
+  await fbDelete('/farm/masters/' + n.mac + '/running.json');
+  const ran = Math.min(secs, Math.floor(Date.now() / 1000) - startedAt);
   n.busy = false; renderPool();
 
-  await ackMaster(n, id, target, ch, secs, 'ok');
-  log('t-ok', n.mac.slice(-4) + ' ' + target + ' poured ' + secs + 's');
+  await ackMaster(n, id, target, ch, stopped ? ran : secs,
+                  stopped ? 'stopped' : 'done');
+  log(stopped ? 't-sys' : 't-ok',
+      n.mac.slice(-4) + ' ' + target + (stopped ? ' STOPPED after ' + ran
+                                                : ' poured ' + secs) + 's');
+}
+
+/* Wait out the pour, watching for a stop aimed at THIS run. Returns true if it
+   was cut short. Matched by id for the same reason the firmware matches by id:
+   a stop pressed a second too late must not kill the next pour. */
+async function pourWatchingForStop(n, id, secs) {
+  const until = Date.now() + secs * 1000;
+  while (Date.now() < until) {
+    await new Promise(function (r) { setTimeout(r, 300); });
+    const want = await fbGet('/farm/masters/' + n.mac + '/stop.json');
+    if (want && String(want).indexOf(id) >= 0) {
+      await fbDelete('/farm/masters/' + n.mac + '/stop.json');
+      return true;
+    }
+  }
+  return false;
 }
 
 async function ackMaster(n, id, section, channel, ranSec, outcome) {

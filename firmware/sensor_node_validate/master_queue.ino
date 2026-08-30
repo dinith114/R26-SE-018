@@ -33,6 +33,17 @@ const int CHANNEL_PIN[9] = { -1, 25, 26, 27, 14, 13, 4, 16, 17 };
 // `const int RELAY_ON = LOW` into `const int LOW = 0x0` and failed to compile.
 
 const unsigned long QUEUE_POLL_MS = 3000UL;
+/* Stop polling reuses STOP_POLL_MS and STOP_CHECK_BUDGET_MS from the host
+ * sketch rather than defining its own.
+ *
+ * The first version of this file set 500 ms, on the reasonable-sounding
+ * assumption that a safety control should be checked often. That is wrong on
+ * this chip, and the host sketch already says why: a TLS handshake costs
+ * roughly NINE SECONDS, measured on the bench. Checking often makes a pour
+ * spend more time checking than pouring - which is exactly the bug that once
+ * turned a 25 s command into a 173 s one. 5 s bounds how long Stop takes to
+ * bite while keeping the handshakes down, and the budget stops a check being
+ * started that could outlast the pour it guards. */
 // The same ceiling the host sketch applies to its own pours, restated here
 // because this path does not go through deliver(). Firmware is the last thing
 // between a corrupted number and a pump.
@@ -90,6 +101,50 @@ void masterAck(const String& id, const String& section, int channel,
   d.end();
 }
 
+/* Announce a pour that is under way, so the app can count down against the
+ * NODE's clock instead of the phone's. Deleted when the pour ends. */
+void masterRunning(const String& id, const String& section, int channel, int secs) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  String body = "{\"id\":\"" + id + "\",\"targetSection\":\"" + section +
+                "\",\"channel\":" + String(channel) +
+                ",\"durationSec\":" + String(secs);
+  if (clockOK) body += ",\"startedAt\":" + String((long long)(nowMs() / 1000));
+  body += "}";
+  HTTPClient h;
+  h.setTimeout(6000);
+  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.addHeader("Content-Type", "application/json");
+  h.PUT(body);
+  h.end();
+}
+
+void masterClearRunning() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  HTTPClient h;
+  h.setTimeout(6000);
+  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.sendRequest("DELETE");
+  h.end();
+}
+
+/* Has the farmer asked for THIS pour to stop?
+ *
+ * Matched by id on purpose. A bare flag would let a Stop pressed a second
+ * too late kill the NEXT pour instead of the one it was aimed at, which on a
+ * queue that drains one entry per poll is a real possibility rather than a
+ * theoretical one. */
+bool masterStopRequested(const String& id) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  HTTPClient h;
+  h.setTimeout(4000);
+  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/stop.json");
+  int code = h.GET();
+  String body = (code == 200) ? h.getString() : "";
+  h.end();
+  if (code != 200 || body.length() < 3) return false;
+  return body.indexOf(id) >= 0;          // stored as the plain command id
+}
+
 /* Run one queued command, start to finish.
  *
  * Deliberately blocking, and deliberately ONE at a time. The board has eight
@@ -135,21 +190,52 @@ void masterRunOne(const String& payload) {
   Serial.printf("[MASTER] %s -> channel %ld (GPIO %d) for %lds\n",
                 section.c_str(), channel, pin, secs);
 
+  /* SAY THAT THE POUR HAS STARTED, before the valve opens.
+   *
+   * This path reported nothing until it finished, so the app had no start
+   * time to count down from and no way to tell "queued" from "water is
+   * moving right now". It sat on "Waiting for the node to pick this up" for
+   * the whole pour and then jumped to done. A countdown invented by the
+   * phone would be a guess about hardware, which is the one thing this
+   * project will not show - so the hardware has to say it. Written BEFORE
+   * the valve opens: a marker that appeared after the water would be
+   * describing the past. */
+  masterRunning(id, section, (int)channel, (int)secs);
+
   unsigned long start = millis();
   digitalWrite(pin, RELAY_ON);
 
   // Timed by the WALL CLOCK, not by summing sleeps. The single-node build had
   // this wrong: it added up its sleep slices and ignored the seconds each
   // HTTPS check took, so a 15-second command poured for 173.
-  while (millis() - start < (unsigned long)secs * 1000UL) {
-    servePortal();
+  /* Stop was accepted by the backend, queued as an action this loop never read,
+     and answered "unsupported" - so pressing it did nothing at all and the pump
+     ran its full length. Made cooperative here the same way the single-node path
+     was, budget guard included. */
+  bool stopped = false;
+  const uint32_t totalMs = (uint32_t)secs * 1000UL;
+  uint32_t lastCheck = start;
+  while (millis() - start < totalMs) {
     delay(50);
+    servePortal();
+    const uint32_t elapsed   = millis() - start;
+    const uint32_t remaining = (elapsed >= totalMs) ? 0 : totalMs - elapsed;
+    // Never begin a check that cannot finish before the pour does: the
+    // handshake would run on past the valve closing and count as pour time.
+    if (remaining > STOP_CHECK_BUDGET_MS && millis() - lastCheck >= STOP_POLL_MS) {
+      lastCheck = millis();
+      if (masterStopRequested(id)) { stopped = true; break; }
+    }
   }
 
   digitalWrite(pin, RELAY_OFF);
   int ran = (int)((millis() - start) / 1000UL);
-  Serial.printf("[MASTER] %s done, %ds\n", section.c_str(), ran);
-  masterAck(id, section, (int)channel, ran, "done");
+  masterClearRunning();
+  Serial.printf("[MASTER] %s %s, %ds\n", section.c_str(),
+                stopped ? "STOPPED early" : "done", ran);
+  // "watered for 90 s" and "stopped after 12 s" are different outcomes and
+  // the ledger must not record one as the other.
+  masterAck(id, section, (int)channel, ran, stopped ? "stopped" : "done");
 }
 
 /* Take the oldest outstanding command, if there is one.
