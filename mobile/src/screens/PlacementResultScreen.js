@@ -68,13 +68,22 @@ export default function PlacementResultScreen({ route, navigation }) {
       setBusy(true);
       const r = await applyPlacement(houseId, [...keepIds]);
       const n = (r.freed || []).length;
+      /* Naming the controller becomes REQUIRED the moment sensors come out: the
+         zones they leave behind can only be watered through the relay board. It
+         is said here, at the moment it becomes true, because the farmer is
+         about to walk away thinking the setup is finished. The dashboard also
+         carries it until it is done - one telling is not enough for a step that
+         silently stops water reaching plants. */
       setToast({
-        text: n
-          ? `${n} sensor${n === 1 ? '' : 's'} freed — take them out of the house.`
-          : `${house?.meta?.name || houseId} is now active.`,
-        kind: 'success',
+        text: r.needsMaster
+          ? `${n} sensor${n === 1 ? '' : 's'} freed. Now choose a master controller — `
+            + 'those zones cannot be watered without one.'
+          : n
+            ? `${n} sensor${n === 1 ? '' : 's'} freed — take them out of the house.`
+            : `${house?.meta?.name || houseId} is now active.`,
+        kind: r.needsMaster ? 'info' : 'success',
       });
-      setTimeout(() => navigation.navigate('MainTabs'), 1600);
+      setTimeout(() => navigation.navigate('MainTabs'), r.needsMaster ? 2600 : 1600);
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {

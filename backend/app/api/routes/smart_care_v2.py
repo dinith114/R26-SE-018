@@ -3101,6 +3101,12 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn):
     _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
     _DEVICE_CACHE["devices"] = None                 # assignments just changed
 
+    # A house that has just given up sensors can ONLY water those zones through
+    # the controller, so this is the moment a master stops being optional. The
+    # app has no other way to know that, and a farmer who is never told ends up
+    # with sections nothing can reach.
+    master = _master_for_house(house_id)
+
     return {
         "status": "success",
         "houseId": house_id,
@@ -3108,6 +3114,8 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn):
         "kept": sorted(keep, key=_natural_key),
         "freed": freed,
         "clearedReadings": cleared,
+        "masterMac": master,
+        "needsMaster": bool(freed) and not master,
         "message": (f"{len(freed)} sensor(s) freed. Those sections are now "
                     "estimated from the ones that kept theirs; the first "
                     "estimate appears within a few minutes."),
