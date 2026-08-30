@@ -1,0 +1,43 @@
+==========================================================================
+ORCHID INPUT GATE - build and measurement
+==========================================================================
+
+[1] Collecting the project's own photographs
+  flowers           300 images
+  plants            357 images
+  tagged_plants     533 images
+  TOTAL            1190 images, 375 groups
+
+[2] Embedding with frozen ResNet18 (no mask, whole frame)
+
+[3] Grouped cross-validation - false refusals on real orchid photos
+  5-fold GroupKFold over 1190 images
+  genuine orchid photos refused: 2.3%
+  (threshold is set to keep 98% of training photos)
+
+[4] Fitting the final gate on all project photographs
+  fitted on 1190 images
+  threshold 0.25   train distances p50 0.15 / p90 0.21 / max 0.35
+  saved -> C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\models\orchid_gate.pkl
+
+[5] Held-out validation set (never used for fitting)
+
+  label        category                n  accepted  median d
+  ----------------------------------------------------------
+  not_orchid   cars                   42       0%       0.4
+  not_orchid   depictions              2       0%       0.3
+  not_orchid   documents              45       0%       0.4
+  not_orchid   ferns                  51       6%       0.3
+  not_orchid   food                   44       0%       0.4
+  not_orchid   houseplants            48      15%       0.3
+  not_orchid   laptops                42       0%       0.4
+  not_orchid   other_flowers          45      60%       0.2
+  not_orchid   people                 44       0%       0.4
+  not_orchid   rooms                  49       0%       0.4
+  not_orchid   screens                43       0%       0.4
+  orchid       other_orchids_web      45      67%       0.2
+  orchid       vanda_web              43      65%       0.2
+
+  non-orchid images REFUSED : 418/455 = 91.9%
+  unseen web orchids ACCEPTED: 58/88 = 65.9%
+  ROC AUC (orchid vs not, by distance): 0.921

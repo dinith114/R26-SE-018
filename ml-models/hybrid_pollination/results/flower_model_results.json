@@ -1,0 +1,83 @@
+{
+  "timestamp": "2026-08-29T11:08:27.874604",
+  "training_data": {
+    "source": "C:/Users/VICTUS/Pictures/orchid",
+    "n_images": 800,
+    "class_counts": {
+      "no_flower": 588,
+      "flower": 212
+    },
+    "label_provenance": "AUTO-PROPOSED, not hand-verified"
+  },
+  "baseline": 0.735,
+  "best_model": "Logistic Regression",
+  "models": {
+    "Logistic Regression": {
+      "accuracy": 0.9988,
+      "balanced_accuracy": 0.9976,
+      "f1": 0.9987,
+      "auc": 1.0,
+      "confusion_matrix": [
+        [
+          211,
+          1
+        ],
+        [
+          0,
+          588
+        ]
+      ]
+    },
+    "Random Forest": {
+      "accuracy": 0.9938,
+      "balanced_accuracy": 0.9897,
+      "f1": 0.9937,
+      "auc": 0.9994,
+      "confusion_matrix": [
+        [
+          208,
+          4
+        ],
+        [
+          1,
+          587
+        ]
+      ]
+    },
+    "SVM (RBF)": {
+      "accuracy": 0.9975,
+      "balanced_accuracy": 0.9953,
+      "f1": 0.9975,
+      "auc": 1.0,
+      "confusion_matrix": [
+        [
+          210,
+          2
+        ],
+        [
+          0,
+          588
+        ]
+      ]
+    }
+  },
+  "transfer_test": {
+    "flowering_photos": {
+      "n": 11,
+      "correct": 11,
+      "rate": 1.0,
+      "flagged_out_of_domain": 4
+    },
+    "non_flowering_photos": {
+      "n": 38,
+      "correct": 0,
+      "rate": 0.0,
+      "flagged_out_of_domain": 22
+    },
+    "note": "Both directions tested. A model that always answers 'flower' scores perfectly on the first set and zero on the second."
+  },
+  "caveats": [
+    "Accuracy is measured against auto-proposed labels, so it reflects agreement with a colour rule rather than verified ground truth.",
+    "Cutouts are cleaner than real nursery photographs; the transfer test is the number that matters for deployment."
+  ]
+}

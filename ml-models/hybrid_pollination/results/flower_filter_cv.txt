@@ -1,0 +1,42 @@
+==========================================================================
+STAGE 2 RETRAINED - now including non-orchid foliage as negatives
+==========================================================================
+
+[1] Positives - the project's own orchid photographs
+  1190
+
+[2] Negatives - Oxford Flowers-102 (other flowers)
+  8089
+
+[3] Negatives - foliage
+  392 downloaded (aloe, agave - independent of the test set)
+  99 ferns and houseplants from the validation set - CROSS-VALIDATED
+  below, never scored by a model that trained on them
+
+[4] Cross-validated foliage refusal (the honest foliage number)
+  foliage refused: 175/491 = 35.6%   (was 16% before)
+
+[5] Final model, fitted on everything
+  1190 positives vs 8580 negatives, threshold 0.1736
+
+[6] Still fully held out - never in training at any point
+  orchids (Vanda + other genera)     n=88   ACCEPTED 82%
+  roses, tulips, sunflowers          n=45   REFUSED  78%
+  ROC AUC orchid vs other flower (third source): 0.867
+
+[7] Per-category, final model
+  cars                   n=42   called orchid  88%
+  depictions             n=2    called orchid 100%
+  documents              n=45   called orchid  89%
+  ferns                  n=51   called orchid  57% (in training, CV number above)
+  food                   n=44   called orchid  77%
+  houseplants            n=48   called orchid  69% (in training, CV number above)
+  laptops                n=42   called orchid  90%
+  other_flowers          n=45   called orchid  22%
+  other_orchids_web      n=45   called orchid  84%
+  people                 n=44   called orchid  70%
+  rooms                  n=49   called orchid 100%
+  screens                n=43   called orchid  91%
+  vanda_web              n=43   called orchid  79%
+
+  saved -> C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\models\flower_filter.pkl

@@ -1,127 +1,132 @@
 {
-  "timestamp": "2026-05-10T21:12:59.463064",
-  "best_model": "SVM (RBF)",
+  "timestamp": "2026-08-28T21:27:10.949859",
+  "evaluation": {
+    "method": "StratifiedGroupKFold cross-validation",
+    "grouped_by": "sample_id (physical plant)",
+    "n_folds": 2,
+    "scaling": "fitted inside each fold via Pipeline",
+    "note": "Every score is out-of-fold. No image shares a plant with its training data."
+  },
+  "best_model": "XGBoost",
+  "majority_baseline": 0.6387,
   "dataset_info": {
-    "train_samples": 249,
-    "val_samples": 54,
-    "test_samples": 54,
+    "n_images": 357,
+    "n_plants": 28,
     "num_features": 66,
     "classes": [
       "Moderate",
       "Not Suitable",
       "Suitable"
-    ]
+    ],
+    "plants_per_class": {
+      "Suitable": 17,
+      "Not Suitable": 9,
+      "Moderate": 2
+    }
   },
+  "caveats": [
+    "28 plants is the true sample size, not 357 images.",
+    "The Moderate class has only 2 plants and cannot be validated; its per-class scores are indicative only.",
+    "A previous version of this pipeline reported 100% accuracy using a random image-level split. That figure was data leakage."
+  ],
   "models": {
     "Random Forest": {
-      "train_accuracy": 1.0,
-      "val_accuracy": 0.963,
-      "test_accuracy": 0.963,
-      "val_f1": 0.9604,
-      "test_f1": 0.9604,
-      "test_precision": 0.9648,
-      "test_recall": 0.963,
-      "cv_mean": 0.9639,
-      "cv_std": 0.0078,
+      "accuracy": 0.6359,
+      "balanced_accuracy": 0.5175,
+      "precision": 0.6197,
+      "recall": 0.6359,
+      "f1": 0.6105,
+      "beats_baseline": false,
       "confusion_matrix": [
         [
-          5,
           1,
-          1
+          8,
+          35
         ],
         [
           0,
-          13,
-          0
+          73,
+          12
         ],
         [
-          0,
-          0,
-          34
+          8,
+          67,
+          153
         ]
       ]
     },
     "SVM (RBF)": {
-      "train_accuracy": 1.0,
-      "val_accuracy": 1.0,
-      "test_accuracy": 1.0,
-      "val_f1": 1.0,
-      "test_f1": 1.0,
-      "test_precision": 1.0,
-      "test_recall": 1.0,
-      "cv_mean": 0.9839,
-      "cv_std": 0.015,
+      "accuracy": 0.6527,
+      "balanced_accuracy": 0.5165,
+      "precision": 0.6236,
+      "recall": 0.6527,
+      "f1": 0.6286,
+      "beats_baseline": true,
       "confusion_matrix": [
         [
-          7,
-          0,
-          0
+          1,
+          8,
+          35
         ],
         [
-          0,
-          13,
-          0
+          1,
+          69,
+          15
         ],
         [
-          0,
-          0,
-          34
+          11,
+          54,
+          163
         ]
       ]
     },
     "Logistic Regression": {
-      "train_accuracy": 1.0,
-      "val_accuracy": 0.963,
-      "test_accuracy": 0.963,
-      "val_f1": 0.9632,
-      "test_f1": 0.9632,
-      "test_precision": 0.9643,
-      "test_recall": 0.963,
-      "cv_mean": 0.9679,
-      "cv_std": 0.0159,
+      "accuracy": 0.7283,
+      "balanced_accuracy": 0.5892,
+      "precision": 0.74,
+      "recall": 0.7283,
+      "f1": 0.733,
+      "beats_baseline": true,
       "confusion_matrix": [
         [
+          0,
           6,
-          1,
-          0
+          38
         ],
         [
           0,
-          13,
+          85,
           0
         ],
         [
-          1,
-          0,
-          33
+          50,
+          3,
+          175
         ]
       ]
     },
     "XGBoost": {
-      "train_accuracy": 1.0,
-      "val_accuracy": 0.963,
-      "test_accuracy": 0.9815,
-      "val_f1": 0.9604,
-      "test_f1": 0.9809,
-      "test_precision": 0.982,
-      "test_recall": 0.9815,
-      "cv_mean": 0.9639,
-      "cv_std": 0.0233,
+      "accuracy": 0.7339,
+      "balanced_accuracy": 0.5896,
+      "precision": 0.7461,
+      "recall": 0.7339,
+      "f1": 0.7392,
+      "beats_baseline": true,
       "confusion_matrix": [
         [
-          6,
           0,
+          8,
+          36
+        ],
+        [
+          0,
+          84,
           1
         ],
         [
+          50,
           0,
-          13,
-          0
-        ],
-        [
-          0,
-          0,
-          34
+          178
         ]
       ]
     }
