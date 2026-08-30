@@ -179,7 +179,7 @@
     <div class="bar">
       <input type="number" id="mk" value="8" min="1" max="40">
       <button id="add">Add boards</button>
-      <button id="wipe" class="bad">Forget all</button>
+      <button id="wipe" class="bad">Remove all</button>
     </div>
   </section>
 
@@ -491,11 +491,47 @@ async function geomFor(hid) {
   }
   const secs = await fbGet('/farm/houses/' + hid + '/sections.json') || {};
   const pos = {};
-  Object.keys(secs).forEach(function (sid) {
-    const m = (secs[sid] || {}).meta || {};
-    if (m.x !== undefined && m.y !== undefined)
-      pos[sid] = { x: Number(m.x), y: Number(m.y), name: m.name || sid };
+
+  /* A SECTION WITH NO COORDINATES USED TO BE DROPPED SILENTLY, and that is the
+     whole bug behind "the node is connected but there are no readings".
+     `postReading` looked the section up in this map, found nothing, and
+     returned - no reading, no log, no error. The board announced itself
+     perfectly, showed as online in the app, and wrote nothing, for hours.
+     Silence was the failure.
+     Only a house built by the PLANNER has x/y on its sections; one created by
+     hand in Add Section has none, which is most houses a farmer makes. */
+  const W = Math.max(Number(meta.width) || 10, 1);
+  const L = Math.max(Number(meta.length) || 14, 1);
+  const ids = Object.keys(secs).sort(function (a, b) {
+    const na = parseInt(String(a).replace(/\D/g, ''), 10) || 0;
+    const nb = parseInt(String(b).replace(/\D/g, ''), 10) || 0;
+    return na - nb;
   });
+  const cols = Math.max(1, Math.ceil(Math.sqrt(ids.length)));
+  const rows = Math.max(1, Math.ceil(ids.length / cols));
+  let placed = 0;
+
+  ids.forEach(function (sid, i) {
+    const m = (secs[sid] || {}).meta || {};
+    if (m.x !== undefined && m.y !== undefined && m.x !== null && m.y !== null) {
+      pos[sid] = { x: Number(m.x), y: Number(m.y), name: m.name || sid, real: true };
+      return;
+    }
+    // Spread the rest evenly, so each one still sits somewhere different in the
+    // field and the readings differ between zones the way they would in a real
+    // house. Used for the SIMULATION only - nothing is written back to the
+    // section, because a made-up position is not a survey and the placement
+    // analysis must never see one.
+    const c = i % cols, r = Math.floor(i / cols);
+    pos[sid] = { x: W * (c + 0.5) / cols, y: L * (r + 0.5) / rows,
+                 name: m.name || sid, real: false };
+    placed++;
+  });
+  if (placed) {
+    log('t-sys', hid + ': ' + placed + ' section(s) have no position, so the bench '
+        + 'spread them on an even grid to sample the field. Nothing is written back '
+        + '- only a planned house gets real coordinates.');
+  }
   const g = { meta: meta, pos: pos,
               field: makeField(hid, meta.width, meta.length) };
   fieldCache[hid] = g;
@@ -566,7 +602,15 @@ async function postReading(n) {
   const parts = n.assignedTo.split('/');
   const hid = parts[0], sid = parts[1];
   const g = await geomFor(hid);
-  if (!g || !g.pos[sid]) return;
+  if (!g) {
+    // geomFor already logged why (not simulated, or the house is gone).
+    return;
+  }
+  if (!g.pos[sid]) {
+    log('t-err', n.mac.slice(-4) + ' is assigned to ' + n.assignedTo
+        + ' but that section does not exist in the house. Re-link it.');
+    return;
+  }
 
   const now = Date.now();                 // real wall clock, never ahead of it
   let rd = readingAt(g, sid, now);
@@ -1074,78 +1118,39 @@ $('add').onclick = function () {
   nodes.slice(-k).forEach(function (n) { cycleOne(n); });
 };
 
-$('wipe').onclick = function () {
+$('wipe').onclick = async function () {
   if (!nodes.length) return;
-  if (!confirm('Forget all ' + nodes.length + ' boards on this bench?\n\n'
-      + 'Their /devices records stay in Firebase and will still show in the app '
-      + 'until they age out. Use × on a card to delete one properly.')) return;
+  /* DELETE THE RECORDS, not just this list.
+     This used to clear the bench and leave every /devices record behind, with a
+     confirm box that explained as much - which is not a fix, it is a warning
+     label on a trap. Sessions accumulated: 74 device records existed on 31 Aug
+     against 8 boards actually running, so the app's Link-a-node list was mostly
+     boards that had not existed for half a day, and picking one would assign a
+     section to a board that would never report.
+     A virtual board that has been forgotten has no reason to exist anywhere. */
+  if (!confirm('Remove all ' + nodes.length + ' boards on this bench?\n\n'
+      + 'They are unlinked from their sections and deleted from /devices, so they '
+      + 'stop appearing in the app. Real hardware is never touched - only boards '
+      + 'this bench created.')) return;
+
+  const doomed = nodes.slice();
   nodes = []; selected = null; save(); renderPool(); renderMap();
-};
-
-function setForce(kind) {
-  const n = nodes.find(function (x) { return x.mac === selected; });
-  if (!n) { log('t-err', 'Pick a node first, then force it.'); return; }
-  if (!n.assignedTo) { log('t-err', n.mac.slice(-4) + ' is not in a section yet.'); return; }
-  n.force = kind;
-  log(kind ? 't-sys' : 't-ok',
-      n.mac.slice(-4) + ' -> ' + (kind ? kind.toUpperCase() + ': ' + FORCE[kind].why
-                                       : 'back to the simulated field'));
-  renderPool();
-  cycleOne(n);          // report it immediately rather than on the next cycle
-}
-$('fNormal').onclick = function () { setForce(null); };
-$('fDry').onclick    = function () { setForce('dry'); };
-$('fHot').onclick    = function () { setForce('hot'); };
-
-/* The engine normally checks trays every 15 minutes. Waiting that long to see
-   whether an alarm fires is not a rehearsal, it is a coffee break - so the bench
-   can ask for one pass now.
-
-   This is the ONE thing here that talks to the backend rather than to Firebase,
-   so it needs the write key. The key is TYPED BY THE OPERATOR and kept in this
-   browser: this file lives in a public repository and a key committed to it
-   would have to be rotated, which has already happened once on this project. */
-const API = 'https://orchidfarm.duckdns.org/api/v2';
-
-function apiKey() {
-  let k = null;
-  try { k = localStorage.getItem('orchidApiKey'); } catch (e) { /* private window */ }
-  if (!k) {
-    k = prompt('Backend API key (kept in this browser only, never in the file):');
-    if (!k) return null;
-    try { localStorage.setItem('orchidApiKey', k.trim()); } catch (e) { /* ignore */ }
+  let gone = 0;
+  for (const n of doomed) {
+    try {
+      if (n.assignedTo) {
+        const parts = n.assignedTo.split('/');
+        await fbDelete('/devices/' + n.mac + '/assignedTo.json');
+        await fbDelete('/farm/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json');
+      }
+      await fbDelete('/devices/' + n.mac + '.json');
+      await fbDelete('/farm/masters/' + n.mac + '.json');
+      gone++;
+    } catch (e) {
+      log('t-err', 'could not remove ' + n.mac.slice(-4) + ': ' + e.message);
+    }
   }
-  return k.trim();
-}
-
-async function runEngine(at) {
-  const k = apiKey();
-  if (!k) { log('t-err', 'no API key, engine not run'); return; }
-  const url = API + '/auto/engine/run-now' + (at ? '?at=' + encodeURIComponent(at) : '');
-  log('t-cmd', 'engine pass' + (at ? ' at ' + at : ' now') + '...');
-  try {
-    const r = await fetch(url, { method: 'POST', headers: { 'X-API-Key': k } });
-    const j = await r.json();
-    if (!r.ok) { log('t-err', 'engine ' + r.status + ': ' + (j.detail || '')); return; }
-    const d = j.did || {};
-    log('t-ok', 'engine ran at ' + j.at);
-    Object.keys(d).forEach(function (step) {
-      log('t-dim', '   ' + step + ': ' + JSON.stringify(d[step]).slice(0, 150));
-    });
-  } catch (e) {
-    log('t-err', 'engine call failed: ' + e.message);
-  }
-}
-
-$('runNow').onclick = function () { runEngine(null); };
-$('runAt').onclick = function () {
-  // The watering alarm only fires when the planned hour arrives, and the plan
-  // always lands between 06:00 and 09:00 - so the pass has to be told to pretend.
-  const d = new Date();
-  const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
-            + '-' + String(d.getDate()).padStart(2, '0');
-  const at = prompt('Run the engine as if it were (YYYY-MM-DD HH:MM):', day + ' 06:30');
-  if (at) runEngine(at);
+  log('t-sys', gone + ' board(s) removed from /devices - they will stop showing in the app');
 };
 
 $('house').onchange = function () { loadHouse(this.value); };
