@@ -1,9 +1,35 @@
 """
 Hybrid Pollination - Model Training Script
-Trains and evaluates ML models for pollination suitability prediction.
+
+Trains and evaluates suitability models with GROUPED cross-validation.
+
+WHY THIS LOOKS DIFFERENT FROM A NORMAL TRAINING SCRIPT
+-------------------------------------------------------
+The previous version reported 100% test accuracy. That figure was produced by
+data leakage, not by a good model: 357 images came from 28 plants, and a random
+split put photographs of the SAME plant on both sides of the divide.
+
+Three changes make the numbers real:
+
+  1. Splits are grouped by `sample_id`, so every image of a plant stays on one
+     side. The unit of evaluation is the PLANT, not the photograph.
+
+  2. There is no single train/val/test split. With 28 plants - and only 2 of
+     them labelled Moderate - a three-way grouped split cannot represent every
+     class. StratifiedGroupKFold cross-validation is used instead, so every
+     plant is held out exactly once across the folds.
+
+  3. Scaling happens INSIDE each fold, through a Pipeline. Fitting a scaler on
+     all data before splitting leaks test-fold statistics into training.
+
+Every score is reported next to the majority-class baseline. A model that
+cannot beat "always predict Suitable" (0.639) has learned nothing, and saying
+so plainly is worth more than an impressive number that will not survive a
+question.
 
 Usage:
     python src/train.py
+    python src/train.py --folds 5
 """
 
 import numpy as np
@@ -11,15 +37,20 @@ import os
 import sys
 import joblib
 import json
+import argparse
 from datetime import datetime
+from collections import Counter
+
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import StratifiedGroupKFold, cross_val_predict
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix
+    classification_report, confusion_matrix, balanced_accuracy_score,
 )
-from sklearn.model_selection import cross_val_score
 
 # Add parent to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,7 +60,7 @@ try:
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
-    print("[WARN] XGBoost not installed — skipping XGBoost model")
+    print("[WARN] XGBoost not installed - skipping XGBoost model")
 
 
 # ──────────────────────────────────────────────
@@ -39,269 +70,288 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 
+DEFAULT_FOLDS = 5
+
 
 def get_models() -> dict:
     """
-    Define the ML models to train and compare.
-    Uses class_weight='balanced' to handle the imbalanced dataset.
+    The models to compare, each wrapped in a Pipeline so that scaling is fitted
+    per fold rather than on the whole dataset.
     """
+    def pipe(estimator):
+        return Pipeline([("scaler", StandardScaler()), ("model", estimator)])
+
     models = {
-        "Random Forest": RandomForestClassifier(
-            n_estimators=200,
-            max_depth=15,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            class_weight="balanced",
-            random_state=42,
-            n_jobs=-1
-        ),
-        "SVM (RBF)": SVC(
-            kernel="rbf",
-            C=1.0,
-            gamma="scale",
-            class_weight="balanced",
-            probability=True,
-            random_state=42
-        ),
-        "Logistic Regression": LogisticRegression(
-            max_iter=1000,
-            class_weight="balanced",
-            random_state=42,
-        ),
+        "Random Forest": pipe(RandomForestClassifier(
+            n_estimators=200, max_depth=15, min_samples_split=5,
+            min_samples_leaf=2, class_weight="balanced",
+            random_state=42, n_jobs=-1,
+        )),
+        "SVM (RBF)": pipe(SVC(
+            kernel="rbf", C=1.0, gamma="scale", class_weight="balanced",
+            probability=True, random_state=42,
+        )),
+        "Logistic Regression": pipe(LogisticRegression(
+            max_iter=1000, class_weight="balanced", random_state=42,
+        )),
     }
 
     if HAS_XGBOOST:
-        models["XGBoost"] = XGBClassifier(
-            n_estimators=200,
-            max_depth=8,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            use_label_encoder=False,
-            eval_metric="mlogloss"
-        )
+        models["XGBoost"] = pipe(XGBClassifier(
+            n_estimators=200, max_depth=8, learning_rate=0.1,
+            subsample=0.8, colsample_bytree=0.8, random_state=42,
+            eval_metric="mlogloss",
+        ))
 
     return models
 
 
-def train_and_evaluate(data: dict) -> dict:
-    """
-    Train all models and evaluate them.
+def majority_baseline(y: np.ndarray) -> float:
+    """Accuracy of always predicting the commonest class."""
+    counts = Counter(y.tolist())
+    return max(counts.values()) / len(y)
 
-    Args:
-        data: dict from preprocess.prepare_dataset()
+
+def n_usable_folds(y: np.ndarray, groups: np.ndarray, requested: int) -> int:
+    """
+    Largest workable fold count.
+
+    StratifiedGroupKFold cannot create more folds than the rarest class has
+    plants. With 2 Moderate plants, asking for 5 folds silently produces folds
+    containing no Moderate example at all.
+    """
+    plants_per_class = Counter()
+    seen = set()
+    for label, group in zip(y, groups):
+        if group in seen:
+            continue
+        seen.add(group)
+        plants_per_class[label] += 1
+
+    rarest = min(plants_per_class.values()) if plants_per_class else requested
+    folds = max(2, min(requested, rarest))
+
+    if folds < requested:
+        print(f"[WARN] Reduced folds {requested} -> {folds}: the rarest class has "
+              f"only {rarest} plants.")
+
+    return folds
+
+
+def train_and_evaluate(data: dict, n_folds: int = DEFAULT_FOLDS) -> tuple:
+    """
+    Cross-validate every model with grouping by plant.
 
     Returns:
-        dict with model results
+        (results dict, best model name)
     """
-    X_train = data["X_train"]
-    X_val = data["X_val"]
-    X_test = data["X_test"]
-    y_train = data["y_train"]
-    y_val = data["y_val"]
-    y_test = data["y_test"]
+    X, y, groups = data["X"], data["y"], data["groups"]
     label_encoder = data["label_encoder"]
     class_names = list(label_encoder.classes_)
 
-    models = get_models()
+    n_folds = n_usable_folds(y, groups, n_folds)
+    cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True,
+                              random_state=data.get("random_state", 42))
+
+    baseline = majority_baseline(y)
+
+    print("\n" + "=" * 72)
+    print(f"GROUPED CROSS-VALIDATION  ({n_folds}-fold, grouped by plant)")
+    print("=" * 72)
+    print(f"  Images: {len(y)}   Plants: {len(set(groups))}")
+    print(f"  Majority-class baseline: {baseline:.4f}  <- the number to beat")
+
     results = {}
-    best_model_name = None
-    best_val_accuracy = 0.0
+    best_name, best_score = None, -1.0
 
-    print("\n" + "=" * 70)
-    print("MODEL TRAINING & EVALUATION")
-    print("=" * 70)
+    for name, model in get_models().items():
+        print(f"\n{'-' * 56}\n{name}\n{'-' * 56}")
 
-    for name, model in models.items():
-        print(f"\n{'─' * 50}")
-        print(f"Training: {name}")
-        print(f"{'─' * 50}")
+        # One out-of-fold prediction per image, each made by a model that never
+        # saw that image's plant during training.
+        y_pred = cross_val_predict(model, X, y, cv=cv, groups=groups, n_jobs=1)
 
-        # Train
-        model.fit(X_train, y_train)
+        acc = accuracy_score(y, y_pred)
+        bal_acc = balanced_accuracy_score(y, y_pred)
+        precision = precision_score(y, y_pred, average="weighted", zero_division=0)
+        recall = recall_score(y, y_pred, average="weighted", zero_division=0)
+        f1 = f1_score(y, y_pred, average="weighted", zero_division=0)
+        cm = confusion_matrix(y, y_pred)
+        report = classification_report(y, y_pred, target_names=class_names,
+                                       zero_division=0)
 
-        # Predict
-        y_train_pred = model.predict(X_train)
-        y_val_pred = model.predict(X_val)
-        y_test_pred = model.predict(X_test)
+        verdict = "beats baseline" if acc > baseline else "DOES NOT beat baseline"
+        print(f"  Accuracy (grouped) : {acc:.4f}   ({verdict}, baseline {baseline:.4f})")
+        print(f"  Balanced accuracy  : {bal_acc:.4f}   <- fairer with imbalanced classes")
+        print(f"  Weighted F1        : {f1:.4f}")
+        print(f"\n{report}")
 
-        # Metrics
-        train_acc = accuracy_score(y_train, y_train_pred)
-        val_acc = accuracy_score(y_val, y_val_pred)
-        test_acc = accuracy_score(y_test, y_test_pred)
-
-        val_precision = precision_score(y_val, y_val_pred, average="weighted", zero_division=0)
-        val_recall = recall_score(y_val, y_val_pred, average="weighted", zero_division=0)
-        val_f1 = f1_score(y_val, y_val_pred, average="weighted", zero_division=0)
-
-        test_precision = precision_score(y_test, y_test_pred, average="weighted", zero_division=0)
-        test_recall = recall_score(y_test, y_test_pred, average="weighted", zero_division=0)
-        test_f1 = f1_score(y_test, y_test_pred, average="weighted", zero_division=0)
-
-        # Cross-validation on training data
-        cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring="accuracy")
-
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_test_pred)
-
-        # Classification report
-        report = classification_report(y_test, y_test_pred, target_names=class_names, zero_division=0)
-
-        print(f"  Train Accuracy:  {train_acc:.4f}")
-        print(f"  Val Accuracy:    {val_acc:.4f}")
-        print(f"  Test Accuracy:   {test_acc:.4f}")
-        print(f"  Val F1 (weighted): {val_f1:.4f}")
-        print(f"  Test F1 (weighted): {test_f1:.4f}")
-        print(f"  Cross-Val (5-fold): {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
-        print(f"\n  Classification Report (Test):")
-        print(f"  {report}")
-
-        # Store results
         results[name] = {
             "model": model,
-            "train_accuracy": train_acc,
-            "val_accuracy": val_acc,
-            "test_accuracy": test_acc,
-            "val_precision": val_precision,
-            "val_recall": val_recall,
-            "val_f1": val_f1,
-            "test_precision": test_precision,
-            "test_recall": test_recall,
-            "test_f1": test_f1,
-            "cv_mean": cv_scores.mean(),
-            "cv_std": cv_scores.std(),
+            "accuracy": acc,
+            "balanced_accuracy": bal_acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "beats_baseline": bool(acc > baseline),
             "confusion_matrix": cm,
             "classification_report": report,
-            "y_test_pred": y_test_pred,
         }
 
-        # Track best model (by validation accuracy)
-        if val_acc > best_val_accuracy:
-            best_val_accuracy = val_acc
-            best_model_name = name
+        # Balanced accuracy selects the best model: plain accuracy would reward
+        # a model that simply predicts the majority class.
+        if bal_acc > best_score:
+            best_score, best_name = bal_acc, name
 
-    return results, best_model_name
+    return results, best_name, baseline
 
 
-def save_best_model(results: dict, best_name: str, data: dict):
-    """Save the best model and results summary."""
+def fit_final_model(results: dict, best_name: str, data: dict):
+    """
+    Refit the chosen model on ALL data for deployment.
+
+    The cross-validated scores above describe how this model generalises to an
+    unseen plant. This fit is what actually ships; its training accuracy is not
+    a performance measure and is deliberately not reported.
+    """
+    model = results[best_name]["model"]
+    model.fit(data["X"], data["y"])
+
     os.makedirs(MODELS_DIR, exist_ok=True)
+    path = os.path.join(MODELS_DIR, "best_model.pkl")
+    joblib.dump(model, path)
+    print(f"\n[SAVED] Best model ({best_name}) -> {os.path.basename(path)}")
+
+    for name, res in results.items():
+        safe = name.lower().replace(" ", "_").replace("(", "").replace(")", "")
+        m = res["model"]
+        m.fit(data["X"], data["y"])
+        joblib.dump(m, os.path.join(MODELS_DIR, f"{safe}.pkl"))
+
+    return model
+
+
+def save_results(results: dict, best_name: str, data: dict, baseline: float,
+                 n_folds: int):
+    """Write the results summary and the human-readable report."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    best = results[best_name]
-    model = best["model"]
-
-    # Save model
-    model_path = os.path.join(MODELS_DIR, "best_model.pkl")
-    joblib.dump(model, model_path)
-    print(f"\n[SAVED] Best model ({best_name}) -> {model_path}")
-
-    # Save all models
-    for name, res in results.items():
-        safe_name = name.lower().replace(" ", "_").replace("(", "").replace(")", "")
-        model_file = os.path.join(MODELS_DIR, f"{safe_name}.pkl")
-        joblib.dump(res["model"], model_file)
-
-    # Save results summary as JSON
     summary = {
         "timestamp": datetime.now().isoformat(),
-        "best_model": best_name,
-        "dataset_info": {
-            "train_samples": int(data["X_train"].shape[0]),
-            "val_samples": int(data["X_val"].shape[0]),
-            "test_samples": int(data["X_test"].shape[0]),
-            "num_features": int(data["X_train"].shape[1]),
-            "classes": list(data["label_encoder"].classes_),
+        "evaluation": {
+            "method": "StratifiedGroupKFold cross-validation",
+            "grouped_by": "sample_id (physical plant)",
+            "n_folds": n_folds,
+            "scaling": "fitted inside each fold via Pipeline",
+            "note": "Every score is out-of-fold. No image shares a plant with "
+                    "its training data.",
         },
-        "models": {}
+        "best_model": best_name,
+        "majority_baseline": round(baseline, 4),
+        "dataset_info": {
+            "n_images": int(data["X"].shape[0]),
+            "n_plants": int(data["n_plants"]),
+            "num_features": int(data["X"].shape[1]),
+            "classes": list(data["label_encoder"].classes_),
+            "plants_per_class": data["class_plant_counts"],
+        },
+        "caveats": [
+            "28 plants is the true sample size, not 357 images.",
+            "The Moderate class has only 2 plants and cannot be validated; "
+            "its per-class scores are indicative only.",
+            "A previous version of this pipeline reported 100% accuracy using a "
+            "random image-level split. That figure was data leakage.",
+        ],
+        "models": {},
     }
 
     for name, res in results.items():
         summary["models"][name] = {
-            "train_accuracy": round(res["train_accuracy"], 4),
-            "val_accuracy": round(res["val_accuracy"], 4),
-            "test_accuracy": round(res["test_accuracy"], 4),
-            "val_f1": round(res["val_f1"], 4),
-            "test_f1": round(res["test_f1"], 4),
-            "test_precision": round(res["test_precision"], 4),
-            "test_recall": round(res["test_recall"], 4),
-            "cv_mean": round(res["cv_mean"], 4),
-            "cv_std": round(res["cv_std"], 4),
+            "accuracy": round(res["accuracy"], 4),
+            "balanced_accuracy": round(res["balanced_accuracy"], 4),
+            "precision": round(res["precision"], 4),
+            "recall": round(res["recall"], 4),
+            "f1": round(res["f1"], 4),
+            "beats_baseline": res["beats_baseline"],
             "confusion_matrix": res["confusion_matrix"].tolist(),
         }
 
-    results_path = os.path.join(RESULTS_DIR, "training_results.json")
-    with open(results_path, "w") as f:
+    path = os.path.join(RESULTS_DIR, "training_results.json")
+    with open(path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[SAVED] Results summary -> {results_path}")
+    print(f"[SAVED] Results summary -> {os.path.basename(path)}")
 
-    # Save classification reports
-    reports_path = os.path.join(RESULTS_DIR, "classification_reports.txt")
-    with open(reports_path, "w", encoding="utf-8") as f:
-        f.write(f"Training Results - {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-        f.write(f"Best Model: {best_name}\n")
-        f.write("=" * 70 + "\n\n")
+    reports = os.path.join(RESULTS_DIR, "classification_reports.txt")
+    with open(reports, "w", encoding="utf-8") as f:
+        f.write(f"Grouped cross-validation results - "
+                f"{datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+        f.write(f"{n_folds}-fold StratifiedGroupKFold, grouped by plant\n")
+        f.write(f"Majority-class baseline: {baseline:.4f}\n")
+        f.write(f"Best model: {best_name}\n")
+        f.write("=" * 72 + "\n\n")
         for name, res in results.items():
-            marker = " * BEST" if name == best_name else ""
-            f.write(f"{'-' * 50}\n")
-            f.write(f"{name}{marker}\n")
-            f.write(f"{'-' * 50}\n")
-            f.write(f"Train Accuracy: {res['train_accuracy']:.4f}\n")
-            f.write(f"Val Accuracy:   {res['val_accuracy']:.4f}\n")
-            f.write(f"Test Accuracy:  {res['test_accuracy']:.4f}\n")
-            f.write(f"Test F1:        {res['test_f1']:.4f}\n")
-            f.write(f"CV (5-fold):    {res['cv_mean']:.4f} +/- {res['cv_std']:.4f}\n\n")
-            f.write(f"Classification Report:\n{res['classification_report']}\n\n")
-    print(f"[SAVED] Classification reports -> {reports_path}")
+            marker = "  * BEST" if name == best_name else ""
+            f.write(f"{'-' * 56}\n{name}{marker}\n{'-' * 56}\n")
+            f.write(f"Accuracy (grouped): {res['accuracy']:.4f}\n")
+            f.write(f"Balanced accuracy : {res['balanced_accuracy']:.4f}\n")
+            f.write(f"Weighted F1       : {res['f1']:.4f}\n")
+            f.write(f"Beats baseline    : {res['beats_baseline']}\n\n")
+            f.write(f"{res['classification_report']}\n\n")
+    print(f"[SAVED] Classification reports -> {os.path.basename(reports)}")
 
 
-def print_comparison_table(results: dict, best_name: str):
-    """Print a formatted model comparison table."""
-    print("\n" + "=" * 90)
-    print("MODEL COMPARISON")
-    print("=" * 90)
-    print(f"{'Model':<25} {'Train Acc':>10} {'Val Acc':>10} {'Test Acc':>10} {'Test F1':>10} {'CV Mean':>10}")
-    print("─" * 90)
+def print_comparison(results: dict, best_name: str, baseline: float):
+    """Model comparison table, with the baseline as a row so it cannot be missed."""
+    print("\n" + "=" * 82)
+    print("MODEL COMPARISON  (all figures grouped by plant, out-of-fold)")
+    print("=" * 82)
+    print(f"{'Model':<26}{'Accuracy':>11}{'Balanced':>11}{'F1':>10}{'vs baseline':>16}")
+    print("-" * 82)
 
     for name, res in results.items():
         marker = " *" if name == best_name else ""
-        print(
-            f"{name + marker:<25} "
-            f"{res['train_accuracy']:>10.4f} "
-            f"{res['val_accuracy']:>10.4f} "
-            f"{res['test_accuracy']:>10.4f} "
-            f"{res['test_f1']:>10.4f} "
-            f"{res['cv_mean']:>10.4f}"
-        )
-    print("=" * 90)
+        delta = res["accuracy"] - baseline
+        print(f"{name + marker:<26}{res['accuracy']:>11.4f}"
+              f"{res['balanced_accuracy']:>11.4f}{res['f1']:>10.4f}"
+              f"{delta:>+16.4f}")
+
+    print("-" * 82)
+    print(f"{'Majority-class baseline':<26}{baseline:>11.4f}{'':>11}{'':>10}{'':>16}")
+    print("=" * 82)
 
 
-def run_training():
+def run_training(n_folds: int = DEFAULT_FOLDS):
     """Full training pipeline."""
     from preprocess import prepare_dataset
 
-    # Preprocess
-    print("🔄 Starting preprocessing...")
+    print("[STEP] Preprocessing...")
     data = prepare_dataset()
 
-    # Train & evaluate
-    print("\n🔄 Starting model training...")
-    results, best_name = train_and_evaluate(data)
+    results, best_name, baseline = train_and_evaluate(data, n_folds)
+    folds = n_usable_folds(data["y"], data["groups"], n_folds)
 
-    # Print comparison
-    print_comparison_table(results, best_name)
+    print_comparison(results, best_name, baseline)
+    fit_final_model(results, best_name, data)
+    save_results(results, best_name, data, baseline, folds)
 
-    # Save
-    save_best_model(results, best_name, data)
+    best = results[best_name]
+    print(f"\n[DONE] Training complete")
+    print(f"   Best model        : {best_name}")
+    print(f"   Grouped accuracy  : {best['accuracy']:.4f}")
+    print(f"   Balanced accuracy : {best['balanced_accuracy']:.4f}")
+    print(f"   Baseline          : {baseline:.4f}")
 
-    print(f"\n✅ Training complete!")
-    print(f"   Best model: {best_name}")
-    print(f"   Val accuracy: {results[best_name]['val_accuracy']:.4f}")
-    print(f"   Test accuracy: {results[best_name]['test_accuracy']:.4f}")
+    if not best["beats_baseline"]:
+        print("\n   [IMPORTANT] No model beats the majority-class baseline on unseen")
+        print("   plants. Report this honestly - it is the real result, and it is")
+        print("   why image-derived traits matter more than another classifier.")
 
     return results, best_name, data
 
 
 if __name__ == "__main__":
-    results, best_name, data = run_training()
+    parser = argparse.ArgumentParser(description="Train suitability models")
+    parser.add_argument("--folds", type=int, default=DEFAULT_FOLDS)
+    args = parser.parse_args()
+
+    run_training(args.folds)
