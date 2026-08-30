@@ -663,22 +663,40 @@ def _channel_conflicts(house_id: str) -> list:
             if len(ids) > 1]
 
 
-def _relay_channel(house_id: str, section_id: str) -> Optional[int]:
+def _relay_channel(house_id: str, section_id: str,
+                   action: str = "water") -> Optional[int]:
     """Which relay channel on the master opens this section's valve.
 
-    Explicit meta.relayChannel wins, because it has to match how the board was
-    physically wired and nobody should have to guess that from an ordering. When
-    it is absent the channel is derived from the section's position in sorted
-    order, which is stable and predictable but is only a convenience - a farm
-    that wires channels out of order must set them.
+    WATERING AND TRAY FILLING ARE DIFFERENT VALVES, and this used to ignore
+    that. The master was handed one channel whatever the action was, so a tray
+    fill opened the watering line: the farmer asked for humidity and got the
+    pump on the roots. Reported from the app on 30 Aug, with Water Now and Fill
+    Tray both starting the same motor.
+
+    The single-node firmware never had this bug - handleCommand() dispatches
+    `water` to RELAY_WATER and `tray` to RELAY_TRAY, two separate pins. Only the
+    master path, which is now every pour, collapsed them into one.
+
+    It matters more than a wrong output: Vanda roots rot if they are watered too
+    often, and the tray loop is deliberately the one that raises humidity
+    WITHOUT touching the roots. Silently doing the other thing defeats the
+    reason the two loops exist.
+
+    There is NO positional fallback for the tray channel. A guessed watering
+    channel waters the wrong section, which is bad; a guessed tray channel is
+    just as likely to be a watering valve, which is worse. Absent means absent,
+    the caller refuses the fill, and the app says which section needs wiring.
     """
     meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json") or {}
+    key = "trayChannel" if action == "tray" else "relayChannel"
     try:
-        ch = int(meta["relayChannel"])
+        ch = int(meta[key])
         if 1 <= ch <= MASTER_MAX_CHANNELS:
             return ch
     except (KeyError, TypeError, ValueError):
         pass
+    if action == "tray":
+        return None
     ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
                  key=_natural_key)
     if section_id in ids:
@@ -749,14 +767,14 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
     # valve would be obeyed by firmware and move no water, while the app
     # reported success.
     master = _master_for_house(house_id)
-    channel = _relay_channel(house_id, section_id) if master else None
+    channel = _relay_channel(house_id, section_id, action) if master else None
     if not master or not channel:
         # Refusing is the point. Writing to the section's own path here would
         # produce a command nobody polls: not delayed, never seen, while the app
         # reports success and the log records a watering that did not happen.
-        print(f"[CMD] {house_id}/{section_id}: "
-              f"{'no master controller assigned' if not master else 'no relay channel'}"
-              f" - {action} not issued")
+        why = ("no master controller assigned" if not master
+               else f"no {'tray' if action == 'tray' else 'relay'} channel wired")
+        print(f"[CMD] {house_id}/{section_id}: {why} - {action} not issued")
         return None
 
     cmd["targetSection"] = section_id
@@ -2670,6 +2688,26 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
                "fillSeconds": max(1, min(cmd.fillSeconds, TRAY_MAX_SEC)),
                "triggeredBy": cmd.triggeredBy,
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+    # ISSUE FIRST, RECORD SECOND.
+    #
+    # The cooldown stamp and the history entry used to be written before the
+    # command was even attempted, so a fill that could not be issued still put
+    # the tray into cooldown and still appeared in the log as a fill. Now that a
+    # section without its own tray valve is refused rather than sent to the
+    # watering line, that ordering would have turned one bug into a quieter one:
+    # no water, no error, and a record saying the tray was topped up.
+    node_cmd = _issue_node_command(house_id, section_id, "tray",
+                                   command["fillSeconds"])
+    if not node_cmd:
+        master = _master_for_house(house_id)
+        raise HTTPException(
+            409,
+            "No master controller is set for this house." if not master else
+            f"Section {section_id} has no tray valve wired. Watering and filling "
+            "the tray are different outputs, so this cannot be sent to the "
+            "watering valve - that would put water on the roots when you asked "
+            "to raise humidity. Set the tray channel in the section's Setup tab.")
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)
 
     # Stamp the fill so the cooldown guard knows the tray now has water.
@@ -2688,8 +2726,6 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
                              f"Next fill allowed in {COOLDOWN_HOURS:.0f} h.")})
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", tray)
 
-    node_cmd = _issue_node_command(house_id, section_id, "tray",
-                                   command["fillSeconds"])
     # Tray fills belong in the history too. Watering was logged and this was
     # not, so the record answered "when was it watered" but never "when was the
     # tray last topped up" - which is the other half of humidity control.
@@ -3146,6 +3182,10 @@ async def set_house_master(house_id: str, body: MasterIn):
 
 class ChannelIn(BaseModel):
     relayChannel: Optional[int] = None
+    # The valve that fills this section's humidity tray. A SEPARATE output from
+    # the watering one - see _relay_channel. Absent means tray fills are refused
+    # for this section rather than sent to whatever valve happened to be known.
+    trayChannel: Optional[int] = None
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/channel")
@@ -3175,6 +3215,26 @@ async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
                 409, f"Channel {ch} is already used by {', '.join(sorted(taken))}. "
                      f"Give that section a different channel first, or pick another.")
         meta["relayChannel"] = ch
+
+    if body.trayChannel is None:
+        meta.pop("trayChannel", None)
+    else:
+        tch = int(body.trayChannel)
+        if not (1 <= tch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"Tray channel must be 1-{MASTER_MAX_CHANNELS}.")
+        # A tray valve that is also somebody's watering valve is the bug this
+        # whole change exists to stop, so it is refused here too - including
+        # against this section's own watering channel.
+        clash = {sid for sid in _channel_map(house_id).get(tch, []) if sid != section_id}
+        if clash:
+            raise HTTPException(
+                409, f"Channel {tch} is already used by {', '.join(sorted(clash))}.")
+        if meta.get("relayChannel") == tch:
+            raise HTTPException(
+                409, f"Channel {tch} already waters this section. The tray needs its "
+                     "own valve, or filling it would water the roots - which is "
+                     "exactly what the tray loop exists to avoid.")
+        meta["trayChannel"] = tch
     _fb_put(path, meta)
     return {"status": "success", "relayChannel": meta.get("relayChannel"),
             "effective": _relay_channel(house_id, section_id),
