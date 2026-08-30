@@ -11,7 +11,7 @@ Endpoints
 
 The route handlers stay thin on purpose: every rule about when the severity
 model runs, and every threshold, lives in the ML component
-(`ml-models/disease_detection/src/predict.py`) so the same logic is used by the
+(`ml-models/disease_detection/src/disease_predict.py`) so the same logic is used by the
 command line, the tests and the API. See app/services/disease_service.py.
 """
 
