@@ -27,12 +27,14 @@ try:
     from src.detect_and_predict import BloomDetectionPipeline
     print("[OK] Successfully imported bloom_prediction modules")
 except ImportError as e:
-    print(f"[ERROR] Import error: {e}")
-    if ML_PATH.exists():
-        print(f"Contents of {ML_PATH}:")
-        for item in ML_PATH.iterdir():
-            print(f"  - {item.name}")
-    raise
+    # Do NOT re-raise. This module's ML stack is optional: TensorFlow needs
+    # Python 3.13 and the backend also runs on 3.12, where importing it fails.
+    # Re-raising took the ENTIRE backend down - every route, for every
+    # component - because one component's optional dependency was missing.
+    # The component's own endpoints now return 503 and everything else runs.
+    ML_IMPORT_ERROR = str(e)
+    print(f"[WARN] {__name__}: ML stack unavailable ({e}). "
+          "This component's endpoints will return 503; the rest of the API is unaffected.")
 finally:
     # growth_stage and bloom_prediction each ship a top-level package
     # literally named `src`. Evicting it (and ML_PATH) here stops the one
