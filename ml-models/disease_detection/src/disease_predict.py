@@ -71,6 +71,11 @@ DEFAULT_MODELS = COMPONENT_ROOT / "models"
 
 IMG_SIZE = (224, 224)
 
+# The long-side cap the training pipeline applied when building data/processed/.
+# Inference resizes through the same intermediate so that a 4080px phone photo
+# and its processed 1024px counterpart reach the model as the same picture.
+PIPELINE_MAX_SIDE = 1024
+
 # Chosen from the VALIDATION threshold sweep (PROJECT_CONTEXT.md section 4c).
 # At 0.70 the system answers 84% of cases automatically at 91% accuracy.
 DEFAULT_THRESHOLD = 0.70
@@ -102,13 +107,33 @@ def _load(models_dir):
             "disease name and every prediction could silently be wrong."
             .format(names_path))
 
+    disease_model = tf.keras.models.load_model(disease_path, compile=False)
+
     bundle = {
-        "disease_model": tf.keras.models.load_model(disease_path, compile=False),
+        "disease_model": disease_model,
         "disease_classes": json.loads(names_path.read_text(encoding="utf-8")),
         "advisor": TreatmentAdvisor(),
         "severity_model": None,
         "severity_classes": None,
+        "validator": None,
+        "feature_bank": None,
+        "validator_threshold": None,
+        "validator_k": 5,
     }
+
+    # The input validator. Optional: without it the system still works, it just
+    # cannot tell an orchid from a cheeseburger. See build_feature_bank.py.
+    bank_path = models_dir / "feature_bank.npz"
+    if bank_path.exists():
+        import numpy as np
+        data = np.load(bank_path)
+        bundle["feature_bank"] = data["bank"]
+        bundle["validator_threshold"] = float(data["threshold"])
+        bundle["validator_k"] = int(data["k"])
+        # Truncate the trained model at the pooling layer to get the 1280-dim
+        # description of the image, before the 3-way softmax forces a choice.
+        bundle["validator"] = tf.keras.Model(
+            disease_model.input, disease_model.get_layer("pool").output)
 
     # The severity model is optional: the system still gives a disease name and
     # the cultural-control advice without it.
@@ -129,12 +154,80 @@ def _to_tensor(image):
     Raw 0-255 on purpose. The Rescaling layer inside the model maps it to
     [-1, 1]. Scaling here as well would double-scale and quietly ruin every
     prediction without raising an error.
+
+    EXIF ORIENTATION IS APPLIED HERE, AND IT MATTERS
+    ------------------------------------------------
+    Phone cameras often store a photograph in the sensor's orientation and
+    attach an EXIF tag saying "rotate me 90 degrees when displaying". Viewers
+    obey the tag, so a human never notices. `tf.io.decode_image` does NOT obey
+    it, and a CNN reads the stored pixels.
+
+    The training pipeline bakes the rotation into the pixels
+    (tools/augment_dataset.py rename does this; it corrected 330 of the 667
+    field photographs). Inference did not, so the model was trained on upright
+    leaves and shown sideways ones.
+
+    Measured cost of that inconsistency on the 67-image test set:
+
+        accuracy on processed images (what was reported)   80.6%
+        accuracy on the same photos straight from a phone  70.1%
+                                                           -----
+                                                   10.4 points lost
+
+    Pillow is used rather than TensorFlow because TensorFlow has no EXIF
+    handling at all, and ImageOps.exif_transpose is exactly what the training
+    pipeline calls -- so training and serving now do the identical thing.
     """
+    import numpy as np
     import tensorflow as tf
-    data = image if isinstance(image, (bytes, bytearray)) else tf.io.read_file(str(image))
-    img = tf.io.decode_image(data, channels=3, expand_animations=False)
-    img = tf.image.resize(img, IMG_SIZE, method="bilinear")
+    from io import BytesIO
+    from PIL import Image, ImageOps
+
+    raw = image if isinstance(image, (bytes, bytearray)) else Path(image).read_bytes()
+    with Image.open(BytesIO(raw)) as pil:
+        # exif_transpose rotates the pixels and drops the tag, so nothing
+        # downstream can rotate a second time.
+        pil = ImageOps.exif_transpose(pil).convert("RGB")
+
+        # SECOND HALF OF MATCHING THE TRAINING PIPELINE: cap the long side at
+        # 1024px with LANCZOS, exactly as `augment_dataset.py rename` does,
+        # BEFORE the final resize to 224.
+        #
+        # Going straight from a 4080px phone photo to 224px in one bilinear
+        # step aliases badly -- bilinear samples only a handful of source
+        # pixels, so fine lesion texture is discarded rather than averaged.
+        # The training images passed through 1024px on the way, so inference
+        # must too, or the model sees a measurably different image.
+        if max(pil.width, pil.height) > PIPELINE_MAX_SIDE:
+            scale = PIPELINE_MAX_SIDE / max(pil.width, pil.height)
+            pil = pil.resize((max(1, round(pil.width * scale)),
+                              max(1, round(pil.height * scale))), Image.LANCZOS)
+
+        arr = np.asarray(pil, dtype="float32")
+
+    img = tf.image.resize(tf.convert_to_tensor(arr), IMG_SIZE, method="bilinear")
     return tf.expand_dims(tf.cast(img, tf.float32), axis=0)
+
+
+def _validation_distance(bundle, x):
+    """
+    How unlike the training photographs this image is.
+
+    Cosine distance to the mean of the K most similar training images, in the
+    feature space of the layer BEFORE the classifier. Small means familiar,
+    large means the model has never seen anything like it.
+
+    Returns None when no feature bank is installed.
+    """
+    if bundle["validator"] is None:
+        return None
+    import numpy as np
+    v = bundle["validator"].predict(x, verbose=0)
+    v = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+    similarity = v @ bundle["feature_bank"].T
+    k = min(bundle["validator_k"], bundle["feature_bank"].shape[0])
+    nearest = np.sort(similarity, axis=1)[:, -k:]
+    return float(1.0 - nearest.mean(axis=1)[0])
 
 
 def predict(image, models_dir=DEFAULT_MODELS, threshold=DEFAULT_THRESHOLD,
@@ -152,6 +245,39 @@ def predict(image, models_dir=DEFAULT_MODELS, threshold=DEFAULT_THRESHOLD,
     """
     b = _load(models_dir)
     x = _to_tensor(image)
+
+    # ---- stage 0: is this even an orchid? ----
+    # This runs BEFORE classification, and a failure returns immediately. The
+    # softmax cannot be trusted to notice an unrelated image: measured on this
+    # project, a photograph of a meal scored healthy at 99.9% confidence, grass
+    # at 99.3%, and a tree phyllosticta at 99.6%. Confidence is not familiarity.
+    distance = _validation_distance(b, x)
+    limit = b["validator_threshold"]
+
+    if distance is not None and limit is not None and distance > limit:
+        result = {
+            "disease": "invalid_image",
+            "raw_prediction": None,          # deliberately withheld: showing a
+            "confidence": None,              # class or a percentage here is
+            "confident": False,              # exactly the bug being fixed
+            "threshold": threshold,
+            "plant_part": None,
+            "probabilities": None,
+            "severity": None,
+            "severity_confidence": None,
+            "severity_probabilities": None,
+            "valid_orchid_image": False,
+            "validation_distance": round(distance, 4),
+            "validation_threshold": round(limit, 4),
+            "explanation": (
+                "This does not look like a Vanda orchid. The image is unlike "
+                "anything in the training set (distance {:.3f}, limit {:.3f}), "
+                "so no diagnosis was attempted."
+                .format(distance, limit)),
+        }
+        if include_treatment:
+            result["treatment"] = b["advisor"].recommend("invalid_image")
+        return result
 
     # ---- stage 1: disease ----
     probs = b["disease_model"].predict(x, verbose=0)[0]
@@ -172,6 +298,9 @@ def predict(image, models_dir=DEFAULT_MODELS, threshold=DEFAULT_THRESHOLD,
         "severity": None,
         "severity_confidence": None,
         "severity_probabilities": None,
+        "valid_orchid_image": True,
+        "validation_distance": round(distance, 4) if distance is not None else None,
+        "validation_threshold": round(limit, 4) if limit is not None else None,
     }
 
     # ---- stage 2: severity, only when a disease was actually identified ----

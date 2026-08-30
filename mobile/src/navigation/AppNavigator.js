@@ -8,6 +8,8 @@ import { COLORS, FONT, SPACE, SHADOW } from '../config/theme';
 
 import HomeScreen from '../screens/HomeScreen';
 import DiseaseDetectionScreen from '../screens/DiseaseDetectionScreen';
+import DiseaseHubScreen from '../screens/DiseaseHubScreen';
+import DiseaseHistoryScreen from '../screens/DiseaseHistoryScreen';
 import GrowthStageScreen from '../screens/GrowthStageScreen';
 import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -106,7 +108,7 @@ function MainTabs() {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}>
       <Tab.Screen name="Farm" component={FarmTabScreen} />
-      <Tab.Screen name="Disease" component={DiseaseDetectionScreen} />
+      <Tab.Screen name="Disease" component={DiseaseHubScreen} />
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Hybrid" component={HybridPollinationScreen} />
       <Tab.Screen name="Growth" component={GrowthStageScreen} />
@@ -136,6 +138,10 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="HouseMap" component={HouseMapScreen} />
         <Stack.Screen name="PlacementResult" component={PlacementResultScreen} />
         <Stack.Screen name="AddSensor" component={AddSensorScreen} />
+
+        {/* Component 1 - disease detection */}
+        <Stack.Screen name="DiseaseDetection" component={DiseaseDetectionScreen} />
+        <Stack.Screen name="DiseaseHistory" component={DiseaseHistoryScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

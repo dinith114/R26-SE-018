@@ -2,7 +2,6 @@
   "schema_version": "1.0",
   "last_updated": "2026-08-29",
   "scope": "Vanda orchids, Nuwara Eliya highland region, Sri Lanka",
-
   "_readme": [
     "Rule-based treatment knowledge base keyed by (disease, severity).",
     "This is NOT a model. It is a lookup table, and that is a deliberate design",
@@ -25,7 +24,6 @@
     "as 'consult your agricultural extension officer for application rates',",
     "which src/treatment.py does automatically."
   ],
-
   "grading_protocol": {
     "basis": "percentage of leaf area showing lesions, chlorosis or necrosis",
     "mild": "under 10%",
@@ -33,7 +31,6 @@
     "severe": "over 40%",
     "note": "Graded by measured area rather than impression, so that labels stay consistent across all 427 diseased images. State this protocol in the report."
   },
-
   "safety": {
     "always_show": [
       "Read the product label before mixing. The label is the legal instruction.",
@@ -44,7 +41,6 @@
     ],
     "resistance_management": "Rotate between fungicide groups with different FRAC codes. Using one active ingredient repeatedly selects for resistant strains and the product stops working."
   },
-
   "sources": [
     {
       "id": "doa_lk",
@@ -65,17 +61,16 @@
       "status": "standing caveat for the report"
     }
   ],
-
   "treatments": {
-
     "black_leaf_spot": {
       "display_name": "Black Leaf Spot",
       "pathogen": "fungal leaf-spotting complex",
       "pathogen_type": "fungus",
       "pathogen_note": "Confirm the causal organism with the research institute before publishing a species name. Several fungi produce visually similar black lesions on Vanda, and naming the wrong one in the report is an easy correction to be caught on.",
-      "affected_parts": ["leaf"],
+      "affected_parts": [
+        "leaf"
+      ],
       "favourable_conditions": "Prolonged leaf wetness, crowded plants, poor air movement, overhead watering late in the day.",
-
       "severity_levels": {
         "mild": {
           "summary": "A few small lesions. Cultural correction is usually enough; no spraying needed yet.",
@@ -98,7 +93,6 @@
           "monitoring": "Re-inspect every 3 days for 2 weeks. If new lesions appear, treat as moderate.",
           "escalate_to_expert": false
         },
-
         "moderate": {
           "summary": "Established infection spreading across the leaf. Sanitation plus a protectant fungicide.",
           "immediate_actions": [
@@ -144,7 +138,6 @@
           "monitoring": "Re-inspect every 3 days. Keep the plant isolated until no new lesions appear for 2 weeks.",
           "escalate_to_expert": false
         },
-
         "severe": {
           "summary": "Over 40% of leaf area lost. The plant is at risk; treat aggressively and consider whether it is worth saving.",
           "immediate_actions": [
@@ -193,15 +186,15 @@
         }
       }
     },
-
     "phyllosticta_leaf_spot": {
       "display_name": "Phyllosticta Leaf Spot",
       "pathogen": "Phyllosticta spp. (Guignardia teleomorph)",
       "pathogen_type": "fungus",
-      "affected_parts": ["leaf"],
+      "affected_parts": [
+        "leaf"
+      ],
       "favourable_conditions": "Warm, consistently humid conditions with water sitting on leaves. Spores spread in splashing water, so overhead irrigation is the main vector.",
       "distinguishing_note": "Lesions typically begin as small purple-black flecks that enlarge into elongated sunken spots, often with a yellow halo, running along the leaf axis.",
-
       "severity_levels": {
         "mild": {
           "summary": "Scattered small flecks. Correct the watering and airflow before reaching for chemicals.",
@@ -225,7 +218,6 @@
           "monitoring": "Re-inspect every 3 days for 2 weeks.",
           "escalate_to_expert": false
         },
-
         "moderate": {
           "summary": "Lesions coalescing and spreading. Sanitation plus a protectant or systemic fungicide.",
           "immediate_actions": [
@@ -271,7 +263,6 @@
           "monitoring": "Re-inspect every 3 days; keep isolated until 2 weeks pass with no new lesions.",
           "escalate_to_expert": false
         },
-
         "severe": {
           "summary": "Extensive leaf loss. Systemic treatment, and reassess whether the plant is worth keeping.",
           "immediate_actions": [
@@ -331,7 +322,6 @@
         }
       }
     },
-
     "healthy": {
       "display_name": "Healthy",
       "pathogen": null,
@@ -360,7 +350,6 @@
         }
       }
     },
-
     "unidentified": {
       "display_name": "Unidentified condition",
       "pathogen": null,
@@ -390,16 +379,43 @@
           "escalation_reason": "Low classifier confidence means the condition is outside the three trained classes, or the photograph is unclear."
         }
       }
+    },
+    "invalid_image": {
+      "display_name": "Invalid image",
+      "pathogen": null,
+      "pathogen_type": null,
+      "affected_parts": [],
+      "_note": "Returned when the input validator decides the photograph is not a Vanda orchid at all -- food, a hand, a table, a building, a different plant. This is NOT the same as 'unidentified'. Unidentified means the image IS an orchid whose condition the model cannot name, and the right advice is to consult an expert. Invalid means the wrong subject was photographed, and the right advice is to take another photo. Wording them the same would send a grower to an expert over a picture of their lunch.",
+      "severity_levels": {
+        "none": {
+          "summary": "This does not look like a Vanda orchid, so no diagnosis was attempted.",
+          "immediate_actions": [
+            "Photograph a single Vanda orchid leaf or stem.",
+            "Fill most of the frame with the leaf -- step closer rather than zooming.",
+            "Use daylight or bright shade; avoid direct midday sun and deep shadow.",
+            "Hold the camera steady and check the photo is in focus before uploading."
+          ],
+          "cultural_control": [
+            "Photograph the affected part directly rather than the whole plant.",
+            "Keep other plants, pots and hands out of the frame where possible."
+          ],
+          "chemical_control": {
+            "recommended": false,
+            "rationale": "No plant was identified, so no treatment can be suggested. Nothing should be applied on the basis of this image.",
+            "options": []
+          },
+          "monitoring": "Retake the photograph and analyse it again.",
+          "escalate_to_expert": false
+        }
+      }
     }
   },
-
   "out_of_scope_reference": {
     "_note": [
       "Not produced by the classifier -- these three classes were dropped for lack of training images.",
       "Kept in the knowledge base for two reasons: the admin can enter these diagnoses manually,",
       "and the Phytophthora distinction below is a genuine trap that the report should record."
     ],
-
     "phytophthora_black_rot": {
       "display_name": "Phytophthora Black Rot",
       "pathogen": "Phytophthora spp.",
@@ -408,21 +424,28 @@
       "correct_chemical_classes": [
         {
           "active_ingredient": "Metalaxyl / Mefenoxam",
-          "example_products": ["Subdue"],
+          "example_products": [
+            "Subdue"
+          ],
           "notes": "Phenylamide, specifically active against oomycetes.",
           "dose": "VERIFY",
           "verified": false
         },
         {
           "active_ingredient": "Fosetyl-aluminium",
-          "example_products": ["Aliette"],
+          "example_products": [
+            "Aliette"
+          ],
           "notes": "Systemic, moves both up and down the plant.",
           "dose": "VERIFY",
           "verified": false
         },
         {
           "active_ingredient": "Etridiazole",
-          "example_products": ["Truban", "Terrazole"],
+          "example_products": [
+            "Truban",
+            "Terrazole"
+          ],
           "notes": "Soil and medium drench for root and crown infection.",
           "dose": "VERIFY",
           "verified": false
@@ -436,7 +459,6 @@
         "Isolate and inspect neighbours; spread through shared water is rapid."
       ]
     },
-
     "anthracnose": {
       "display_name": "Anthracnose",
       "pathogen": "Colletotrichum spp.",
@@ -444,7 +466,6 @@
       "status": "Out of scope for the classifier. 791 images exist from an earlier collection but the class was excluded when scope narrowed to three classes on 29 Aug 2026.",
       "note": "If reinstated, it needs its own treatment entry filled in before the classifier is allowed to predict it -- otherwise the system names a disease it cannot advise on."
     },
-
     "sooty_mold": {
       "display_name": "Sooty Mold",
       "pathogen": "various saprophytic fungi",
