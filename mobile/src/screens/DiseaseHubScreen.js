@@ -5,13 +5,13 @@
  * because the component does three separate jobs and a tab that silently does
  * one of them hides the other two.
  *
- *   1  Check a plant      -> DiseaseDetection   (working)
- *   2  History            -> DiseaseHistory     (working)
- *   3  Contribute         -> not built yet, shown as disabled
+ *   1  Check a plant      -> DiseaseDetection
+ *   2  History            -> DiseaseHistory
+ *   3  Contribute         -> DiseaseContribute
  *
- * Card 3 is deliberately visible while disabled rather than hidden. A disabled
- * card with a reason tells the user the capability is planned; a hidden one
- * tells them nothing, and it would be a surprise when it appears.
+ * Card 3 collects photographs of conditions the classifier does not know. It
+ * does not change the model: contributions are stored, and a class needs 30
+ * human-confirmed images before it can be trained at all.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -122,16 +122,9 @@ const DiseaseHubScreen = ({ navigation }) => {
           tint={COLORS.fertilizer}
           dim={COLORS.fertilizerDim}
           title="Contribute an image"
-          subtitle="Coming soon"
-          body="Submit a photograph of a disease the system does not yet recognise, so it can be added in a future version."
-          disabled
-          badge="SOON"
-          onPress={() =>
-            Alert.alert(
-              'Not available yet',
-              'This will let you submit photographs of diseases the system cannot yet identify — including stems and flowers — so they can be added once enough examples have been collected and confirmed by an orchid research institute.'
-            )
-          }
+          subtitle="Help extend the system"
+          body="Submit a photograph of a condition the system cannot identify — including stems and flowers — so it can be added once enough confirmed examples exist."
+          onPress={() => navigation.navigate('DiseaseContribute')}
         />
 
         <View style={styles.noteBox}>

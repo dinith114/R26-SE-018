@@ -29,6 +29,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -106,6 +107,55 @@ const DiseaseDetectionScreen = ({ navigation }) => {
       setError({
         message: 'Could not open your photo library.',
         hint: err?.message || 'Try again, or restart the app.',
+      });
+    }
+  };
+
+
+  /**
+   * Capture a new photograph with the device camera.
+   *
+   * Uses expo-image-picker's launchCameraAsync rather than expo-camera. That
+   * opens the phone's own camera app, which already handles focus, exposure and
+   * the shutter; expo-camera would mean building and maintaining that UI here
+   * for no benefit. It also needs no extra dependency -- expo-image-picker is
+   * already used for the gallery.
+   *
+   * Camera permission is separate from photo-library permission, so it is
+   * requested separately.
+   */
+  const takePhoto = async () => {
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Camera permission needed',
+          'Allow camera access to photograph a plant. You can enable it in your phone settings.'
+        );
+        return;
+      }
+
+      const shot = await ImagePicker.launchCameraAsync({
+        quality: 0.9,
+        allowsEditing: false,
+        exif: true,   // keep EXIF; the backend applies the orientation tag
+      });
+
+      if (shot.canceled) return;
+
+      const a = shot.assets?.[0];
+      if (!a?.uri) {
+        setError({ message: 'Could not read that photo.', hint: 'Try taking it again.' });
+        return;
+      }
+      setImageUri(a.uri);
+      setImageAsset(a);
+      setResult(null);
+      setError(null);
+    } catch (err) {
+      setError({
+        message: 'Could not open the camera.',
+        hint: err?.message || 'Try choosing a photo from your gallery instead.',
       });
     }
   };
@@ -498,31 +548,68 @@ const DiseaseDetectionScreen = ({ navigation }) => {
         <Animated.View style={{ opacity: fadeAnim }}>
           {/* ---------- upload ---------- */}
           {!imageUri ? (
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={[styles.uploadCard, SHADOW.md]}
-              onPress={pickImage}
-            >
+            <View style={[styles.uploadCard, SHADOW.md]}>
               <View style={styles.uploadIcon}>
                 <Ionicons name="cloud-upload-outline" size={28} color={COLORS.info} />
               </View>
-              <Text style={styles.uploadTitle}>Upload a photo</Text>
+              <Text style={styles.uploadTitle}>Add a photo</Text>
               <Text style={styles.uploadDesc}>
-                Choose a clear, well-lit picture of the affected leaf
+                A clear, well-lit picture of the affected leaf
               </Text>
-              <View style={styles.uploadBtn}>
-                <Ionicons name="images-outline" size={16} color="#FFF" />
-                <Text style={styles.uploadBtnText}>Choose from gallery</Text>
-              </View>
-              <Text style={styles.uploadHint}>Camera capture coming soon</Text>
-            </TouchableOpacity>
+
+              {/* The camera is hidden in a browser: launchCameraAsync is a
+                  native-only API, and a button that always fails is worse than
+                  no button. On a phone both options appear. */}
+              {Platform.OS !== 'web' && (
+                <TouchableOpacity
+                  style={styles.uploadBtn}
+                  onPress={takePhoto}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="camera-outline" size={16} color="#FFF" />
+                  <Text style={styles.uploadBtnText}>Take a photo</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={Platform.OS === 'web' ? styles.uploadBtn : styles.uploadBtnAlt}
+                onPress={pickImage}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name="images-outline"
+                  size={16}
+                  color={Platform.OS === 'web' ? '#FFF' : COLORS.primary}
+                />
+                <Text
+                  style={
+                    Platform.OS === 'web' ? styles.uploadBtnText : styles.uploadBtnAltText
+                  }
+                >
+                  Choose from gallery
+                </Text>
+              </TouchableOpacity>
+
+              {Platform.OS === 'web' && (
+                <Text style={styles.uploadHint}>
+                  Camera capture is available in the phone app
+                </Text>
+              )}
+            </View>
           ) : (
             <View style={[styles.previewCard, SHADOW.md]}>
               <Image source={{ uri: imageUri }} style={styles.preview} resizeMode="cover" />
               <View style={styles.previewActions}>
                 <TouchableOpacity
                   style={[styles.secondaryBtn, loading && styles.btnDisabled]}
-                  onPress={pickImage}
+                  onPress={() => {
+                    if (Platform.OS === 'web') { pickImage(); return; }
+                    Alert.alert('Replace photo', 'Where should the new photo come from?', [
+                      { text: 'Camera', onPress: takePhoto },
+                      { text: 'Gallery', onPress: pickImage },
+                      { text: 'Cancel', style: 'cancel' },
+                    ]);
+                  }}
                   disabled={loading}
                   activeOpacity={0.7}
                 >
@@ -668,6 +755,13 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.full,
   },
   uploadBtnText: { color: '#FFF', fontSize: FONT.sm, fontWeight: '700' },
+  uploadBtnAlt: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: SPACE.sm, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.md,
+    borderRadius: RADIUS.full, backgroundColor: COLORS.primaryDim,
+    marginTop: SPACE.sm,
+  },
+  uploadBtnAltText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '700' },
   uploadHint: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: SPACE.md },
 
   /* preview */
