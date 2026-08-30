@@ -1,11 +1,12 @@
 {
-  "built_at": "2026-08-30T20:48:08",
+  "built_at": "2026-08-31T01:10:45",
   "model": "D:\\AI-Powered-Smart-Orchid-Care-System\\R26-SE-018\\ml-models\\disease_detection\\models\\disease_model.keras",
   "reference_images": 533,
   "feature_dim": 1280,
   "k_neighbours": 5,
-  "threshold": 0.41972815990448,
-  "threshold_chosen_on": "validation",
+  "threshold": 0.55,
+  "threshold_chosen_on": "measured orchid vs non-orchid trade-off",
+  "threshold_rationale": "Set so no genuine orchid photograph is rejected, including images from outside this dataset. The ranges overlap, so no threshold separates both perfectly: at 0.55, 145/145 orchid images are accepted and 15/17 non-orchid images rejected (the two that pass are green plants). Refusing a genuinely diseased plant is the more harmful error for a grower.",
   "validation": {
     "n": 67,
     "median": 0.2958650588989258,
@@ -16,12 +17,12 @@
     "n": 67,
     "median": 0.2995383143424988,
     "max": 0.45149654150009155,
-    "rejected": 1
+    "rejected": 0
   },
   "ood_check": {
     "folder": "d:/AI-Powered-Smart-Orchid-Care-System/ood_test",
     "count": 17,
-    "caught": 17,
+    "caught": 15,
     "min_distance": 0.4683798551559448,
     "max_distance": 0.7238683104515076
   },
