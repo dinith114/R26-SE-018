@@ -148,3 +148,28 @@ serviceAccountKey.json
 
 # The API key. The repo is PUBLIC - never commit the real one.
 mobile/src/config/secret.js
+
+# ===========================
+# Component 1 - disease detection (R26-SE-018)
+# ===========================
+
+# Colab result downloads. Regenerable; orchid_colab.zip is 133 MB and GitHub
+# refuses any file over 100 MB.
+ml-models/*/orchid_results.zip
+ml-models/*/orchid_final.zip
+
+# Timestamped safety copies written by make_labels_template.py and
+# label_severity.py. The real severity_labels.csv IS tracked; these are backups
+# that would otherwise accumulate forever.
+ml-models/*/data/severity_labels.before_labelling_*.csv
+ml-models/*/data/severity_labels.backup_*.csv
+
+# Written by update_manifest_severity.py before it rewrites a manifest.
+*.csv.bak
+
+# Temporary file compare_models.py writes to measure model size on disk.
+ml-models/*/models/_size_probe.keras
+
+# Scratch folders from the one-image augmentation demo in HOW_TO_RUN.md.
+ml-models/*/tools/demo_in/
+ml-models/*/tools/demo_out/
