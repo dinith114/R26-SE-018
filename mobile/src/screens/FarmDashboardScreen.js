@@ -158,6 +158,28 @@ export default function FarmDashboardScreen({ navigation }) {
      looking for it had to guess which of eight sections to open. */
   const [master, setMaster] = useState(null);
   const [savingMaster, setSavingMaster] = useState(false);
+  /* The house's ... menu, and the delete confirmation behind it.
+     These were Alert.alert, which is the ANDROID dialog: a different shape,
+     different type and different button order from every other choice in this
+     app, and on a destructive action that inconsistency is the moment a farmer
+     is least sure what they just tapped. The app already owns SelectSheet and
+     ConfirmSheet; this is the last screen that was not using them. */
+  const [houseMenu, setHouseMenu] = useState(null);   // the house, or null
+  const [confirmDel, setConfirmDel] = useState(null); // the house, or null
+  const [deleting, setDeleting] = useState(false);
+
+  const doDeleteHouse = async () => {
+    const h = confirmDel;
+    setDeleting(true);
+    try {
+      await deleteHouse(h.houseId);
+      setConfirmDel(null);
+      await load();
+    } catch (e) {
+      setConfirmDel(null);
+      Alert.alert('Could not delete', e.message);
+    } finally { setDeleting(false); }
+  };
 
   const openMaster = async (h) => {
     setMaster({ houseId: h.houseId, name: h.meta?.name || h.houseId,
@@ -572,23 +594,7 @@ export default function FarmDashboardScreen({ navigation }) {
                   <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
                     accessibilityLabel={`Options for ${h.meta?.name || h.houseId}: rename or delete`}
-                    onPress={() => Alert.alert(
-                      h.meta?.name || h.houseId,
-                      'What would you like to do with this house?',
-                      [{ text: 'Cancel', style: 'cancel' },
-                       { text: 'Rename house',
-                         onPress: () => setRenaming({ kind: 'house', id: h.houseId,
-                                                      name: h.meta?.name || h.houseId }) },
-                       { text: 'Delete house', style: 'destructive', onPress: () => Alert.alert(
-                          'Delete this house?',
-                          `“${h.meta?.name || h.houseId}” and all ${h.sections?.length || 0} of its `
-                          + 'sections will be removed. This cannot be undone.',
-                          [{ text: 'Cancel', style: 'cancel' },
-                           { text: 'Delete', style: 'destructive', onPress: async () => {
-                              try { await deleteHouse(h.houseId); await load(); }
-                              catch (e) { Alert.alert('Failed', e.message); } } }]
-                       ) }]
-                    )}>
+                    onPress={() => setHouseMenu(h)}>
                     <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textTertiary} />
                   </TouchableOpacity>
                 </View>
@@ -786,6 +792,51 @@ export default function FarmDashboardScreen({ navigation }) {
         )}
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* The house's own menu, in the app's shape rather than Android's. */}
+      <SelectSheet
+        visible={!!houseMenu}
+        title={houseMenu ? (houseMenu.meta?.name || houseMenu.houseId) : ''}
+        subtitle={houseMenu
+          ? `${houseMenu.meta?.type || 'house'} · ${houseMenu.sections?.length || 0} sections`
+          : undefined}
+        options={[
+          { key: 'rename', label: 'Rename house',
+            sub: 'Only the name changes. Sections and readings are untouched.' },
+          { key: 'delete', label: 'Delete house',
+            sub: 'Removes the house, its sections and its readings, and frees its nodes.' },
+        ]}
+        confirmOnSelect
+        onCancel={() => setHouseMenu(null)}
+        onConfirm={(k) => {
+          const h = houseMenu;
+          setHouseMenu(null);
+          if (k === 'rename') {
+            setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else {
+            setConfirmDel(h);
+          }
+        }} />
+
+      {/* Deleting is irreversible, so it says exactly what goes - including the
+          part a farmer would not guess: the boards are released, which is what
+          stops the house reappearing as a nameless ghost. */}
+      <ConfirmSheet
+        visible={!!confirmDel}
+        destructive
+        busy={deleting}
+        icon="trash-outline"
+        title={confirmDel ? `Delete ${confirmDel.meta?.name || confirmDel.houseId}?` : ''}
+        body={confirmDel
+          ? `${confirmDel.sections?.length || 0} section`
+            + `${(confirmDel.sections?.length || 0) === 1 ? '' : 's'} and all of their stored `
+            + 'readings will be removed. Any nodes in this house are unlinked and become '
+            + 'available again — the boards themselves are not deleted.'
+          : ''}
+        caution="This cannot be undone."
+        confirmLabel="Delete house"
+        onCancel={() => setConfirmDel(null)}
+        onConfirm={doDeleteHouse} />
 
       {/* Which board drives this house's valves. */}
       <SelectSheet
