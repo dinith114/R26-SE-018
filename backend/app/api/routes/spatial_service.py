@@ -40,6 +40,26 @@ from app.api.routes.smart_care_v2 import (
 # last fill, not of the air, and does not vary smoothly across the house.
 FIELDS = ("temperature", "humidity", "light")
 
+# Below this spread across ALL anchors, a field has no structure a variogram can
+# describe - the differences are inside what the instrument can resolve.
+#
+# DHT22 is specified at +/-0.5 C and +/-2 % RH, so two sensor errors is the point
+# at which a difference stops being a measurement of the house and starts being a
+# measurement of the sensors.
+#
+# LIGHT IS HERE TOO, and leaving it out was a mistake worth explaining. The first
+# version reasoned "a flat light field means night" and stopped there - but that
+# is the argument FOR a fallback, not against one. At 20:15 the anchors read
+# 388.9, 0, 0 and 111.7 lux; the variogram could not fit, light got no estimate,
+# and the app showed "--" for it while four sensors sat there agreeing that it
+# was dark. "--" means no data. Dark is data.
+#
+# 500 lux, because that is the scale the decisions work at: a watering plan
+# reasons about thousands of lux, and no grower acts on a 500 lux difference
+# between two ends of a house. Below that spread the house is uniformly dark or
+# uniformly shaded, and the anchor mean is the honest answer.
+FLAT_FIELD_SPAN = {"temperature": 1.0, "humidity": 4.0, "light": 500.0}
+
 # Below this there is no variogram worth fitting. Four is already generous for
 # kriging - geostatistics texts want dozens - but it is the point at which the
 # result stops being "copy the one reading you have".
@@ -81,6 +101,57 @@ def _anchor_reading(section: dict) -> Optional[dict]:
     if latest.get("temperature") is None or latest.get("humidity") is None:
         return None
     return latest
+
+
+# Inverse-distance weighting exponent. 2 is the standard choice and it IS a
+# choice, not a derivation: 1 spreads influence too far across a house this
+# size, and 3 makes each target almost equal to its single nearest anchor, which
+# is nearest-neighbour with extra steps.
+IDW_POWER = 2.0
+
+
+def _idw_field(xs, ys, zs, tx, ty):
+    """Distance-weighted estimate, for when a variogram cannot be fitted.
+
+    WHY THIS EXISTS. Ordinary kriging fits a variogram from the VALUES as well
+    as the positions, and with four anchors it often cannot. On house H2 the
+    temperature spread was a real 2.5 C gradient and PyKrige still refused, so
+    every unmonitored zone got NOTHING - the app showed no readings at all while
+    four sensors sat there disagreeing with each other in an orderly way.
+
+    The flat-field path does not help there. That one is for when every anchor
+    AGREES, where the mean is the honest answer. This is the opposite case:
+    there is real structure, kriging just cannot describe it.
+
+    IDW needs no variogram. Each target is the anchors weighted by 1/distance^2,
+    so a zone beside a warm corner reads warm. It is a WEAKER estimator than
+    kriging and it is labelled as one:
+
+      * it has no kriging variance, so no error bar is invented for it
+      * `method` says "idw", never "ordinary-kriging"
+
+    Returns (values, spreads). The spread is the weighted standard deviation of
+    the anchors around each estimate - a description of how much the nearby
+    anchors disagree, NOT a kriging variance. `method` is what says which kind
+    of number the caller is looking at.
+    """
+    vals, spreads = [], []
+    for x, y in zip(tx, ty):
+        d = [math.dist((x, y), (ax, ay)) for ax, ay in zip(xs, ys)]
+        # A target sitting exactly on an anchor takes that anchor's value; the
+        # weight would otherwise divide by zero.
+        if min(d) < 1e-9:
+            i = d.index(min(d))
+            vals.append(float(zs[i]))
+            spreads.append(0.0)
+            continue
+        w = [1.0 / (dist ** IDW_POWER) for dist in d]
+        tot = sum(w)
+        v = sum(wi * zi for wi, zi in zip(w, zs)) / tot
+        var = sum(wi * (zi - v) ** 2 for wi, zi in zip(w, zs)) / tot
+        vals.append(float(v))
+        spreads.append(float(math.sqrt(max(0.0, var))))
+    return vals, spreads
 
 
 def _krige_field(xs, ys, zs, tx, ty):
@@ -244,16 +315,106 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
         fields[f] = (vals, var)
         models[f] = model
 
+    # ── WHEN THERE IS NOTHING TO INTERPOLATE ─────────────────────────────────
+    #
+    # A variogram cannot be fitted to a field that is FLAT, and that is not a
+    # failure - it is the honest shape of the data. Measured on house H2,
+    # 30 Aug 2026, four anchors reporting fresh:
+    #
+    #     temperature  [24.4, 25.3, 25.3, 24.4]   spread 0.9 C   fit failed
+    #     humidity     [90.5, 88.8, 89.8, 91.0]   spread 2.2 %   fit failed
+    #     light        [4149, 646, 1390, 1739]    wide           fit fine
+    #
+    # PyKrige had no semivariance structure to work with, so the whole house was
+    # reported "kriging-failed" and the two unmonitored zones got NO estimate at
+    # all - they showed as if no data existed, while four sensors sat there
+    # agreeing with each other.
+    #
+    # With a spread inside two sensor errors the best available estimate for an
+    # unmonitored zone genuinely IS the anchor mean, and saying so is correct
+    # rather than lazy.
+    #
+    # THIS IS NOT THE OLD BUG RETURNING. The variogram bug returned the mean
+    # while a real gradient existed, invisibly, with confidence intervals. This
+    # returns the mean ONLY when the measured spread is below what the
+    # instruments can resolve, says `method: "uniform-field"`, and reports the
+    # span it saw so the claim can be checked.
+    flat = {}
+    for f in FIELDS:
+        if f in fields or f not in FLAT_FIELD_SPAN:
+            continue
+        zs = [a["r"].get(f) for a in anchors]
+        if any(z is None for z in zs):
+            continue
+        span = max(zs) - min(zs)
+        if span <= FLAT_FIELD_SPAN[f]:
+            mean = sum(zs) / len(zs)
+            # Spread across the house, as a standard deviation, rather than a
+            # kriging variance - there is no kriging here and pretending there
+            # was would overstate what this is.
+            sd = (sum((z - mean) ** 2 for z in zs) / len(zs)) ** 0.5
+            flat[f] = (mean, sd, span)
+
+    # ── STRUCTURE, BUT NO VARIOGRAM ──────────────────────────────────────────
+    # Anything kriging could not fit AND the flat path did not claim gets the
+    # distance-weighted estimate. The order is deliberate: kriging is the best
+    # of the three and carries a real variance; the flat mean is exactly right
+    # when the anchors agree; this is for the case both of those decline - real
+    # structure that four points cannot pin a variogram to.
+    idw = {}
+    for f in FIELDS:
+        if f in fields or f in flat:
+            continue
+        zs = [a["r"].get(f) for a in anchors]
+        if any(z is None for z in zs):
+            continue
+        idw[f] = _idw_field(xs, ys, zs, tx, ty)
+
     if "temperature" not in fields or "humidity" not in fields:
-        result["status"] = "kriging-failed"
-        result["message"] = ("Could not fit a variogram to the anchor layout - "
-                             "they may be collinear.")
-        return result
+        missing = [f for f in ("temperature", "humidity") if f not in fields]
+        if all(f in flat or f in idw for f in missing):
+            if idw:
+                result["status"] = "distance-weighted"
+                result["message"] = (
+                    "No variogram could be fitted, but the anchors do disagree, so "
+                    + ", ".join(sorted(idw)) + " are estimated by inverse-distance "
+                    "weighting instead. Weaker than kriging, and the figure beside "
+                    "each value is how much the nearby anchors disagree rather than "
+                    "a kriging variance.")
+            else:
+                result["status"] = "uniform-field"
+                result["message"] = ("No variogram could be fitted because the field is "
+                                     "flat: " + ", ".join(
+                                         f"{f} varies {flat[f][2]:.1f} across the house"
+                                         for f in sorted(flat)) +
+                                     ". Estimates are the anchor mean, which is the "
+                                     "honest answer when every sensor agrees.")
+        else:
+            result["status"] = "kriging-failed"
+            result["message"] = ("Could not fit a variogram to the anchor layout - "
+                                 "they may be collinear.")
+            return result
 
     stamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
     written = 0
     for i, t in enumerate(targets):
         est = {}
+        for f, (vals, spreads) in idw.items():
+            v = float(vals[i])
+            if f == "humidity":
+                v = max(0.0, min(100.0, v))
+            elif f == "light":
+                v = max(0.0, v)
+            est[f] = round(v, 2)
+            est[f + "Sd"] = round(float(spreads[i]), 3)
+        for f, (mean, sd, _span) in flat.items():
+            v = float(mean)
+            if f == "humidity":
+                v = max(0.0, min(100.0, v))
+            elif f == "light":
+                v = max(0.0, v)
+            est[f] = round(v, 2)
+            est[f + "Sd"] = round(float(sd), 3)
         for f, (vals, var) in fields.items():
             v = float(vals[i])
             if f == "humidity":
@@ -275,7 +436,16 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
         est.update({
             "estimatedAt": stamp,
             "timestampMs": int(_server_now_ms()),
-            "method": "ordinary-kriging",
+            # The method that actually produced TEMPERATURE, named exactly.
+            # Three estimators live here now and a screen must never present the
+            # weakest of them as the strongest.
+            "method": ("ordinary-kriging" if "temperature" in fields
+                       else "uniform-field" if "temperature" in flat
+                       else "idw" if "temperature" in idw
+                       else "none"),
+            # Which fields came from where, so the report can say which is which.
+            "uniformFields": sorted(flat) or None,
+            "idwFields": sorted(idw) or None,
             "variogram": models.get("temperature"),
             "anchors": [a["id"] for a in anchors],
             "anchorCount": len(anchors),

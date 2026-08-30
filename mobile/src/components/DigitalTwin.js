@@ -42,7 +42,12 @@ export const NODE_KINDS = {
      battery on one that is already there. During calibration this is the normal
      state of most of a new house, and painting it "Not reporting" made a house
      that was simply not wired up yet look like a farm full of dead hardware. */
-  nonode:    { color: COLORS.textTertiary, icon: 'add-outline', label: 'No node yet' },
+  /* A DIFFERENT colour from `offline`, not just a different word. Both were
+     COLORS.textTertiary, so the legend showed two grey dots with two labels and
+     the map itself could not distinguish them at all - which defeats the point
+     of separating them. Amber reads as "waiting on you" against offline's grey
+     "this one is dead". */
+  nonode:    { color: COLORS.warning, icon: 'add-outline', label: 'No node yet' },
 };
 
 /* Grid spacing that keeps the drawing readable at any house size. A 6 m house

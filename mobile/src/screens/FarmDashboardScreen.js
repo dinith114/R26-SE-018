@@ -40,7 +40,7 @@ import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
 import { FarmSkeleton } from '../components/Skeleton';
-import { FreshnessBadge, FarmStaleBanner, STATE_STYLE } from '../components/Freshness';
+import { FreshnessBadge, FarmStaleBanner, STATE_STYLE, isFault } from '../components/Freshness';
 import RenameDialog from '../components/RenameDialog';
 import SelectSheet from '../components/SelectSheet';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -158,6 +158,28 @@ export default function FarmDashboardScreen({ navigation }) {
      looking for it had to guess which of eight sections to open. */
   const [master, setMaster] = useState(null);
   const [savingMaster, setSavingMaster] = useState(false);
+  /* The house's ... menu, and the delete confirmation behind it.
+     These were Alert.alert, which is the ANDROID dialog: a different shape,
+     different type and different button order from every other choice in this
+     app, and on a destructive action that inconsistency is the moment a farmer
+     is least sure what they just tapped. The app already owns SelectSheet and
+     ConfirmSheet; this is the last screen that was not using them. */
+  const [houseMenu, setHouseMenu] = useState(null);   // the house, or null
+  const [confirmDel, setConfirmDel] = useState(null); // the house, or null
+  const [deleting, setDeleting] = useState(false);
+
+  const doDeleteHouse = async () => {
+    const h = confirmDel;
+    setDeleting(true);
+    try {
+      await deleteHouse(h.houseId);
+      setConfirmDel(null);
+      await load();
+    } catch (e) {
+      setConfirmDel(null);
+      Alert.alert('Could not delete', e.message);
+    } finally { setDeleting(false); }
+  };
 
   const openMaster = async (h) => {
     setMaster({ houseId: h.houseId, name: h.meta?.name || h.houseId,
@@ -279,6 +301,18 @@ export default function FarmDashboardScreen({ navigation }) {
      unlike the count this replaced, this one can actually be non-zero. */
   const estimated   = flat.filter(s => s.freshness?.state === 'estimated').length;
   const urgent      = needing.filter(x => x.a.rank <= 1).length;
+
+  /* HOUSES THAT CANNOT WATER ANYTHING THEY NO LONGER MEASURE.
+     After the placement decision a house's unmonitored zones are reachable only
+     through the relay controller, so a master stops being optional at exactly
+     that moment - and nothing told the farmer. They were left with sections no
+     command could reach and no way to work out why, because the control that
+     fixes it is an icon on a house card with no label. A house that never gave
+     up a sensor is not nagged: every one of its sections has its own board. */
+  const needMaster = houses.filter(h =>
+    !h.meta?.masterMac
+    && (h.sections || []).some(x => x.freshness?.state === 'nonode'
+                                 || x.freshness?.state === 'estimated'));
   const alertCount  = needing.length;
 
   /* The next thing the farm will do on its own. Buried in a chip inside an
@@ -383,6 +417,30 @@ export default function FarmDashboardScreen({ navigation }) {
               )}
             </View>
 
+            {/* The one blocker the farm cannot route around. Above the section
+                list because no amount of section-level action fixes it. */}
+            {needMaster.map(h => (
+              <TouchableOpacity key={`nm-${h.houseId}`}
+                style={[styles.card, styles.blockCard, SHADOW.sm]}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={`Choose a master controller for ${h.meta?.name || h.houseId}`}
+                onPress={() => openMaster(h)}>
+                <View style={styles.blockHead}>
+                  <Ionicons name="git-network" size={18} color={COLORS.warning} />
+                  <Text style={styles.blockTitle}>
+                    {h.meta?.name || h.houseId} needs a master controller
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={COLORS.warning} />
+                </View>
+                <Text style={styles.blockTxt}>
+                  Its zones without a sensor of their own are watered through the
+                  relay board. Until one board is named as the controller, nothing
+                  can water them — the command has nowhere to go. Tap to choose.
+                </Text>
+              </TouchableOpacity>
+            ))}
+
             {/* ── 2. What needs doing, lifted out of the houses ──────────── */}
             {needing.length > 0 && (
               <View style={[styles.card, SHADOW.sm]}>
@@ -482,7 +540,11 @@ export default function FarmDashboardScreen({ navigation }) {
                 const ra = attentionOf(a)?.rank ?? 99, rb = attentionOf(b)?.rank ?? 99;
                 return ra - rb;
               });
-              const bad  = secs.filter(z => z.freshness && !z.freshness.trusted).length;
+              // isFault, not !trusted: an estimated zone carries trusted:false
+              // because it is not a measurement, and counting those made a
+              // correctly working house report "4 not reporting".
+              const bad  = secs.filter(z => isFault(z.freshness)).length;
+              const est  = secs.filter(z => z.freshness?.state === 'estimated').length;
               const need = secs.filter(z => z.tray?.status === 'fill').length;
 
               return (
@@ -572,23 +634,7 @@ export default function FarmDashboardScreen({ navigation }) {
                   <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
                     accessibilityLabel={`Options for ${h.meta?.name || h.houseId}: rename or delete`}
-                    onPress={() => Alert.alert(
-                      h.meta?.name || h.houseId,
-                      'What would you like to do with this house?',
-                      [{ text: 'Cancel', style: 'cancel' },
-                       { text: 'Rename house',
-                         onPress: () => setRenaming({ kind: 'house', id: h.houseId,
-                                                      name: h.meta?.name || h.houseId }) },
-                       { text: 'Delete house', style: 'destructive', onPress: () => Alert.alert(
-                          'Delete this house?',
-                          `“${h.meta?.name || h.houseId}” and all ${h.sections?.length || 0} of its `
-                          + 'sections will be removed. This cannot be undone.',
-                          [{ text: 'Cancel', style: 'cancel' },
-                           { text: 'Delete', style: 'destructive', onPress: async () => {
-                              try { await deleteHouse(h.houseId); await load(); }
-                              catch (e) { Alert.alert('Failed', e.message); } } }]
-                       ) }]
-                    )}>
+                    onPress={() => setHouseMenu(h)}>
                     <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textTertiary} />
                   </TouchableOpacity>
                 </View>
@@ -599,6 +645,9 @@ export default function FarmDashboardScreen({ navigation }) {
                       const bits = [];
                       if (bad)  bits.push(`${bad} not reporting`);
                       if (need) bits.push(`${need} need water`);
+                      // Stated, but as a fact rather than a problem - and only
+                      // when there is nothing wrong to say instead.
+                      if (!bits.length && est) return `${est} estimated, the rest are fine`;
                       return bits.length ? bits.join(', ') : 'All sections are fine';
                     })()}
                   </Text>
@@ -616,7 +665,13 @@ export default function FarmDashboardScreen({ navigation }) {
                      Trust decides the colour now; humidity only decides it
                      once the reading is trustworthy. */
                   const fx   = s.freshness;
-                  const good = fx?.trusted !== false;
+                  /* `good` drives whether the numbers are shown in colour. An
+                     estimate is not a measurement, but it is also not stale -
+                     greying it out put a working interpolated zone in the same
+                     visual state as a dead node. It gets its own treatment
+                     below: readable, in the estimated colour, badged. */
+                  const est  = fx?.state === 'estimated';
+                  const good = fx?.trusted !== false || est;
                   const fst  = STATE_STYLE[fx?.state] || STATE_STYLE.never;
                   const accent = good ? rh.color : fst.color;
                   return (
@@ -663,6 +718,7 @@ export default function FarmDashboardScreen({ navigation }) {
                                 so they kept signalling good or bad. */}
                             <Text style={[styles.envVal,
                                           { color: !good ? COLORS.textTertiary
+                                                 : est ? COLORS.estimated
                                                  : col || COLORS.text }]}
                               numberOfLines={1}>{val}</Text>
                             <Text style={styles.envLbl} numberOfLines={1}
@@ -786,6 +842,51 @@ export default function FarmDashboardScreen({ navigation }) {
         )}
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* The house's own menu, in the app's shape rather than Android's. */}
+      <SelectSheet
+        visible={!!houseMenu}
+        title={houseMenu ? (houseMenu.meta?.name || houseMenu.houseId) : ''}
+        subtitle={houseMenu
+          ? `${houseMenu.meta?.type || 'house'} · ${houseMenu.sections?.length || 0} sections`
+          : undefined}
+        options={[
+          { key: 'rename', label: 'Rename house',
+            sub: 'Only the name changes. Sections and readings are untouched.' },
+          { key: 'delete', label: 'Delete house',
+            sub: 'Removes the house, its sections and its readings, and frees its nodes.' },
+        ]}
+        confirmOnSelect
+        onCancel={() => setHouseMenu(null)}
+        onConfirm={(k) => {
+          const h = houseMenu;
+          setHouseMenu(null);
+          if (k === 'rename') {
+            setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else {
+            setConfirmDel(h);
+          }
+        }} />
+
+      {/* Deleting is irreversible, so it says exactly what goes - including the
+          part a farmer would not guess: the boards are released, which is what
+          stops the house reappearing as a nameless ghost. */}
+      <ConfirmSheet
+        visible={!!confirmDel}
+        destructive
+        busy={deleting}
+        icon="trash-outline"
+        title={confirmDel ? `Delete ${confirmDel.meta?.name || confirmDel.houseId}?` : ''}
+        body={confirmDel
+          ? `${confirmDel.sections?.length || 0} section`
+            + `${(confirmDel.sections?.length || 0) === 1 ? '' : 's'} and all of their stored `
+            + 'readings will be removed. Any nodes in this house are unlinked and become '
+            + 'available again — the boards themselves are not deleted.'
+          : ''}
+        caution="This cannot be undone."
+        confirmLabel="Delete house"
+        onCancel={() => setConfirmDel(null)}
+        onConfirm={doDeleteHouse} />
 
       {/* Which board drives this house's valves. */}
       <SelectSheet
@@ -937,6 +1038,13 @@ const styles = StyleSheet.create({
   /* ── generic section card used by Needs-you-now and Automation ─────── */
   card:      { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.lg,
                padding: SPACE.lg, marginBottom: SPACE.lg },
+  blockCard: { backgroundColor: COLORS.warningDim, borderWidth: 1,
+               borderColor: COLORS.warning },
+  blockHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  blockTitle:{ flex: 1, color: COLORS.warning, fontSize: FONT.md, fontWeight: '800' },
+  blockTxt:  { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19,
+               marginTop: SPACE.sm },
+
   cardTitle: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '800',
                letterSpacing: 0.6, textTransform: 'uppercase',
                marginBottom: SPACE.md },

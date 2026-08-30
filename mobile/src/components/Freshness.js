@@ -58,6 +58,20 @@ export const isLive = (f) => f?.state === 'live';
  *  should have to decide which it will accept. */
 export const isEstimated = (f) => f?.state === 'estimated';
 
+/** IS SOMETHING ACTUALLY WRONG?
+ *
+ * `trusted` answers a different question - "is this a measurement?" - and an
+ * estimate correctly answers no. Every screen was reading that as "broken",
+ * because until kriging started producing estimates the two were the same
+ * thing. The moment unmonitored zones began reporting, the same flag made the
+ * dashboard count them as "not reporting", the simple view label them
+ * "No signal - readings are old, do not trust these numbers", and the farm
+ * banner raise an alarm about hardware that was working exactly as designed.
+ *
+ * An estimate is the placement decision doing its job. A stale, never-reporting
+ * or future-dated section is a fault. This is the one that means fault. */
+export const isFault = (f) => !!f && f.trusted === false && f.state !== 'estimated';
+
 /** Small inline badge — sits next to a reading. */
 export function FreshnessBadge({ freshness, style }) {
   if (!freshness) return null;
@@ -90,7 +104,9 @@ export function FreshnessBadge({ freshness, style }) {
  * the caveat before the value. Renders nothing while data is trustworthy.
  */
 export function StaleWarning({ freshness, name, style }) {
-  if (!freshness || freshness.trusted) return null;
+  // Estimated zones are not warned about: they are not a fault, and a standing
+  // red banner over every unmonitored zone would bury the real ones.
+  if (!isFault(freshness)) return null;
   const st = STATE_STYLE[freshness.state] || STATE_STYLE.never;
 
   return (
@@ -119,7 +135,7 @@ export function StaleWarning({ freshness, name, style }) {
  * `sections` is the flattened section list from /overview.
  */
 export function FarmStaleBanner({ sections = [], style }) {
-  const bad = sections.filter((x) => x.freshness && !x.freshness.trusted);
+  const bad = sections.filter((x) => isFault(x.freshness));
   if (bad.length === 0) return null;
   const names = bad.map((x) => x.meta?.name || x.sectionId).join(', ');
   // A wrong clock is not a flat battery. If any bad section is future-dated the

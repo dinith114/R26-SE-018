@@ -17,6 +17,7 @@ import {
   ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { LIVE_MS } from '../hooks/useLiveData';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
@@ -48,7 +49,8 @@ export default function CalibrationScreen({ route, navigation }) {
      screen rather than sitting in a sheet - nesting a FlatList inside a
      ScrollView breaks its scrolling, which SectionDetailScreen learned first. */
   const [picking, setPicking] = useState(null);
-  const [linking, setLinking] = useState(false);
+  // { sectionId, short } while a link is in flight, else null
+  const [linking, setLinking] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -68,7 +70,23 @@ export default function CalibrationScreen({ route, navigation }) {
     }
   }, [houseId]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  /* Refresh while the screen is OPEN, not only when it is opened.
+     This screen is watched for minutes at a time while nodes are linked and
+     readings arrive - it is the one screen a farmer sits on waiting for a
+     number to move. It only ever loaded on focus and on pull-to-refresh, so a
+     section that started reporting thirty seconds ago still read "never" until
+     the screen was left and re-entered. Same interval the dashboard uses. */
+  /* Twice the dashboard's interval, on purpose. Calibration is a THREE-DAY
+     process; nothing on this screen changes meaningfully inside a minute, and
+     each call asks Firebase for a key listing per section. At 30 s that was
+     measured at 90 MB an hour of database egress and it is what pushed this
+     project past the free 360 MB/day quota. The endpoint got cheaper too, but
+     polling a three-day bar twice a minute was never the right rate. */
+  useFocusEffect(useCallback(() => {
+    load();
+    const t = setInterval(load, LIVE_MS * 2);
+    return () => clearInterval(t);
+  }, [load]));
 
   const analyse = async () => {
     try {
@@ -82,18 +100,25 @@ export default function CalibrationScreen({ route, navigation }) {
     }
   };
 
+  /* WHICH section is being linked, not just THAT one is.
+     Picking a node closed the picker instantly and then spent two round trips
+     to the server - assign, then reload - with the OLD data still on screen. So
+     the row the farmer had just acted on went on saying "Add node" for five to
+     ten seconds, which reads as "it did not work", and the natural response is
+     to press it again. Naming the row lets that one row say what is happening
+     while the rest of the screen stays live. */
   const linkNode = async (dev) => {
     const sectionId = picking;
+    const short = dev.shortId || dev.mac.slice(-4);
     setPicking(null);
-    setLinking(true);
+    setLinking({ sectionId, short });
     try {
       await assignDevice(dev.mac, houseId, sectionId);
       await load();
-      setToast({ text: `Node ${dev.shortId || dev.mac.slice(-4)} linked to ${sectionId}`,
-                 kind: 'success' });
+      setToast({ text: `Node ${short} linked to ${sectionId}`, kind: 'success' });
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
-    } finally { setLinking(false); }
+    } finally { setLinking(null); }
   };
 
   /* Positions come from the house, readiness from the calibration endpoint.
@@ -287,11 +312,16 @@ export default function CalibrationScreen({ route, navigation }) {
                         : `${(row.lastSeenMinAgo / 60).toFixed(0)}h ago`}
                     </Text>
                   </View>
+                ) : linking && linking.sectionId === row.id ? (
+                  <View style={[styles.linkBtn, styles.linkBusy]}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text style={styles.linkBtnTxt}>Adding {linking.short}…</Text>
+                  </View>
                 ) : (
                   <TouchableOpacity
                     style={styles.linkBtn}
                     onPress={() => setPicking(row.id)}
-                    disabled={linking}
+                    disabled={!!linking}
                     activeOpacity={0.8}
                     accessibilityRole="button"
                     accessibilityLabel={`Link a sensor node to ${row.name}`}>
@@ -398,6 +428,7 @@ const styles = StyleSheet.create({
                backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.full,
                paddingHorizontal: SPACE.md, paddingVertical: 6 },
   linkBtnTxt:{ color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
+  linkBusy:  { opacity: 0.75 },
 
   missingNote: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18,
                  marginBottom: SPACE.md, marginTop: -SPACE.xs },

@@ -655,30 +655,90 @@ def _channel_map(house_id: str) -> dict:
     return out
 
 
+def _shared_pumps(house_id: str) -> bool:
+    """Is this house plumbed as ONE pump per job rather than a valve per section?"""
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    return hmeta.get("waterChannel") is not None or hmeta.get("trayChannel") is not None
+
+
 def _channel_conflicts(house_id: str) -> list:
-    """Human-readable warnings, one per shared channel. Empty when clean."""
+    """Human-readable warnings, one per shared channel. Empty when clean.
+
+    SILENT WHEN THE HOUSE IS ON SHARED PUMPS, because then sharing is the
+    wiring, not a fault. This farm runs one watering pump and one tray pump for
+    the whole house, so every section legitimately resolves to the same two
+    channels; reporting that as a conflict would have put a permanent red
+    warning on a correctly plumbed house - and would have made the real warning
+    worthless the moment a house did get per-section valves.
+
+    It also retires a warning that was never a fault: H1 was flagged because S8
+    was pinned to channel 1 while S1 derived it. With one pump they are supposed
+    to share it.
+    """
+    if _shared_pumps(house_id):
+        return []
     return [f"Channel {ch} is claimed by {' and '.join(ids)} - "
             f"they would open the same valve."
             for ch, ids in sorted(_channel_map(house_id).items())
             if len(ids) > 1]
 
 
-def _relay_channel(house_id: str, section_id: str) -> Optional[int]:
+def _relay_channel(house_id: str, section_id: str,
+                   action: str = "water") -> Optional[int]:
     """Which relay channel on the master opens this section's valve.
 
-    Explicit meta.relayChannel wins, because it has to match how the board was
-    physically wired and nobody should have to guess that from an ordering. When
-    it is absent the channel is derived from the section's position in sorted
-    order, which is stable and predictable but is only a convenience - a farm
-    that wires channels out of order must set them.
+    WATERING AND TRAY FILLING ARE DIFFERENT VALVES, and this used to ignore
+    that. The master was handed one channel whatever the action was, so a tray
+    fill opened the watering line: the farmer asked for humidity and got the
+    pump on the roots. Reported from the app on 30 Aug, with Water Now and Fill
+    Tray both starting the same motor.
+
+    The single-node firmware never had this bug - handleCommand() dispatches
+    `water` to RELAY_WATER and `tray` to RELAY_TRAY, two separate pins. Only the
+    master path, which is now every pour, collapsed them into one.
+
+    It matters more than a wrong output: Vanda roots rot if they are watered too
+    often, and the tray loop is deliberately the one that raises humidity
+    WITHOUT touching the roots. Silently doing the other thing defeats the
+    reason the two loops exist.
+
+    There is NO positional fallback for the tray channel. A guessed watering
+    channel waters the wrong section, which is bad; a guessed tray channel is
+    just as likely to be a watering valve, which is worse. Absent means absent,
+    the caller refuses the fill, and the app says which section needs wiring.
     """
     meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json") or {}
+    key = "trayChannel" if action == "tray" else "relayChannel"
     try:
-        ch = int(meta["relayChannel"])
+        ch = int(meta[key])
         if 1 <= ch <= MASTER_MAX_CHANNELS:
             return ch
     except (KeyError, TypeError, ValueError):
         pass
+
+    # TWO PUMPS SERVING THE WHOLE HOUSE is how this farm is actually plumbed:
+    # one pump for watering, a separate one for the trays, wired to IN1/D25 and
+    # IN2/D26 - which are channels 1 and 2 in CHANNEL_PIN, and the same two pins
+    # the single-node build calls RELAY_WATER and RELAY_TRAY.
+    #
+    # So a section does not normally own a channel at all; it shares the house's.
+    # Modelling this only per-section would have been wrong twice: every section
+    # would need the same numbers copied into it, and the duplicate-channel guard
+    # would then refuse the correct wiring as a conflict.
+    #
+    # A house with a valve per section still overrides per-section above, so the
+    # eight-channel design is unaffected - it just is not what is on the bench.
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    hkey = "trayChannel" if action == "tray" else "waterChannel"
+    try:
+        ch = int(hmeta[hkey])
+        if 1 <= ch <= MASTER_MAX_CHANNELS:
+            return ch
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    if action == "tray":
+        return None
     ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
                  key=_natural_key)
     if section_id in ids:
@@ -749,14 +809,14 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
     # valve would be obeyed by firmware and move no water, while the app
     # reported success.
     master = _master_for_house(house_id)
-    channel = _relay_channel(house_id, section_id) if master else None
+    channel = _relay_channel(house_id, section_id, action) if master else None
     if not master or not channel:
         # Refusing is the point. Writing to the section's own path here would
         # produce a command nobody polls: not delayed, never seen, while the app
         # reports success and the log records a watering that did not happen.
-        print(f"[CMD] {house_id}/{section_id}: "
-              f"{'no master controller assigned' if not master else 'no relay channel'}"
-              f" - {action} not issued")
+        why = ("no master controller assigned" if not master
+               else f"no {'tray' if action == 'tray' else 'relay'} channel wired")
+        print(f"[CMD] {house_id}/{section_id}: {why} - {action} not issued")
         return None
 
     cmd["targetSection"] = section_id
@@ -2670,6 +2730,26 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
                "fillSeconds": max(1, min(cmd.fillSeconds, TRAY_MAX_SEC)),
                "triggeredBy": cmd.triggeredBy,
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+    # ISSUE FIRST, RECORD SECOND.
+    #
+    # The cooldown stamp and the history entry used to be written before the
+    # command was even attempted, so a fill that could not be issued still put
+    # the tray into cooldown and still appeared in the log as a fill. Now that a
+    # section without its own tray valve is refused rather than sent to the
+    # watering line, that ordering would have turned one bug into a quieter one:
+    # no water, no error, and a record saying the tray was topped up.
+    node_cmd = _issue_node_command(house_id, section_id, "tray",
+                                   command["fillSeconds"])
+    if not node_cmd:
+        master = _master_for_house(house_id)
+        raise HTTPException(
+            409,
+            "No master controller is set for this house." if not master else
+            f"Section {section_id} has no tray valve wired. Watering and filling "
+            "the tray are different outputs, so this cannot be sent to the "
+            "watering valve - that would put water on the roots when you asked "
+            "to raise humidity. Set the tray channel in the section's Setup tab.")
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)
 
     # Stamp the fill so the cooldown guard knows the tray now has water.
@@ -2688,8 +2768,6 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
                              f"Next fill allowed in {COOLDOWN_HOURS:.0f} h.")})
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", tray)
 
-    node_cmd = _issue_node_command(house_id, section_id, "tray",
-                                   command["fillSeconds"])
     # Tray fills belong in the history too. Watering was logged and this was
     # not, so the record answered "when was it watered" but never "when was the
     # tray last topped up" - which is the other half of humidity control.
@@ -3023,6 +3101,12 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn):
     _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
     _DEVICE_CACHE["devices"] = None                 # assignments just changed
 
+    # A house that has just given up sensors can ONLY water those zones through
+    # the controller, so this is the moment a master stops being optional. The
+    # app has no other way to know that, and a farmer who is never told ends up
+    # with sections nothing can reach.
+    master = _master_for_house(house_id)
+
     return {
         "status": "success",
         "houseId": house_id,
@@ -3030,6 +3114,8 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn):
         "kept": sorted(keep, key=_natural_key),
         "freed": freed,
         "clearedReadings": cleared,
+        "masterMac": master,
+        "needsMaster": bool(freed) and not master,
         "message": (f"{len(freed)} sensor(s) freed. Those sections are now "
                     "estimated from the ones that kept theirs; the first "
                     "estimate appears within a few minutes."),
@@ -3063,26 +3149,55 @@ async def calibration_status(house_id: str):
     sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
     rows, blockers = [], []
     for sid in sorted(sections, key=_natural_key):
-        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
-        stamps = [r.get("timestamp") for r in hist.values()
+        # DOWNLOADING THE WHOLE ARCHIVE TO COUNT IT COSTS REAL MONEY.
+        #
+        # This used to fetch every stored reading for every section and then use
+        # exactly two things from them: how many there were, and the newest
+        # timestamp. On an eight-section house that is 772 KB per call. The
+        # calibration screen polls every 30 s while a farmer watches it, which
+        # is 90 MB an hour of Firebase downloads for two numbers - and it is
+        # what pushed this project past the free 360 MB/day quota, measured at
+        # a 483.8 MB peak day.
+        #
+        # Two bounded queries replace it:
+        #
+        #   count   shallow=true - keys only, no values. ~12 KB per section
+        #           instead of ~96 KB.
+        #   newest  limitToLast(1) - push ids sort chronologically, so the last
+        #           key IS the newest record. One reading instead of thousands.
+        #
+        # A limitToFirst cap on the count would be better still - the question
+        # is only ever "has it reached the minimum" - but Firebase REFUSES it:
+        #   "orderBy not supported for with shallow GET, keys are returned in
+        #    lexicographical order"
+        # and the 400 it returns parses as a one-key dict, which silently reads
+        # as "1 reading". Shallow alone, then, and the count grows with the
+        # archive; at ~28 bytes a key that is affordable for a long time.
+        #
+        # Measured on this house: 772 KB -> 103 KB per call.
+        base = f"/farm/history/{house_id}/{sid}.json"
+        keys = _fb_get(f"{base}?shallow=true") or {}
+        count = len(keys)
+        newest = _fb_get(f'{base}?orderBy="$key"&limitToLast=1') or {}
+        stamps = [r.get("timestamp") for r in newest.values()
                   if isinstance(r, dict) and r.get("timestamp")]
         last = max(stamps) if stamps else None
         age_min = (now_ms - float(last)) / 60000.0 if last else None
-        ok = len(stamps) >= min_readings
+        ok = count >= min_readings
         rows.append({
             "id": sid,
             "name": ((sections[sid] or {}).get("meta") or {}).get("name") or sid,
-            "readings": len(stamps),
+            "readings": count,
             "needed": min_readings,
             "lastSeenMinAgo": None if age_min is None else round(age_min, 1),
             "ok": ok,
         })
-        if not stamps:
+        if not count:
             blockers.append(f"{sid} has never reported.")
         elif age_min is not None and age_min > 120:
             blockers.append(f"{sid} stopped reporting {age_min / 60:.0f} hours ago.")
         elif not ok:
-            blockers.append(f"{sid} has {len(stamps)} of {min_readings} readings.")
+            blockers.append(f"{sid} has {count} of {min_readings} readings.")
 
     time_done = days >= target_days
     data_done = bool(rows) and all(r["ok"] for r in rows)
@@ -3144,8 +3259,64 @@ async def set_house_master(house_id: str, body: MasterIn):
                         "Cleared. Sections without a node can no longer be watered.")}
 
 
+class PumpsIn(BaseModel):
+    """The two relay channels this house's pumps sit on."""
+    waterChannel: Optional[int] = None
+    trayChannel: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/pumps")
+async def set_house_pumps(house_id: str, body: PumpsIn):
+    """Which channels drive the watering pump and the tray pump.
+
+    This farm has TWO PUMPS, not one pump behind eight valves: watering runs off
+    IN1/D25 and the trays off IN2/D26, which are channels 1 and 2 and the same
+    pins the single-node build calls RELAY_WATER and RELAY_TRAY. They serve the
+    whole house, so they belong to the house rather than being copied into every
+    section.
+
+    Setting them is what stops Fill Tray opening the watering line. Until a tray
+    channel exists somewhere - here or on the section - tray fills are refused
+    rather than sent to whatever valve happened to be known.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    for field, key in (("waterChannel", "waterChannel"), ("trayChannel", "trayChannel")):
+        val = getattr(body, field)
+        if val is None:
+            meta.pop(key, None)
+            continue
+        ch = int(val)
+        if not (1 <= ch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"{field} must be 1-{MASTER_MAX_CHANNELS}.")
+        meta[key] = ch
+
+    # One relay cannot be two pumps. Sharing a channel here would mean Fill Tray
+    # and Water Now driving the same motor, which is the bug this whole change
+    # exists to remove.
+    if (meta.get("waterChannel") is not None
+            and meta.get("waterChannel") == meta.get("trayChannel")):
+        raise HTTPException(
+            409, "The watering pump and the tray pump cannot share a channel - "
+                 "one relay drives one motor, so they would be the same pump.")
+
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id,
+            "waterChannel": meta.get("waterChannel"),
+            "trayChannel": meta.get("trayChannel"),
+            "message": ("Tray fills will now use their own pump."
+                        if meta.get("trayChannel") else
+                        "No tray pump set, so tray fills stay refused.")}
+
+
 class ChannelIn(BaseModel):
     relayChannel: Optional[int] = None
+    # The valve that fills this section's humidity tray. A SEPARATE output from
+    # the watering one - see _relay_channel. Absent means tray fills are refused
+    # for this section rather than sent to whatever valve happened to be known.
+    trayChannel: Optional[int] = None
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/channel")
@@ -3169,12 +3340,34 @@ async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
         # Refuse a channel another section already holds. One valve per channel:
         # letting two sections share one means watering the wrong plants, and
         # nothing downstream could detect it.
-        taken = {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id}
+        taken = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id})
         if taken:
             raise HTTPException(
                 409, f"Channel {ch} is already used by {', '.join(sorted(taken))}. "
                      f"Give that section a different channel first, or pick another.")
         meta["relayChannel"] = ch
+
+    if body.trayChannel is None:
+        meta.pop("trayChannel", None)
+    else:
+        tch = int(body.trayChannel)
+        if not (1 <= tch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"Tray channel must be 1-{MASTER_MAX_CHANNELS}.")
+        # A tray valve that is also somebody's watering valve is the bug this
+        # whole change exists to stop, so it is refused here too - including
+        # against this section's own watering channel.
+        clash = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(tch, []) if sid != section_id})
+        if clash:
+            raise HTTPException(
+                409, f"Channel {tch} is already used by {', '.join(sorted(clash))}.")
+        if meta.get("relayChannel") == tch:
+            raise HTTPException(
+                409, f"Channel {tch} already waters this section. The tray needs its "
+                     "own valve, or filling it would water the roots - which is "
+                     "exactly what the tray loop exists to avoid.")
+        meta["trayChannel"] = tch
     _fb_put(path, meta)
     return {"status": "success", "relayChannel": meta.get("relayChannel"),
             "effective": _relay_channel(house_id, section_id),

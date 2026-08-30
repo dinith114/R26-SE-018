@@ -30,7 +30,7 @@ import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
 import { FarmSkeleton } from '../components/Skeleton';
-import { FreshnessBadge, FarmStaleBanner } from '../components/Freshness';
+import { FreshnessBadge, FarmStaleBanner, isFault } from '../components/Freshness';
 import { confirmScoped, listNames } from '../utils/confirm';
 import { COLORS, SPACE, RADIUS, SHADOW } from '../config/theme';
 import {
@@ -45,9 +45,21 @@ function dryness(sec) {
   const rh = sec.latest?.humidity;
   const tray = sec.tray || {};
 
-  if (sec.freshness && !sec.freshness.trusted) {
+  /* A ZONE WITH NO SENSOR IS NOT A DEAD ONE.
+     This read `!trusted`, which an estimate also fails - so an interpolated
+     zone was shown as "No signal", in red, with a flat-battery icon and
+     "readings are old, do not trust these numbers". Every one of those is
+     false: the numbers are current, they are simply calculated from the
+     neighbours rather than measured here. */
+  if (isFault(sec.freshness)) {
     return { word: 'No signal', color: COLORS.danger, icon: 'battery-dead-outline',
              note: sec.freshness.label };
+  }
+  if (sec.freshness?.state === 'estimated') {
+    // Still described in plain words - the point of Simple mode - but the word
+    // says where the number came from, not that something is wrong.
+    return { word: 'Estimated', color: COLORS.estimated, icon: 'git-network-outline',
+             note: 'Worked out from the nearby sections' };
   }
   if (tray.status === 'cooldown') {
     return { word: 'Watered', color: COLORS.info, icon: 'checkmark-done-circle',
@@ -109,7 +121,7 @@ export default function TodayScreen({ navigation }) {
   const plan     = sections.find(s => s.plan?.waterTime)?.plan;
   const fertDue  = sections.filter(s => s.fertilizer?.due);
   const anyFert  = sections.some(s => s.fertilizer && 'due' in s.fertilizer);
-  const untrusted= sections.filter(s => s.freshness && !s.freshness.trusted);
+  const untrusted= sections.filter(s => isFault(s.freshness));
   const allOk    = sections.length > 0 && dry.length === 0 && untrusted.length === 0;
 
   /* ── Action 1: fill trays. ALWAYS fills trays, never anything else. ── */
@@ -346,9 +358,9 @@ export default function TodayScreen({ navigation }) {
                     accessibilityRole="button"
                     accessibilityLabel={
                       `${sec.meta?.name || sec.sectionId}. ${d.word}. ` +
-                      (sec.freshness?.trusted
-                        ? `${t.temperature ?? '--'} degrees, ${t.humidity ?? '--'} percent humidity, ${sec.freshness?.label ?? ''}.`
-                        : `Readings are ${sec.freshness?.label ?? 'old'} and not trustworthy.`)
+                      (isFault(sec.freshness)
+                        ? `Readings are ${sec.freshness?.label ?? 'old'} and not trustworthy.`
+                        : `${t.temperature ?? '--'} degrees, ${t.humidity ?? '--'} percent humidity, ${sec.freshness?.label ?? ''}.`)
                     }
                     onPress={() => navigation.navigate('SectionDetail', {
                       houseId: house.houseId, sectionId: sec.sectionId,
@@ -360,10 +372,10 @@ export default function TodayScreen({ navigation }) {
                         <Text style={s.rowName}>{sec.meta?.name || sec.sectionId}</Text>
                         <FreshnessBadge freshness={sec.freshness} />
                       </View>
-                      <Text style={[s.rowSub, !sec.freshness?.trusted && s.rowSubStale]}>
-                        {sec.freshness?.trusted
-                          ? `${t.temperature ?? '--'}°C · ${t.humidity ?? '--'}%${d.note ? ' · ' + d.note : ''}`
-                          : 'Readings are old, do not trust these numbers'}
+                      <Text style={[s.rowSub, isFault(sec.freshness) && s.rowSubStale]}>
+                        {isFault(sec.freshness)
+                          ? 'Readings are old, do not trust these numbers'
+                          : `${t.temperature ?? '--'}°C · ${t.humidity ?? '--'}%${d.note ? ' · ' + d.note : ''}`}
                       </Text>
                     </View>
                     <Text style={[s.rowWord, { color: d.color }]}>{d.word}</Text>

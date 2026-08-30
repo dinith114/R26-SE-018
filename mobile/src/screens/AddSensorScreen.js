@@ -42,7 +42,8 @@ export default function AddSensorScreen({ route, navigation }) {
   const [why,     setWhy]     = useState(null);   // why there is no suggestion
   const [loading, setLoading] = useState(true);
   const [picking, setPicking] = useState(null);   // sectionId awaiting a board
-  const [linking, setLinking] = useState(false);
+  // { sectionId, short } while a link is in flight - see CalibrationScreen
+  const [linking, setLinking] = useState(null);
   const [toast,   setToast]   = useState(null);
 
   const load = useCallback(async () => {
@@ -80,16 +81,16 @@ export default function AddSensorScreen({ route, navigation }) {
 
   const linkNode = async (dev) => {
     const sectionId = picking;
+    const short = dev.shortId || dev.mac.slice(-4);
     setPicking(null);
-    setLinking(true);
+    setLinking({ sectionId, short });
     try {
       await assignDevice(dev.mac, houseId, sectionId);
-      setToast({ text: `Node ${dev.shortId || dev.mac.slice(-4)} is now in ${sectionId}`,
-                 kind: 'success' });
+      setToast({ text: `Node ${short} is now in ${sectionId}`, kind: 'success' });
       await load();
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
-    } finally { setLinking(false); }
+    } finally { setLinking(null); }
   };
 
   const meta = house?.meta || {};
@@ -197,8 +198,17 @@ export default function AddSensorScreen({ route, navigation }) {
           <Text style={styles.h}>Zones without a sensor</Text>
           <View style={[styles.card, SHADOW.sm]}>
             {openIds.length ? openIds.map((id) => (
+              linking && linking.sectionId === id ? (
+                <View key={id} style={styles.row}>
+                  <ActivityIndicator size="small" color={COLORS.info} />
+                  <Text style={styles.rowName}>
+                    {sections[id]?.meta?.name || id}
+                    <Text style={styles.rowTag}>   adding {linking.short}…</Text>
+                  </Text>
+                </View>
+              ) : (
               <TouchableOpacity key={id} style={styles.row} activeOpacity={0.7}
-                disabled={linking}
+                disabled={!!linking}
                 accessibilityRole="button"
                 accessibilityLabel={`Put a sensor in ${sections[id]?.meta?.name || id}`}
                 onPress={() => setPicking(id)}>
@@ -214,6 +224,7 @@ export default function AddSensorScreen({ route, navigation }) {
                 </Text>
                 <Ionicons name="chevron-forward" size={15} color={COLORS.textTertiary} />
               </TouchableOpacity>
+              )
             )) : (
               <Text style={styles.tipTxt}>
                 Every section in this house already has its own sensor.
