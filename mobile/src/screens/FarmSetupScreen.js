@@ -62,6 +62,14 @@ export default function FarmSetupScreen({ route, navigation }) {
      decision. Before this the question was never asked and every farm silently
      used the coordinates the models were trained at. */
   const [loc,      setLoc]      = useState(null);   // { latitude, longitude }
+  /* Whether this is the FIRST house on the farm. null while unknown.
+     The location question belongs to the farm, not to a house: every house is
+     on the same farm, so there is one position and the forecast is downloaded
+     for it once. Asking again on the second house was worse than redundant -
+     `save()` only passes `loc` to setupFarm on the first run and calls
+     addHouse() otherwise, so anything picked here was collected and silently
+     thrown away. */
+  const [firstRun, setFirstRun] = useState(null);
   const [locOpen,  setLocOpen]  = useState(false);
 
   // Set once a section has been created and we are on the "link a node" step.
@@ -107,6 +115,26 @@ export default function FarmSetupScreen({ route, navigation }) {
     lightExposure: s.lightExposure,
   }));
 
+  /* Asked once, on mount, and reused by save(). It used to be asked only inside
+     save(), which is why the form could not know whether to show the location
+     question in the first place. */
+  useEffect(() => {
+    if (addToHouse) { setFirstRun(false); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const ov = await getOverview();
+        if (alive) setFirstRun(!(ov.houses || []).length);
+      } catch (_) {
+        // Unreachable backend: assume first run, which is what save() assumes
+        // too. Showing the question and not needing it is recoverable; hiding
+        // it on a genuinely new farm leaves the forecast with no position.
+        if (alive) setFirstRun(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [addToHouse]);
+
   const save = async () => {
     // A section with no name is a mistake, not a default. Say so.
     const visible = addToHouse ? sections.slice(0, 1) : sections;
@@ -146,14 +174,18 @@ export default function FarmSetupScreen({ route, navigation }) {
          farm name, which is a strange thing to hang it on and stopped working
          the moment that field was removed. Ask the server instead: no houses
          means this is the first run. */
-      let firstRun = true;
-      try {
-        const ov = await getOverview();
-        firstRun = !(ov.houses || []).length;
-      } catch (_) { /* unreachable backend: setupFarm is the safe assumption */ }
+      // Already established on mount; re-checked here only if that failed, so
+      // the decision cannot drift between what was SHOWN and what is SENT.
+      let isFirst = firstRun;
+      if (isFirst === null) {
+        try {
+          const ov = await getOverview();
+          isFirst = !(ov.houses || []).length;
+        } catch (_) { isFirst = true; }
+      }
 
-      if (firstRun) await setupFarm({ houses: [house], ...(loc || {}) });
-      else          await addHouse(house);
+      if (isFirst) await setupFarm({ houses: [house], ...(loc || {}) });
+      else         await addHouse(house);
       Alert.alert('Saved', `${house.name} created with ${house.sections.length} sections.\n\nFlash each device with its ID (shown on the dashboard).`,
         [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (e) { Alert.alert('Failed', e.message); }
@@ -227,9 +259,12 @@ export default function FarmSetupScreen({ route, navigation }) {
               </View>
             </View>
 
-            {/* Asked once, at setup. It decides which place the weather forecast
-                is downloaded for, and that forecast feeds every watering time.
-                A map, not two number fields: nobody knows their coordinates. */}
+            {/* ONLY on the very first house. It decides which place the weather
+                forecast is downloaded for, and that forecast feeds every
+                watering time - but it is a property of the FARM, and every
+                house sits on the same farm. A map, not two number fields:
+                nobody knows their coordinates. */}
+            {firstRun === true && (<>
             <Text style={styles.h}>Where is it?</Text>
             <View style={[styles.card, SHADOW.sm]}>
               <TouchableOpacity style={styles.locRow} onPress={() => setLocOpen(true)}
@@ -249,6 +284,7 @@ export default function FarmSetupScreen({ route, navigation }) {
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
               </TouchableOpacity>
             </View>
+            </>)}
           </>
         )}
 
