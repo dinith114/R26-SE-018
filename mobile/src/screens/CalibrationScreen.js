@@ -22,7 +22,10 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import DigitalTwin from '../components/DigitalTwin';
 import Toast from '../components/Toast';
-import { getCalibration, getHouse, analyzePlacement } from '../services/careV2';
+import NodePicker from '../components/NodePicker';
+import {
+  getCalibration, getHouse, analyzePlacement, assignDevice,
+} from '../services/careV2';
 
 /* Long enough that a node which has genuinely stopped is obvious, short enough
    that ordinary Wi-Fi hiccups do not raise an alarm. Matches the backend. */
@@ -34,9 +37,18 @@ export default function CalibrationScreen({ route, navigation }) {
   const [cal,     setCal]     = useState(null);
   const [house,   setHouse]   = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
   const [refresh, setRefresh] = useState(false);
   const [busy,    setBusy]    = useState(false);
   const [toast,   setToast]   = useState(null);
+  /* Which section is waiting for a board, or null. Linking used to mean opening
+     each section's own screen in turn: twelve sections meant twelve round trips
+     through the dashboard, and this is the screen that already knows which ones
+     are missing hardware. NodePicker is a FlatList, so it replaces the whole
+     screen rather than sitting in a sheet - nesting a FlatList inside a
+     ScrollView breaks its scrolling, which SectionDetailScreen learned first. */
+  const [picking, setPicking] = useState(null);
+  const [linking, setLinking] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -46,7 +58,9 @@ export default function CalibrationScreen({ route, navigation }) {
       ]);
       setCal(c);
       setHouse(h?.house || null);
+      setError(null);
     } catch (e) {
+      setError(e.message);
       setToast({ text: e.message, kind: 'error' });
     } finally {
       setLoading(false);
@@ -68,10 +82,30 @@ export default function CalibrationScreen({ route, navigation }) {
     }
   };
 
+  const linkNode = async (dev) => {
+    const sectionId = picking;
+    setPicking(null);
+    setLinking(true);
+    try {
+      await assignDevice(dev.mac, houseId, sectionId);
+      await load();
+      setToast({ text: `Node ${dev.shortId || dev.mac.slice(-4)} linked to ${sectionId}`,
+                 kind: 'success' });
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally { setLinking(false); }
+  };
+
   /* Positions come from the house, readiness from the calibration endpoint.
      Joined here so a section that is silent is drawn differently on the map -
      seeing WHERE the gap is in the house is the point of having a map at all. */
   const sections = house?.sections || {};
+  /* Whether a BOARD is linked, which is a different question from whether
+     readings have arrived. Without this the map painted a section that has no
+     hardware exactly like one whose node had died, so a house nobody had wired
+     up yet looked like a farm full of dead sensors - and the two need opposite
+     actions from the farmer. */
+  const hasNode = (id) => !!((sections[id] || {}).node || {}).mac;
   const nodes = (cal?.sections || [])
     .map((row) => {
       const meta = (sections[row.id] || {}).meta || {};
@@ -82,10 +116,11 @@ export default function CalibrationScreen({ route, navigation }) {
         short: String(row.id).replace(/^S/, ''),
         x: Number(meta.x),
         y: Number(meta.y),
-        kind: silent ? 'offline' : 'real',
+        kind: !hasNode(row.id) ? 'nonode' : silent ? 'offline' : 'real',
       };
     })
     .filter(Boolean);
+  const missing = (cal?.sections || []).filter((r) => !hasNode(r.id)).length;
 
   const placed = nodes.length;
   const total = (cal?.sections || []).length;
@@ -97,6 +132,46 @@ export default function CalibrationScreen({ route, navigation }) {
       <View style={styles.container}>
         <ScreenHeader title="Calibrating" navigation={navigation} showBack />
         <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
+      </View>
+    );
+  }
+
+  /* Picking takes over the screen, the same way Add Section does. */
+  if (picking) {
+    return (
+      <View style={styles.container}>
+        <ScreenHeader title={`Node for ${picking}`}
+          subtitle="Boards that are powered on and unclaimed"
+          navigation={navigation} showBack />
+        <NodePicker onSelect={linkNode} onSkip={() => setPicking(null)} />
+      </View>
+    );
+  }
+
+  /* THE CRASH THIS GUARD EXISTS FOR.
+  
+     `loading` is cleared in a finally block, so it goes false whether the fetch
+     succeeded or threw. With only that guard, a failed request fell straight
+     into a render that reads cal.daysElapsed.toFixed(1) on null - and an
+     unhandled TypeError in a release build does not show an error screen, it
+     closes the app. A house with no calibration block, an offline backend or a
+     404 all took that path.
+  
+     Showing what went wrong and a way to retry is the least this can do; dying
+     silently is the worst. */
+  if (!cal) {
+    return (
+      <View style={styles.container}>
+        <ScreenHeader title="Calibrating" navigation={navigation} showBack />
+        <View style={styles.center}>
+          <Ionicons name="cloud-offline-outline" size={26} color={COLORS.textTertiary} />
+          <Text style={styles.errTitle}>Could not load calibration</Text>
+          <Text style={styles.errTxt}>{error || 'No calibration data for this house.'}</Text>
+          <TouchableOpacity style={styles.retry} onPress={() => { setLoading(true); load(); }}
+            activeOpacity={0.8}>
+            <Text style={styles.retryTxt}>Try again</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -166,33 +241,64 @@ export default function CalibrationScreen({ route, navigation }) {
 
         {/* per-section reality */}
         <Text style={styles.h}>What each section has recorded</Text>
+        {missing > 0 && (
+          <Text style={styles.missingNote}>
+            {missing} of {total} section{total === 1 ? '' : 's'} still {missing === 1 ? 'has' : 'have'} no
+            node. Link them here — calibration cannot finish until every section
+            is recording, because the analysis only uses moments they all
+            contributed to.
+          </Text>
+        )}
         <View style={[styles.card, SHADOW.sm]}>
           {(cal.sections || []).map((row) => {
             const silent = row.lastSeenMinAgo == null || row.lastSeenMinAgo > SILENT_MINUTES;
             const frac = Math.min(1, row.readings / Math.max(1, row.needed));
+            const node = (sections[row.id] || {}).node;
+            const wired = !!(node || {}).mac;
             return (
               <View key={row.id} style={styles.secRow}>
+                {/* Grey for "no board yet", red only for a board that has gone
+                    quiet. A section nobody has wired up is not a fault. */}
                 <View style={[styles.secDot, {
-                  backgroundColor: row.ok ? COLORS.primary
+                  backgroundColor: !wired ? COLORS.textTertiary
+                    : row.ok ? COLORS.primary
                     : silent ? COLORS.danger : COLORS.warning,
                 }]} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.secName}>{row.name}</Text>
-                  <View style={styles.secBarTrack}>
-                    <View style={[styles.secBarFill, {
-                      width: `${frac * 100}%`,
-                      backgroundColor: row.ok ? COLORS.primary : COLORS.warning,
-                    }]} />
+                  {wired ? (
+                    <View style={styles.secBarTrack}>
+                      <View style={[styles.secBarFill, {
+                        width: `${frac * 100}%`,
+                        backgroundColor: row.ok ? COLORS.primary : COLORS.warning,
+                      }]} />
+                    </View>
+                  ) : (
+                    <Text style={styles.secNoNode}>No node linked</Text>
+                  )}
+                </View>
+
+                {wired ? (
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.secCount}>{row.readings}/{row.needed}</Text>
+                    <Text style={[styles.secSeen, silent && { color: COLORS.danger }]}>
+                      {row.lastSeenMinAgo == null ? 'never'
+                        : row.lastSeenMinAgo < 60 ? `${Math.round(row.lastSeenMinAgo)}m ago`
+                        : `${(row.lastSeenMinAgo / 60).toFixed(0)}h ago`}
+                    </Text>
                   </View>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.secCount}>{row.readings}/{row.needed}</Text>
-                  <Text style={[styles.secSeen, silent && { color: COLORS.danger }]}>
-                    {row.lastSeenMinAgo == null ? 'never'
-                      : row.lastSeenMinAgo < 60 ? `${Math.round(row.lastSeenMinAgo)}m ago`
-                      : `${(row.lastSeenMinAgo / 60).toFixed(0)}h ago`}
-                  </Text>
-                </View>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.linkBtn}
+                    onPress={() => setPicking(row.id)}
+                    disabled={linking}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Link a sensor node to ${row.name}`}>
+                    <Ionicons name="add" size={15} color={COLORS.primary} />
+                    <Text style={styles.linkBtnTxt}>Add node</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             );
           })}
@@ -241,7 +347,15 @@ export default function CalibrationScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
-  center:    { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center:    { flex: 1, alignItems: 'center', justifyContent: 'center',
+               padding: SPACE.xl, gap: SPACE.sm },
+  errTitle:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  errTxt:    { color: COLORS.textTertiary, fontSize: FONT.xs, textAlign: 'center',
+               lineHeight: 18 },
+  retry:     { backgroundColor: COLORS.primary, borderRadius: RADIUS.sm,
+               paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm,
+               marginTop: SPACE.sm },
+  retryTxt:  { color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
   scroll:    { padding: SPACE.lg, paddingBottom: SPACE.xl * 3 },
 
   h: { color: COLORS.textSecondary, fontSize: FONT.xs, fontWeight: '800',
@@ -278,6 +392,15 @@ const styles = StyleSheet.create({
   secCount: { color: COLORS.textSecondary, fontSize: 11, fontWeight: '800',
               fontVariant: ['tabular-nums'] },
   secSeen:  { color: COLORS.textTertiary, fontSize: 9.5, marginTop: 2 },
+  secNoNode:{ color: COLORS.textTertiary, fontSize: 11, marginTop: 3 },
+
+  linkBtn:   { flexDirection: 'row', alignItems: 'center', gap: 2,
+               backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.full,
+               paddingHorizontal: SPACE.md, paddingVertical: 6 },
+  linkBtnTxt:{ color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
+
+  missingNote: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18,
+                 marginBottom: SPACE.md, marginTop: -SPACE.xs },
 
   blockCard: { backgroundColor: COLORS.warningDim, marginTop: SPACE.md },
   errCard:   { backgroundColor: COLORS.dangerDim, marginTop: SPACE.md },

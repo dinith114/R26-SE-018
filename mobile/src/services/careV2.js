@@ -7,6 +7,16 @@ import { Platform } from 'react-native';
 // Single source of truth for the backend address - see config/backend.js.
 export { BASE_URL } from '../config/backend';
 import { API_KEY } from '../config/backend';
+/* These helpers hand a COLOUR to four screens, so they have to draw from the
+   same palette everything else does. They used to return raw hex left over
+   from before the August palette rebuild, and every one of those values
+   failed WCAG AA as text on a white card - measured on 30 Aug 2026:
+     GOOD    #22c55e  2.28:1     DRY   #f59e0b  2.15:1
+     HUMID   #3b82f6  3.68:1     none  #94a3b8  2.56:1
+   theme.js says of exactly these values: "Low contrast is what washed out
+   looks like". The section cards were being painted with the palette that
+   file had already deleted. */
+import { COLORS } from '../config/theme';
 
 /* Content-Type plus the write key. Spread FIRST so an explicit
    headers option could still override it. */
@@ -109,6 +119,18 @@ export const getCalibration = (h) => req(`/houses/${h}/calibration`);
 /** Move a house between "calibrating" and "active". */
 export const setLifecycle = (h, lifecycle) =>
   req(`/houses/${h}/lifecycle`, { method: 'PUT', body: JSON.stringify({ lifecycle }) });
+
+/**
+ * Act on the placement decision: keep these sections' sensors, free the rest.
+ *
+ * One call rather than a loop of unassigns, because a loop can stop half way
+ * and leave a house where nobody knows which sensors were freed. The server
+ * also clears the freed sections' last reading - without that they would sit
+ * frozen on the reading they had when the sensor was pulled, shown in green as
+ * though current, while their kriged estimate went unused.
+ */
+export const applyPlacement = (h, keep) =>
+  req(`/houses/${h}/apply-placement`, { method: 'POST', body: JSON.stringify({ keep }) });
 
 /**
  * Which sections should keep a sensor, decided from the calibration data.
@@ -355,11 +377,11 @@ export function intervalLabel(ms) {
 
 /** Signal strength as words. Farmers do not read dBm. */
 export function signalLabel(rssi) {
-  if (rssi == null) return { label: '--', color: '#94a3b8' };
-  if (rssi >= -55) return { label: 'Strong', color: '#22c55e' };
-  if (rssi >= -70) return { label: 'Good',   color: '#84cc16' };
-  if (rssi >= -80) return { label: 'Weak',   color: '#f59e0b' };
-  return { label: 'Very weak', color: '#ef4444' };
+  if (rssi == null) return { label: '--', color: COLORS.textTertiary };
+  if (rssi >= -55) return { label: 'Strong', color: COLORS.success };
+  if (rssi >= -70) return { label: 'Good',   color: COLORS.success };
+  if (rssi >= -80) return { label: 'Weak',   color: COLORS.warning };
+  return { label: 'Very weak', color: COLORS.danger };
 }
 
 /** "just now" / "2 min ago" - a farmer standing next to a board needs to know
@@ -377,16 +399,16 @@ export function lastSeenLabel(sec) {
 export const RH_LOW = 60, RH_HIGH = 80;
 
 export function humidityStatus(rh) {
-  if (rh == null) return { label: '--', color: '#94a3b8' };
-  if (rh < RH_LOW)  return { label: 'DRY',  color: '#f59e0b' };
-  if (rh > RH_HIGH) return { label: 'HUMID',color: '#3b82f6' };
-  return { label: 'GOOD', color: '#22c55e' };
+  if (rh == null) return { label: '--', color: COLORS.textTertiary };
+  if (rh < RH_LOW)  return { label: 'DRY',  color: COLORS.warning };
+  if (rh > RH_HIGH) return { label: 'HUMID',color: COLORS.info };
+  return { label: 'GOOD', color: COLORS.success };
 }
 
 export function vpdStatus(vpd) {
-  if (vpd == null) return { label: '--', color: '#94a3b8' };
-  if (vpd < 0.8) return { label: 'low drying',  color: '#3b82f6' };
-  if (vpd < 1.6) return { label: 'normal',      color: '#22c55e' };
-  if (vpd < 2.4) return { label: 'high drying', color: '#f59e0b' };
-  return { label: 'extreme', color: '#ef4444' };
+  if (vpd == null) return { label: '--', color: COLORS.textTertiary };
+  if (vpd < 0.8) return { label: 'low drying',  color: COLORS.info };
+  if (vpd < 1.6) return { label: 'normal',      color: COLORS.success };
+  if (vpd < 2.4) return { label: 'high drying', color: COLORS.warning };
+  return { label: 'extreme', color: COLORS.danger };
 }
