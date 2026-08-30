@@ -76,9 +76,15 @@ export default function CalibrationScreen({ route, navigation }) {
      number to move. It only ever loaded on focus and on pull-to-refresh, so a
      section that started reporting thirty seconds ago still read "never" until
      the screen was left and re-entered. Same interval the dashboard uses. */
+  /* Twice the dashboard's interval, on purpose. Calibration is a THREE-DAY
+     process; nothing on this screen changes meaningfully inside a minute, and
+     each call asks Firebase for a key listing per section. At 30 s that was
+     measured at 90 MB an hour of database egress and it is what pushed this
+     project past the free 360 MB/day quota. The endpoint got cheaper too, but
+     polling a three-day bar twice a minute was never the right rate. */
   useFocusEffect(useCallback(() => {
     load();
-    const t = setInterval(load, LIVE_MS);
+    const t = setInterval(load, LIVE_MS * 2);
     return () => clearInterval(t);
   }, [load]));
 

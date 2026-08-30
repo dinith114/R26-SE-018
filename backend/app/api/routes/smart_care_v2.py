@@ -3149,26 +3149,55 @@ async def calibration_status(house_id: str):
     sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
     rows, blockers = [], []
     for sid in sorted(sections, key=_natural_key):
-        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
-        stamps = [r.get("timestamp") for r in hist.values()
+        # DOWNLOADING THE WHOLE ARCHIVE TO COUNT IT COSTS REAL MONEY.
+        #
+        # This used to fetch every stored reading for every section and then use
+        # exactly two things from them: how many there were, and the newest
+        # timestamp. On an eight-section house that is 772 KB per call. The
+        # calibration screen polls every 30 s while a farmer watches it, which
+        # is 90 MB an hour of Firebase downloads for two numbers - and it is
+        # what pushed this project past the free 360 MB/day quota, measured at
+        # a 483.8 MB peak day.
+        #
+        # Two bounded queries replace it:
+        #
+        #   count   shallow=true - keys only, no values. ~12 KB per section
+        #           instead of ~96 KB.
+        #   newest  limitToLast(1) - push ids sort chronologically, so the last
+        #           key IS the newest record. One reading instead of thousands.
+        #
+        # A limitToFirst cap on the count would be better still - the question
+        # is only ever "has it reached the minimum" - but Firebase REFUSES it:
+        #   "orderBy not supported for with shallow GET, keys are returned in
+        #    lexicographical order"
+        # and the 400 it returns parses as a one-key dict, which silently reads
+        # as "1 reading". Shallow alone, then, and the count grows with the
+        # archive; at ~28 bytes a key that is affordable for a long time.
+        #
+        # Measured on this house: 772 KB -> 103 KB per call.
+        base = f"/farm/history/{house_id}/{sid}.json"
+        keys = _fb_get(f"{base}?shallow=true") or {}
+        count = len(keys)
+        newest = _fb_get(f'{base}?orderBy="$key"&limitToLast=1') or {}
+        stamps = [r.get("timestamp") for r in newest.values()
                   if isinstance(r, dict) and r.get("timestamp")]
         last = max(stamps) if stamps else None
         age_min = (now_ms - float(last)) / 60000.0 if last else None
-        ok = len(stamps) >= min_readings
+        ok = count >= min_readings
         rows.append({
             "id": sid,
             "name": ((sections[sid] or {}).get("meta") or {}).get("name") or sid,
-            "readings": len(stamps),
+            "readings": count,
             "needed": min_readings,
             "lastSeenMinAgo": None if age_min is None else round(age_min, 1),
             "ok": ok,
         })
-        if not stamps:
+        if not count:
             blockers.append(f"{sid} has never reported.")
         elif age_min is not None and age_min > 120:
             blockers.append(f"{sid} stopped reporting {age_min / 60:.0f} hours ago.")
         elif not ok:
-            blockers.append(f"{sid} has {len(stamps)} of {min_readings} readings.")
+            blockers.append(f"{sid} has {count} of {min_readings} readings.")
 
     time_done = days >= target_days
     data_done = bool(rows) and all(r["ok"] for r in rows)
