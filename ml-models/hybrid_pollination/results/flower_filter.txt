@@ -1,0 +1,57 @@
+==========================================================================
+FLOWER FILTER - stage 2 of the input gate (orchid vs other flower)
+==========================================================================
+
+[1] Positives - this project's own orchid photographs
+  1190 images, 375 groups
+
+[2] Negatives - Oxford Flowers-102
+  8089 other-flower images across 100 species
+  100 images held out from the two ORCHID classes (2, 7) - excluded from
+  training so the filter is never taught to call an orchid 'not orchid'
+
+[2b] Negatives - non-orchid plants (foliage, not flowers)
+  80 photographs of ferns, palms, aloes, bromeliads, cacti
+  collected with search terms DIFFERENT from the held-out ferns and
+  houseplants in gate_validation, so the test set stays honest
+  total negatives: 8169
+
+[3] Fitting
+  logistic regression, balanced class weights
+  threshold 0.1854 (keeps 99% of the project's own photographs)
+
+[4] In-domain check (same sources as training - optimistic by design)
+  project photos called orchid   : 99.0%
+  Flowers-102 called other flower: 87.9%
+  NOTE: both sets were seen in training. The number that counts is below.
+
+[5] THE HONEST TEST - Wikimedia Commons only, neither training source
+
+  set                       n  called orchid   median p
+  ------------------------------------------------------
+  Wikimedia orchids        88           83%       0.63
+  Wikimedia roses/tulips   45           27%       0.07
+
+  ROC AUC on the third source: 0.857
+  (0.5 would mean the filter had only learned which camera took the photo)
+
+[6] Flowers-102 orchid classes, never trained on
+  100 images of Paphiopedilum / Phalaenopsis called orchid: 43%
+  (a different genus from Vanda, so this is generalisation, not recall)
+
+[7] Everything else in the validation set
+  cars                   n=42   called orchid 100%
+  depictions             n=2    called orchid 100%
+  documents              n=45   called orchid 100%
+  ferns                  n=51   called orchid  80%
+  food                   n=44   called orchid  95%
+  houseplants            n=48   called orchid  81%
+  laptops                n=42   called orchid  98%
+  other_flowers          n=45   called orchid  27%
+  other_orchids_web      n=45   called orchid  89%
+  people                 n=44   called orchid  86%
+  rooms                  n=49   called orchid 100%
+  screens                n=43   called orchid  98%
+  vanda_web              n=43   called orchid  77%
+
+  saved -> C:\R26-SE-018\R26-SE-018\ml-models\hybrid_pollination\models\flower_filter.pkl
