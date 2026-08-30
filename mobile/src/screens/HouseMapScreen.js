@@ -165,6 +165,17 @@ export default function HouseMapScreen({ route, navigation }) {
           </View>
         )}
 
+        {/* Putting hardware back is the natural next thought while looking at a
+            map of zones that have none, so the way to do it lives here rather
+            than somewhere the farmer has to go and find. */}
+        <TouchableOpacity style={[styles.addBtn, SHADOW.sm]} activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Add a sensor to one of these zones"
+          onPress={() => navigation.navigate('AddSensor', { houseId })}>
+          <Ionicons name="add-circle-outline" size={18} color={COLORS.primary} />
+          <Text style={styles.addBtnTxt}>Put a sensor in one of these zones</Text>
+        </TouchableOpacity>
+
         {unplaced > 0 && (
           <View style={[styles.card, styles.warnCard, SHADOW.sm]}>
             <Ionicons name="location-outline" size={15} color={COLORS.warning} />
@@ -201,6 +212,12 @@ const styles = StyleSheet.create({
   estCard:  { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start',
               backgroundColor: COLORS.estimatedDim, marginTop: SPACE.md },
   estTxt:   { flex: 1, color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17 },
+
+  addBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+               gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md,
+               padding: SPACE.lg, marginTop: SPACE.md,
+               borderWidth: 1, borderColor: COLORS.primaryDim },
+  addBtnTxt: { color: COLORS.primary, fontSize: FONT.md, fontWeight: '700' },
   warnCard: { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start',
               backgroundColor: COLORS.warningDim, marginTop: SPACE.md },
   warnTxt:  { flex: 1, color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17 },
