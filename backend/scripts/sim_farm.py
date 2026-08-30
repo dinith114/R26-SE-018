@@ -79,7 +79,10 @@ def _fb_patch(path: str, data: dict) -> bool:
 # same house always has the same character.
 N_ANOMALIES = 6
 ANOMALY_RADIUS_M = 2.2
-ANOMALY_STRENGTH_C = 1.8
+# Reduced from 1.8: peak spatial spread reached 5.05 C against a reported
+# maximum of 3.2-3.5 C in tropical plastic greenhouses. Structural features are
+# real but were carrying too much of the variation.
+ANOMALY_STRENGTH_C = 0.8
 
 # THE PART THAT MATTERS MOST FOR PLACEMENT.
 #
@@ -93,13 +96,43 @@ ANOMALY_STRENGTH_C = 1.8
 # and the placement maths correctly concluded one sensor could speak for a whole
 # zone. That conclusion was true of the generated field and false of any real
 # house, which is exactly the kind of error a simulator must not introduce.
-MAX_LAG_HOURS = 1.6
+# 45 minutes at the deepest point. The survey put edge-to-interior
+# propagation in porous shade-net structures at 20-60 minutes; 1.6 hours was
+# guessed before that figure existed and sat well outside it.
+MAX_LAG_HOURS = 0.75
 
 # A cool tongue of outside air along one edge, present only while the wind is
 # up. Intermittent and LOCAL - the kind of effect that makes one section
 # genuinely unpredictable from its neighbours.
-DRAFT_COOLING_C = 2.4
+DRAFT_COOLING_C = 1.2
 DRAFT_REACH_M = 3.5
+
+# THE THING THAT WAS MISSING.
+#
+# Cloud cover was applied to the whole house at once, so every section dimmed
+# and brightened in perfect step. That is a large shared signal, and it is why
+# sections five metres apart correlated at 0.93 where the survey put that
+# separation nearer 0.55-0.75.
+#
+# Real cumulus casts a shadow tens of metres across that DRIFTS with the wind,
+# so one end of a house is shaded while the other is in full sun, for a few
+# minutes at a time. Local, transient, and uncorrelated with anything else -
+# exactly the signal that makes one section unpredictable from its neighbour,
+# and the reason a real house needs more than two sensors.
+# Per-reading scatter, and the number is not a guess: the DHT22 on these nodes
+# is specified at +/-0.5 C, so a simulated node must be at least that imprecise
+# or it is a better instrument than the one being simulated.
+#
+# It matters more than it looks. In geostatistics this is the NUGGET, and the
+# survey reports real greenhouses at 5-28% of sill during daylight - its own
+# derived correlation table assumes 10%. The simulator was running at under 1%,
+# which is why sections five metres apart sat at 0.94 while the guide put them
+# near 0.65. Chasing that gap with cloud shadows was chasing the wrong term:
+# the field was not too smooth, the sensors were too good.
+SENSOR_NOISE_C = 0.5
+
+CLOUD_BAND_M = 9.0        # how wide a passing shadow is
+CLOUD_DRIFT_MS = 4.0      # how fast it crosses
 
 
 class Field:
@@ -155,7 +188,8 @@ class Field:
         return t
 
     def at(self, x: float, y: float, hour: float, cloud: float,
-           ambient: float, wind: float, noise: random.Random) -> Dict[str, float]:
+           ambient: float, wind: float, noise: random.Random,
+           t_min: float = 0.0) -> Dict[str, float]:
         depth = y / self.l
         shade = math.exp(-2.2 * depth)
         edge = 1.0 - 0.35 * abs((x / self.w) - 0.5) * 2.0
@@ -167,20 +201,28 @@ class Field:
         # East to west: negative before noon, positive after.
         self.sun_dir = -1.0 if hour < 12 else 1.0
 
-        temp = 24.0 + ambient + 9.0 * shade * edge * sun
-        temp += self._structural(x, y, elev) * (0.3 + 0.7 * sun)
+        # Where the shadow band has drifted to. Position advances with real
+        # time, so consecutive readings see it somewhere plausible rather than
+        # jumping about.
+        span = self.l + 2 * CLOUD_BAND_M
+        band_pos = ((t_min * 60.0 * CLOUD_DRIFT_MS) % span) - CLOUD_BAND_M
+        shadow = math.exp(-((y - band_pos) ** 2) / (2 * (CLOUD_BAND_M / 2.5) ** 2))
+        local_sun = sun * (1.0 - 0.55 * shadow * cloud)
+
+        temp = 24.0 + ambient + 9.0 * shade * edge * local_sun
+        temp += self._structural(x, y, elev) * (0.3 + 0.7 * local_sun)
 
         dd = math.hypot(x - self.door_x, y - self.door_y)
         if dd < DRAFT_REACH_M:
             temp -= DRAFT_COOLING_C * wind * (1.0 - dd / DRAFT_REACH_M)
 
-        temp += noise.gauss(0, 0.18)
+        temp += noise.gauss(0, SENSOR_NOISE_C)
 
         # Humidity moves opposite to temperature, with its own local noise so it
         # is not a deterministic function of it.
         humid = 92.0 - 2.6 * (temp - 24.0) + noise.gauss(0, 1.0)
         humid = min(99.0, max(30.0, humid))
-        light = 32000.0 * shade * edge * sun + noise.gauss(0, 300)
+        light = 32000.0 * shade * edge * local_sun + noise.gauss(0, 300)
 
         temp = round(temp, 1)
         humid = round(humid, 1)
@@ -250,7 +292,7 @@ def push_once(house_id, meta, pos, sensored, force_hour=None, history=True) -> i
         if sid not in pos:
             continue
         x, y = pos[sid]
-        r = field.at(x, y, hour, cloud, ambient, wind, noise)
+        r = field.at(x, y, hour, cloud, ambient, wind, noise, now_ms / 60000.0)
         r["timestamp"] = now_ms
         _fb_put(f"/farm/houses/{house_id}/sections/{sid}/latest.json", r)
         if history:
@@ -286,7 +328,7 @@ def fast_forward(house_id, meta, pos, sensored, days: float, per_hour: int = 8) 
             ts = now_ms - (total - k) * step_ms
             hour = (ts / 3600000.0) % 24
             cloud, ambient, wind = weather(random.Random(int(ts // 3600000)))
-            r = field.at(x, y, hour, cloud, ambient, wind, noise)
+            r = field.at(x, y, hour, cloud, ambient, wind, noise, ts / 60000.0)
             r["timestamp"] = ts
             # A key of our own, deliberately recognisable: anyone reading the
             # archive later can see which readings a node reported and which
