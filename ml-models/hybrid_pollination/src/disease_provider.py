@@ -338,7 +338,7 @@ class RemoteDiseaseProvider(DiseaseProvider):
     def is_available(self) -> bool:
         try:
             import requests
-            r = requests.get(self.url.replace("/detect", "/health"), timeout=2.0)
+            r = requests.get(self.url.replace("/detect", "/status"), timeout=2.0)
             return r.status_code == 200
         except Exception:
             return False
@@ -360,19 +360,139 @@ class RemoteDiseaseProvider(DiseaseProvider):
             signal.confidence *= 0.9
             return signal
 
+    # Component 1 grades severity as a word, not a number. These are the
+    # midpoints this component uses when it needs a 0-1 scale; the original
+    # label is kept in `evidence` so nothing is lost by the conversion.
+    SEVERITY_SCALE = {"mild": 0.33, "moderate": 0.66, "severe": 1.0}
+
     def _parse(self, payload: dict) -> DiseaseSignal:
-        present = bool(payload.get("disease_detected", payload.get("present", False)))
-        severity = float(payload.get("severity", 1.0 if present else 0.0))
-        confidence = float(payload.get("confidence", 0.5))
+        """
+        Translate Component 1's response into a DiseaseSignal.
+
+        Their shape, confirmed against their route and predictor rather than
+        assumed:
+
+            {"status": "success", "filename": ..., "result": {
+                "disease":     "healthy" | "black_leaf_spot" |
+                               "phyllosticta_leaf_spot" | "unidentified" |
+                               "invalid_image",
+                "confidence":  0.0-1.0,
+                "confident":   bool,
+                "severity":    "mild" | "moderate" | "severe" | None,
+                "severity_confidence": float | None,
+                "explanation": str,
+                ...}}
+
+        Three of their outcomes are NOT "no disease" and must not be read as
+        one. "unidentified" means the condition is outside their three trained
+        classes; "invalid_image" means the photograph could not be used. Both
+        are unknowns, so they return confidence 0.0 and the caller asks the
+        grower instead of recording a healthy plant that was never assessed.
+        """
+        result = payload.get("result", payload)
+
+        disease = str(result.get("disease", "unknown"))
+        confidence = float(result.get("confidence") or 0.0)
+        severity_label = result.get("severity")
+
+        if disease in ("unidentified", "invalid_image"):
+            return DiseaseSignal(
+                present=False, severity=0.0, confidence=0.0, source="unknown",
+                disease_type=disease,
+                evidence={"raw_response": result,
+                          "explanation": result.get("explanation", "")},
+            )
+
+        present = disease != "healthy"
+        severity = self.SEVERITY_SCALE.get(str(severity_label).lower(), 0.0)
+
+        # A named disease with no severity grade still counts as present. Their
+        # severity model is skipped for a healthy plant and can be absent
+        # entirely, so a missing grade must not silently mean "no disease".
+        if present and severity == 0.0:
+            severity = 0.5
 
         return DiseaseSignal(
             present=present,
             severity=round(min(max(severity, 0.0), 1.0), 4),
             confidence=round(min(max(confidence, 0.0), 1.0), 4),
             source="model",
-            disease_type=str(payload.get("disease_name", payload.get("disease_type", "unknown"))),
-            evidence={"raw_response": payload},
+            disease_type=disease,
+            evidence={"raw_response": result,
+                      "severity_label": severity_label,
+                      "severity_confidence": result.get("severity_confidence"),
+                      "explanation": result.get("explanation", "")},
         )
+
+
+# ──────────────────────────────────────────────
+# Component 1, called in-process
+# ──────────────────────────────────────────────
+class LocalDiseaseProvider(RemoteDiseaseProvider):
+    """
+    Component 1's model, called as a Python function instead of over HTTP.
+
+    Both routers are mounted in the same FastAPI app, so the HTTP provider was
+    making the process talk to itself: a socket, a port assumption and a
+    serialisation round trip, each able to fail on its own while the model sat
+    in the same interpreter. This calls `disease_service.analyse` directly and
+    reuses the parent's `_parse`, so both providers read one contract.
+
+    Nothing in Component 1 is modified or imported at module load. The import
+    happens inside the call and is allowed to fail: the training scripts in this
+    component run without the backend on the path, and must keep running.
+    """
+
+    name = "local"
+
+    def __init__(self, fallback: DiseaseProvider = None):
+        self.fallback = fallback or HeuristicDiseaseProvider()
+
+    @staticmethod
+    def _service():
+        from app.services import disease_service
+        return disease_service
+
+    def is_available(self) -> bool:
+        """
+        True only if the model can actually RUN, not merely that its files
+        exist.
+
+        Component 1's `model_status()` reports whether the .keras files are on
+        disk. That is not the same question: on a machine without tensorflow
+        the files are present and the model still cannot load. Trusting it
+        selected this provider, every call then failed and fell back to the
+        heuristic, and the app reported "local" while returning heuristic
+        readings - a silent downgrade that looked like Component 1's model
+        working.
+
+        So tensorflow is checked too. The import is the expensive part and is
+        cached by Python after the first call.
+        """
+        try:
+            import importlib
+            if importlib.util.find_spec("tensorflow") is None:
+                return False
+            return bool(self._service().model_status().get("disease_ready"))
+        except Exception:
+            return False
+
+    def analyze(self, image_path: str, image_kind: str = "plant") -> DiseaseSignal:
+        try:
+            service = self._service()
+            with open(image_path, "rb") as f:
+                result = service.analyse(f.read())
+            return self._parse({"result": result})
+
+        except Exception as e:
+            # Their service raises ModelUnavailable when the .keras files are
+            # not on disk - a normal state on a machine that has not fetched
+            # them. Fall back rather than fail the whole assessment.
+            signal = self.fallback.analyze(image_path, image_kind)
+            signal.evidence["local_error"] = str(e)[:200]
+            signal.evidence["fell_back_from"] = "local"
+            signal.confidence *= 0.9
+            return signal
 
 
 # ──────────────────────────────────────────────
@@ -395,6 +515,7 @@ class NullDiseaseProvider(DiseaseProvider):
 # ──────────────────────────────────────────────
 _PROVIDERS = {
     "heuristic": HeuristicDiseaseProvider,
+    "local": LocalDiseaseProvider,
     "remote": RemoteDiseaseProvider,
     "null": NullDiseaseProvider,
 }
@@ -407,12 +528,23 @@ def get_disease_provider(name: str = None) -> DiseaseProvider:
     Return the configured disease provider.
 
     Args:
-        name: "heuristic", "remote" or "null". Defaults to the
-              ORCHID_DISEASE_PROVIDER environment variable, then "heuristic".
+        name: "auto", "local", "heuristic", "remote" or "null". Defaults to the
+              ORCHID_DISEASE_PROVIDER environment variable, then "auto".
+
+    "auto" prefers Component 1's model when it is loadable in this process and
+    silently uses the heuristic when it is not. That is what makes the app work
+    on a laptop without the .keras files AND on the server with them, without
+    anyone having to set a variable before a demo.
     """
     if name is None:
-        name = os.environ.get("ORCHID_DISEASE_PROVIDER", "heuristic")
+        name = os.environ.get("ORCHID_DISEASE_PROVIDER", "auto")
     name = name.strip().lower()
+
+    if name == "auto":
+        local = _cached.setdefault("local", LocalDiseaseProvider())
+        if local.is_available():
+            return local
+        name = "heuristic"
 
     if name not in _PROVIDERS:
         print(f"[WARN] Unknown disease provider '{name}' - using heuristic")
