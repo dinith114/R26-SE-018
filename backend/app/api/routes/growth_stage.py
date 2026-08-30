@@ -13,15 +13,9 @@ import numpy as np
 from PIL import Image
 import io
 
-# Use absolute path directly
-# Resolved relative to the repository, with the original absolute path kept as
-# a fallback. It was hardcoded to one machine's D:\Research\... directory, so
-# on any other checkout the import below raised and took the WHOLE backend down
-# with it - not just this component's endpoints.
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-ML_PATH = _REPO_ROOT / "ml-models" / "growth_stage"
-if not ML_PATH.exists():
-    ML_PATH = Path("D:/Research/Project/Project_002/R26-SE-018/ml-models/growth_stage")
+# Repo root is four levels up from backend/app/api/routes/
+ML_PATH = Path(__file__).resolve().parents[4] / "ml-models" / "growth_stage"
+
 print(f"[INFO] Looking for ML module at: {ML_PATH}")
 print(f"[INFO] ML_PATH exists: {ML_PATH.exists()}")
 
