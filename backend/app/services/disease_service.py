@@ -71,10 +71,18 @@ def model_status():
 def _cascade():
     """Import the prediction module, converting a missing model into a clear error."""
     try:
-        import predict as _predict
+        # Deliberately NOT named `predict`. Four components in this repository
+        # ship a src/predict.py -- bloom_prediction, disease_detection,
+        # growth_stage and hybrid_pollination -- and the backend puts several of
+        # their src directories on sys.path at once. A bare `import predict`
+        # therefore resolved to whichever component's folder happened to come
+        # first, which depended on the order main.py imports routers in. It
+        # picked hybrid_pollination's, which needs cv2, and every /detect call
+        # failed with a 503. A unique module name removes the ambiguity.
+        import disease_predict as _predict
     except ImportError as exc:                                   # pragma: no cover
         raise ModelUnavailable(
-            "Could not import the prediction module from {}: {}".format(SRC, exc))
+            "Could not import disease_predict from {}: {}".format(SRC, exc))
     return _predict
 
 

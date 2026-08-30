@@ -1,5 +1,5 @@
 """
-predict.py -- the full inference cascade: photograph in, recommendation out.
+disease_predict.py -- the full inference cascade: photograph in, recommendation out.
 
 This is the piece that joins everything the component builds:
 
@@ -43,12 +43,22 @@ wrong:
 Both models are loaded once and cached, because loading a .keras file takes
 seconds and a web request cannot afford that per call.
 
+NAMING NOTE
+-----------
+This file is called disease_predict.py, not predict.py, on purpose. Four
+components in this repository ship a src/predict.py, and the backend places
+several of their src directories on sys.path simultaneously. A bare
+`import predict` then resolves to whichever directory comes first, which
+depends on router import order in backend/app/main.py. It resolved to
+hybrid_pollination's, which imports cv2, and every /detect request returned
+503. A unique filename makes the import unambiguous.
+
 Usage
 -----
-  python predict.py --image ../data/split/test/black_leaf_spot/Black_LS_0002.jpg
-  python predict.py --image photo.jpg --json
-  python predict.py --demo                 # runs over a few held-out test images
-  python predict.py --image photo.jpg --threshold 0.60
+  python disease_predict.py --image ../data/split/test/black_leaf_spot/Black_LS_0002.jpg
+  python disease_predict.py --image photo.jpg --json
+  python disease_predict.py --demo                 # runs over a few held-out test images
+  python disease_predict.py --image photo.jpg --threshold 0.60
 """
 
 import argparse
