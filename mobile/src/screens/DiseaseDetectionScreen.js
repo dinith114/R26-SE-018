@@ -36,6 +36,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import { detectDisease, ApiError } from '../services/diseaseApi';
+import { addToHistory } from '../services/diseaseHistory';
 import { CONFIDENCE_THRESHOLD } from '../config/api';
 
 /** Turn 'black_leaf_spot' into 'Black Leaf Spot'. */
@@ -123,6 +124,12 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     try {
       const data = await detectDisease(imageAsset || imageUri);
       setResult(data);
+
+      // Record it locally. addToHistory swallows its own errors and returns
+      // null on failure -- a history write must never stop the user seeing the
+      // diagnosis they just asked for, so it is not awaited into the try/catch
+      // that reports analysis failures.
+      addToHistory(data, imageUri);
     } catch (err) {
       // Everything the service could not handle arrives here as an ApiError
       // with a message written for a person, plus a practical hint.
@@ -193,9 +200,55 @@ const DiseaseDetectionScreen = ({ navigation }) => {
   const renderResult = () => {
     if (!result) return null;
 
-    const isUnidentified = result.disease === 'unidentified' || !result.confident;
+    // ORDER MATTERS. invalid_image also has confident === false, so it must be
+    // tested BEFORE isUnidentified or it would fall through and be described as
+    // "not healthy, see an expert" -- the wrong advice for a photo of lunch.
+    const isInvalidImage = result.disease === 'invalid_image';
+    const isUnidentified = !isInvalidImage &&
+      (result.disease === 'unidentified' || !result.confident);
     const isHealthy = result.disease === 'healthy';
     const treatment = result.treatment || {};
+
+    /* ---- outcome 0: not a Vanda orchid at all ----
+       Deliberately shows NO disease name, NO "Healthy", and NO confidence
+       figure. The classifier was never run: a 3-way softmax always picks one of
+       its three classes, so on a photograph of food it reported healthy at
+       99.9%. The validator caught it on feature distance instead. */
+    if (isInvalidImage) {
+      return (
+        <View style={[styles.resultCard, styles.cardWarning, SHADOW.md]}>
+          <View style={styles.verdictRow}>
+            <View style={[styles.verdictIcon, { backgroundColor: COLORS.dangerDim }]}>
+              <Ionicons name="image-outline" size={26} color={COLORS.danger} />
+            </View>
+            <View style={styles.verdictText}>
+              <Text style={styles.verdictLabel}>NOT AN ORCHID</Text>
+              <Text style={[styles.verdictName, { color: COLORS.danger }]}>
+                Invalid image
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.explain}>
+            Please upload a clear image of a Vanda orchid leaf or stem. No
+            diagnosis was attempted, because this photograph does not look like
+            an orchid.
+          </Text>
+
+          <Bullets
+            title="For a good photo"
+            icon="camera-outline"
+            items={treatment.immediate_actions}
+            tint={COLORS.primary}
+          />
+
+          <TouchableOpacity style={styles.retryBtn} onPress={pickImage}>
+            <Ionicons name="images-outline" size={17} color={COLORS.textInverse} />
+            <Text style={styles.retryText}>Choose another photo</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
 
     /* ---- outcome 3: not one of the three trained classes ---- */
     if (isUnidentified) {
@@ -439,7 +492,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <ScreenHeader title="Disease Detection" subtitle="AI Diagnosis" navigation={navigation} />
+      <ScreenHeader title="Check a Plant" subtitle="AI Diagnosis" navigation={navigation} showBack />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>

@@ -44,6 +44,9 @@ DEFAULT_KB = Path(__file__).resolve().parent / "treatment_kb.json"
 
 VALID_SEVERITIES = {"mild", "moderate", "severe", "none", "unknown"}
 
+# Entries that are a state, not a disease: one level each, no grading.
+STATE_ENTRIES = {"healthy", "unidentified", "invalid_image"}
+
 UNVERIFIED_MESSAGE = (
     "Application rate not yet verified for Sri Lanka. Follow the product label "
     "and confirm with your agricultural extension officer before mixing."
@@ -225,9 +228,13 @@ class TreatmentAdvisor:
                 "every predictable class has a treatment entry. Re-run this "
                 "after training.")
 
-        # The diseased classes need all three grades.
+        # The diseased classes need all three grades. These three describe a
+        # STATE rather than a disease, so they have a single level each:
+        #   healthy        no disease
+        #   unidentified   an orchid whose condition cannot be named
+        #   invalid_image  not an orchid at all
         for name, entry in self.treatments.items():
-            if name in ("healthy", "unidentified"):
+            if name in ("healthy", "unidentified", "invalid_image"):
                 continue
             missing = {"mild", "moderate", "severe"} - set(entry["severity_levels"])
             if missing:
