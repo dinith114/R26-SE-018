@@ -1,0 +1,53 @@
+# Flower traits MEASURED from the project's own tagged photographs.
+# measured=False means no bloom was found in the sampled frames -
+# usually because the photograph was taken to record the name tag.
+# Colours are measured under nursery daylight and are indicative,
+# not colorimetric.
+tag_name,seed_parent,pollen_parent,grex,ploidy,n_frames_checked,n_frames_with_bloom,measured,source_image,dominant_colour,secondary_colour,pattern,n_blooms,coverage,confidence
+UNKNOWN_1 X Dr Anek,UNKNOWN 1,Dr Anek,,,6,0,False,,,,,0,0.0,0.0
+UNKNOWN_2,,,,,6,0,False,,,,,0,0.0,0.0
+UNKNOWN_3,,,,,6,0,False,,,,,0,0.0,0.0
+UNKNOWN_4,,,,,6,3,False,,,,,0,0.0,0.0
+UNKNOWN_5,,,,,6,0,False,,,,,0,0.0,0.0
+UNKNOWN_6,,,,,6,0,False,,,,,0,0.0,0.0
+UNKNOWN_7,,,,,6,1,False,,,,,0,0.0,0.0
+UNKNOWN_8  X V. Kultana Gold,UNKNOWN 8,V. Kultana Gold,,,5,0,False,,,,,0,0.0,0.0
+UNKNOWN_9,,,,,4,0,False,,,,,0,0.0,0.0
+V .manuel torres,,,manuel torres,,4,1,False,,,,,0,0.0,0.0
+V. Ascda Orange Delight X  V. Ascda.Kultana pappion,Orange Delight,V. Ascda.Kultana pappion,,,5,0,False,,,,,0,0.0,0.0
+V. Dr Anek X V. Kimikayo,Dr Anek,V. Kimikayo,,,6,1,False,,,,,0,0.0,0.0
+V. Duang Porn X Rhynchostylis gigantea,Duang Porn,Rhynchostylis gigantea,,,6,0,False,,,,,0,0.0,0.0
+V. Fantastic Fanfare 4n X V. Wirat 4n,Fantastic Fanfare,V. Wirat,,4n,6,0,False,,,,,0,0.0,0.0
+V. Fuch Sunset X V. Dr Anek,Fuch Sunset,V. Dr Anek,,,6,3,True,IMG_6489.JPG,brown,brown,spotted,2,0.0067,0.5
+V. Gordon Dillon X Dr Anek x Blitz,Gordon Dillon,Dr Anek,,,6,2,True,IMG_6038.JPG,violet,unknown,spotted,2,0.0141,0.9
+V. Indian Incense X  V. tessellata,Indian Incense,V. tessellata,,,6,2,True,IMG_6249.JPG,orange,unknown,spotted,1,0.0088,0.66
+V. Kultana Ruby X V(marue) Bitz's Heart,Kultana Ruby,V(marue) Bitz's Heart,,,6,1,True,IMG_6343.JPG,brown,brown,spotted,1,0.0121,0.9
+V. Kultana blue X V . luzonica,Kultana blue,V . luzonica,,,6,0,False,,,,,0,0.0,0.0
+V. Kulwadee 28 X  V.Chaopraya,Kulwadee 28,V.Chaopraya,,,6,0,False,,,,,0,0.0,0.0
+V. Mimi Palmer X V. coerulea,Mimi Palmer,V. coerulea,,,5,1,True,IMG_6382.JPG,brown,brown,spotted,1,0.0119,0.894
+V. Noppadon Delight,,,Noppadon Delight,,6,2,True,IMG_6043.JPG,orange,yellow,spotted,3,0.0097,0.729
+V. Orchidaceae,,,Orchidaceae,,3,0,False,,,,,0,0.0,0.0
+V. Pachara Blue,,,Pachara Blue,,6,2,True,IMG_6445.JPG,brown,brown,spotted,5,0.0307,0.9
+V. Pak Chong Blue 3n,,,Pak Chong Blue,3n,6,0,False,,,,,0,0.0,0.0
+V. Pats Delight Violet,,,Pats Delight Violet,,6,0,False,,,,,0,0.0,0.0
+V. Prapathom Gold X V. Dr Anek,Prapathom Gold,V. Dr Anek,,,6,0,False,,,,,0,0.0,0.0
+V. Robert Delight  X V. Sanderiana,Robert Delight,V. Sanderiana,,,6,1,False,,,,,0,0.0,0.0
+V. Rothschildiana X V. Warut Fuchsia,Rothschildiana,V. Warut Fuchsia,,,6,1,False,,,,,0,0.0,0.0
+V. Ruchiroj,,,Ruchiroj,,6,0,False,,,,,0,0.0,0.0
+V. Sankamphaeng X  V. Vivan,Sankamphaeng,V. Vivan,,,6,0,False,,,,,0,0.0,0.0
+V. Suwannabhumi Butterfly,,,Suwannabhumi Butterfly,,6,0,False,,,,,0,0.0,0.0
+V. Thanan Pari X Ascda.Kultana Flame,Thanan Pari,Ascda.Kultana Flame,,,6,0,False,,,,,0,0.0,0.0
+V. Yellow Butterfly #463,,,Yellow Butterfly #463,,6,0,False,,,,,0,0.0,0.0
+V. fuchs delight  X  dr anek,fuchs delight,dr anek,,,6,0,False,,,,,0,0.0,0.0
+V. miniata,,,miniata,,6,1,False,,,,,0,0.0,0.0
+V. noppadol delight,,,noppadol delight,,6,2,True,IMG_6562.JPG,magenta,unknown,spotted,1,0.2325,0.9
+V. siriporn pink,,,siriporn pink,,6,1,True,IMG_6452.JPG,orange,unknown,spotted,1,0.0069,0.515
+V.(Wirat pink x Blitz) X Kulwadee Fragrance,(Wirat pink x Blitz),Kulwadee Fragrance,,,6,3,True,IMG_6589.JPG,magenta,unknown,spotted,3,0.0163,0.9
+V.Chaopraya X V. Kulvaclee,Chaopraya,V. Kulvaclee,,,6,1,False,,,,,0,0.0,0.0
+V.Kulwadee Maroon,,,Kulwadee Maroon,,6,2,True,IMG_6578.JPG,orange,unknown,spotted,2,0.0177,0.9
+V.Sunlay X V. Dr Anek,Sunlay,V. Dr Anek,,,6,0,False,,,,,0,0.0,0.0
+V.Tung Tung Diamond Blue,,,Tung Tung Diamond Blue,,6,4,True,IMG_6061.JPG,violet,magenta,spotted,3,0.0756,0.9
+Vanda Centenaria,,,Centenaria,,6,3,True,IMG_6549.JPG,magenta,unknown,spotted,3,0.0399,0.9
+Vanda Red #77,,,Red #77,,6,1,True,IMG_6510.JPG,brown,brown,spotted,2,0.0741,0.9
+Vanda Two Tone Wonder,,,Two Tone Wonder,,6,3,True,IMG_6520.JPG,violet,magenta,spotted,3,0.0213,0.9
+Vanda tessellata,,,tessellata,,6,0,False,,,,,0,0.0,0.0
