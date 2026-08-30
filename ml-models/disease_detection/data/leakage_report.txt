@@ -1,0 +1,32 @@
+================================================================
+  DATA LEAKAGE VERIFICATION
+  dataset: D:\AI-Powered-Smart-Orchid-Care-System\R26-SE-018\ml-models\disease_detection\data\split_augmented
+================================================================
+
+  manifests read        : 3
+      train\black_leaf_spot\manifest_black_leaf_spot.csv
+      train\healthy\manifest_healthy.csv
+      train\phyllosticta_leaf_spot\manifest_phyllosticta_leaf_spot.csv
+  training files on disk: 28782
+  distinct originals behind them: 533
+  held-out images (validation + test): 134
+
+  CHECK 1 -- training source images that also appear in holdout
+      overlap = 0   (must be 0)
+      PASS
+
+  CHECK 2 -- training FILENAMES derived from a held-out original
+      leaked files = 0   (must be 0)
+      PASS
+
+  CHECK 3 -- no original listed under two splits
+      originals in split_manifest.csv: 667
+      per split: {'train': 533, 'validation': 67, 'test': 67}
+      clashes = 0   (must be 0)
+      PASS
+
+================================================================
+  RESULT: PASS -- no leakage detected.
+  Every held-out image is an original photograph that contributed
+  nothing to training, so test metrics are honest.
+================================================================
