@@ -45,6 +45,14 @@
   real house with real plants. The Claim button marks a house simulated, and it
   refuses H1 outright.
 
+  FORCING A CONDITION
+  -------------------
+  A node can be pushed to a dry or a hot state so the farm has to react. That is
+  the only way to rehearse the Auto-OFF alarm path on demand: the tray decision
+  is made from the CURRENT reading, so a section that is comfortable will never
+  raise one no matter how long you wait. Forcing only changes what the node
+  reports - every decision downstream is the real one.
+
   ONE WRITER PER SECTION
   ----------------------
   Do not run this at the same time as backend/scripts/sim_farm.py against the
@@ -186,6 +194,15 @@
       <button id="unassignAll">Unlink all</button>
       <span class="sp"></span>
       <span class="kv" id="cal">&mdash;</span>
+    </div>
+    <div class="bar">
+      <span class="kv">force the selected node</span>
+      <button id="fNormal">Normal</button>
+      <button id="fDry" class="warn">Dry</button>
+      <button id="fHot" class="warn">Hot</button>
+      <span class="sp"></span>
+      <button id="runNow" class="go">Run engine now</button>
+      <button id="runAt">Run at 06:30</button>
     </div>
   </section>
 
@@ -514,6 +531,37 @@ function readingAt(g, sid, tMs) {
   };
 }
 
+/* Force a node to report a condition the farm has to answer.
+ *
+ * WHY THIS EXISTS. The Auto-OFF alarm is raised from the CURRENT reading: the
+ * tray decision looks at humidity, temperature, light and hour together and a
+ * comfortable section never asks for anything. So there is no way to rehearse
+ * the alarm - or the push, or the lock-screen wake - by waiting. The condition
+ * has to be made to happen.
+ *
+ * Only the READING is forced. The tray model still decides, the engine still
+ * decides whether to act or to alarm, and the push still goes through FCM. What
+ * is simulated is the weather, which is exactly the part a bench should
+ * simulate and no more.
+ */
+const FORCE = {
+  dry: { humidity: 38, temperature: 33, light: 26000,
+         why: 'well below the 60% band on a hot bright day - the tray model '
+            + 'should ask for a fill' },
+  hot: { humidity: 46, temperature: 37, light: 31000,
+         why: 'extreme heat and dry air - tray fill, and a second watering '
+            + 'becomes possible in the afternoon window' },
+};
+
+function applyForce(n, rd) {
+  const f = FORCE[n.force];
+  if (!f) return rd;
+  const t = f.temperature, rh = f.humidity;
+  const svp = 0.6108 * Math.exp(17.27 * t / (t + 237.3));
+  return { ...rd, temperature: t, humidity: rh, light: f.light,
+           vpd: Math.round(svp * (1 - rh / 100) * 1000) / 1000 };
+}
+
 async function postReading(n) {
   const parts = n.assignedTo.split('/');
   const hid = parts[0], sid = parts[1];
@@ -521,8 +569,9 @@ async function postReading(n) {
   if (!g || !g.pos[sid]) return;
 
   const now = Date.now();                 // real wall clock, never ahead of it
-  const rd = readingAt(g, sid, now);
+  let rd = readingAt(g, sid, now);
   if (!rd) return;
+  rd = applyForce(n, rd);
   n.last = rd;
   await fbPut('/farm/houses/' + hid + '/sections/' + sid + '/latest.json', rd);
   await fbPost('/farm/history/' + hid + '/' + sid + '.json', rd);
@@ -861,6 +910,7 @@ function renderPool() {
     const dot = n.busy ? 'dot busy' : (n.on ? 'dot on' : 'dot');
     const lastTxt = n.last
       ? n.last.temperature + 'C ' + n.last.humidity + '%'
+        + (n.force ? '  FORCED ' + n.force.toUpperCase() : '')
       : (n.on ? 'waiting' : 'powered off');
 
     d.innerHTML =
@@ -1016,7 +1066,7 @@ $('add').onclick = function () {
       mac: newMac(), on: true,
       ip: '192.168.1.' + (100 + Math.floor(Math.random() * 130)),
       ssid: 'OrchidFarm', rssi: -(45 + Math.floor(Math.random() * 35)),
-      assignedTo: null, busy: false, last: null, lastCmdId: null
+      assignedTo: null, busy: false, last: null, lastCmdId: null, force: null
     });
   }
   save(); renderPool();
@@ -1030,6 +1080,72 @@ $('wipe').onclick = function () {
       + 'Their /devices records stay in Firebase and will still show in the app '
       + 'until they age out. Use × on a card to delete one properly.')) return;
   nodes = []; selected = null; save(); renderPool(); renderMap();
+};
+
+function setForce(kind) {
+  const n = nodes.find(function (x) { return x.mac === selected; });
+  if (!n) { log('t-err', 'Pick a node first, then force it.'); return; }
+  if (!n.assignedTo) { log('t-err', n.mac.slice(-4) + ' is not in a section yet.'); return; }
+  n.force = kind;
+  log(kind ? 't-sys' : 't-ok',
+      n.mac.slice(-4) + ' -> ' + (kind ? kind.toUpperCase() + ': ' + FORCE[kind].why
+                                       : 'back to the simulated field'));
+  renderPool();
+  cycleOne(n);          // report it immediately rather than on the next cycle
+}
+$('fNormal').onclick = function () { setForce(null); };
+$('fDry').onclick    = function () { setForce('dry'); };
+$('fHot').onclick    = function () { setForce('hot'); };
+
+/* The engine normally checks trays every 15 minutes. Waiting that long to see
+   whether an alarm fires is not a rehearsal, it is a coffee break - so the bench
+   can ask for one pass now.
+
+   This is the ONE thing here that talks to the backend rather than to Firebase,
+   so it needs the write key. The key is TYPED BY THE OPERATOR and kept in this
+   browser: this file lives in a public repository and a key committed to it
+   would have to be rotated, which has already happened once on this project. */
+const API = 'https://orchidfarm.duckdns.org/api/v2';
+
+function apiKey() {
+  let k = null;
+  try { k = localStorage.getItem('orchidApiKey'); } catch (e) { /* private window */ }
+  if (!k) {
+    k = prompt('Backend API key (kept in this browser only, never in the file):');
+    if (!k) return null;
+    try { localStorage.setItem('orchidApiKey', k.trim()); } catch (e) { /* ignore */ }
+  }
+  return k.trim();
+}
+
+async function runEngine(at) {
+  const k = apiKey();
+  if (!k) { log('t-err', 'no API key, engine not run'); return; }
+  const url = API + '/auto/engine/run-now' + (at ? '?at=' + encodeURIComponent(at) : '');
+  log('t-cmd', 'engine pass' + (at ? ' at ' + at : ' now') + '...');
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'X-API-Key': k } });
+    const j = await r.json();
+    if (!r.ok) { log('t-err', 'engine ' + r.status + ': ' + (j.detail || '')); return; }
+    const d = j.did || {};
+    log('t-ok', 'engine ran at ' + j.at);
+    Object.keys(d).forEach(function (step) {
+      log('t-dim', '   ' + step + ': ' + JSON.stringify(d[step]).slice(0, 150));
+    });
+  } catch (e) {
+    log('t-err', 'engine call failed: ' + e.message);
+  }
+}
+
+$('runNow').onclick = function () { runEngine(null); };
+$('runAt').onclick = function () {
+  // The watering alarm only fires when the planned hour arrives, and the plan
+  // always lands between 06:00 and 09:00 - so the pass has to be told to pretend.
+  const d = new Date();
+  const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+            + '-' + String(d.getDate()).padStart(2, '0');
+  const at = prompt('Run the engine as if it were (YYYY-MM-DD HH:MM):', day + ' 06:30');
+  if (at) runEngine(at);
 };
 
 $('house').onchange = function () { loadHouse(this.value); };
