@@ -41,7 +41,50 @@ mlruns/
 # Large datasets (store in cloud, not git)
 ml-models/*/data/raw/
 ml-models/*/data/processed/
+ml-models/*/data/split/
+ml-models/*/data/split_augmented/
+ml-models/*/data/pending/
 datasets/
+
+# Generated data is regenerable from raw/ with seed 42, so it is never
+# committed. The small CSVs that DO belong in git are re-included below.
+!ml-models/*/data/split/split_manifest.csv
+!ml-models/*/data/severity_labels.csv
+
+# ===========================
+# Component 1 - disease detection (R26-SE-018)
+# ===========================
+
+# Colab upload package. 133 MB of images + scripts, rebuilt in seconds by
+# re-zipping data/processed/ with the src and tools scripts. GitHub REFUSES
+# any file over 100 MB, so committing this would break the push outright.
+ml-models/*/orchid_colab.zip
+ml-models/*/orchid_results.zip
+ml-models/*/orchid_final.zip
+
+# Timestamped safety copies written by make_labels_template.py and
+# label_severity.py every time they run. The real file, severity_labels.csv,
+# IS tracked -- these are just its backups and would accumulate forever.
+ml-models/*/data/severity_labels.before_labelling_*.csv
+ml-models/*/data/severity_labels.backup_*.csv
+
+# Written by update_manifest_severity.py before it rewrites a manifest.
+*.csv.bak
+
+# Temporary file compare_models.py writes to measure model size on disk.
+ml-models/*/models/_size_probe.keras
+
+# Scratch folders from the one-image augmentation demo in HOW_TO_RUN.md.
+ml-models/*/tools/demo_in/
+ml-models/*/tools/demo_out/
+
+# NOTE ON THE TRAINED MODELS -- deliberately NOT ignored.
+# disease_model.keras (21 MB) and severity_model.keras (9 MB) ARE committed so
+# that anyone who clones the repository gets a working backend instead of a 503
+# from the /detect endpoint. That is worth 30 MB. The .weights.h5 fallbacks are
+# already excluded by the *.h5 rule above, since they duplicate the .keras files.
+# If you retrain repeatedly, be aware each committed model stays in git history
+# permanently -- consider committing only the final one.
 
 # ===========================
 # React Native / Node.js
