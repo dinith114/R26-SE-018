@@ -2099,6 +2099,33 @@ async def overview():
             tray   = s.get("tray") or {}
             fresh  = _freshness(s, farm_now, (node or {}).get("readIntervalMs"))
 
+            # Only an estimate that still describes this hour counts. An
+            # hour-old kriging of a microclimate is describing weather that has
+            # moved on, and it would look exactly as confident as a fresh one.
+            est = (s.get("estimated") or {})
+            try:
+                est_age = (_server_now_ms() - float(est.get("timestampMs"))) / 60000.0
+            except (TypeError, ValueError):
+                est_age = None
+            if est_age is None or not (0 <= est_age <= 60) or est.get("temperature") is None:
+                est = {}
+
+            # Stand in for a MISSING measurement, never over a real one. A
+            # section that kept its sensor is always shown its own reading; only
+            # a zone with nothing of its own falls back here. Without this the
+            # dashboard showed "--" for every unmonitored zone while a perfectly
+            # good estimate sat one key away in the same document - which is the
+            # spatial service doing its job and nobody being told.
+            #
+            # The numbers arrive labelled: freshness.state is set to "estimated"
+            # below and `trusted` stays false, so no screen can present these as
+            # measured. Showing them unlabelled would be the real error.
+            if not latest and est:
+                latest = {"temperature": est.get("temperature"),
+                          "humidity": est.get("humidity"),
+                          "light": est.get("light"),
+                          "timestamp": est.get("timestampMs")}
+
             # A section with no node is not a section whose node is quiet. The
             # app used to show both identically, so a zone with no hardware
             # displayed 28 C and 70 % - the model's fallback defaults - and 70 %
@@ -2109,13 +2136,31 @@ async def overview():
                          "message": "No sensor node is linked to this section, so "
                                     "there are no readings. Link one from Add Section."}
 
+            # A zone with no sensor of its own but a CURRENT estimate is not a
+            # gap in the farm - it is the placement decision working as designed,
+            # and it is what most of a house looks like after the analysis says
+            # which sensors to pull. Reporting it as "no node" made a deliberate
+            # choice look like missing hardware, and reporting it as "stale"
+            # would have raised an alert for a zone doing exactly what was asked.
+            if est and fresh["state"] in ("nonode", "never", "stale", "delayed"):
+                fresh = {"state": "estimated", "ageMinutes": None,
+                         "label": "Estimated", "trusted": False,
+                         "message": "No sensor here. These numbers are interpolated "
+                                    f"from {est.get('anchorCount') or 'the'} nearby "
+                                    "sections that do have one."}
+
             # A heartbeat is a faster and more direct answer than reading age.
             fresh = _apply_link_state(fresh, node)
 
             # "online" used to mean "has ever reported", so a node that died days
             # ago still read as online. It now means "reported recently enough".
             online = fresh["state"] in ("live", "delayed")
-            if not fresh["trusted"]:
+            # `trusted` is false for an estimate too, because it is not a
+            # measurement and must never be shown as one - but it is NOT a fault,
+            # so it does not count as stale and does not raise an alert. Counting
+            # it would have put every unmonitored zone in the alert badge for
+            # good, which is the fastest way to teach someone to ignore it.
+            if not fresh["trusted"] and fresh["state"] != "estimated":
                 stale_sections += 1
                 alerts += 1
             needs  = tray.get("status") == "fill"
@@ -2137,6 +2182,18 @@ async def overview():
                                    if latest.get("temperature") is not None
                                    and latest.get("humidity") is not None else None)},
                 "node": node,
+                # Whether this zone is being INTERPOLATED rather than measured.
+                # /overview omitted it entirely, so the dashboard had no way to
+                # tell a section estimated by kriging from one with a dead node,
+                # and drew both grey. Sent as a small summary rather than the
+                # whole estimate: the list needs to know THAT it is estimated
+                # and how uncertain, not the full record, which the section and
+                # map screens already read from the house document.
+                "estimated": ({"temperatureSd": est.get("temperatureSd"),
+                               "humiditySd": est.get("humiditySd"),
+                               "anchors": est.get("anchorCount"),
+                               "at": est.get("timestampMs")}
+                              if est else None),
                 "plan": plan,
                 "tray": tray,
                 "fertilizer": fert,
@@ -2765,6 +2822,108 @@ async def set_house_lifecycle(house_id: str, body: LifecycleIn):
     _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
     return {"status": "success", "houseId": house_id,
             "lifecycle": want, "calibration": meta.get("calibration")}
+
+
+class ApplyPlacementIn(BaseModel):
+    """Section ids that KEEP their sensor. Everything else gives its node up."""
+    keep: List[str]
+
+
+@router.post("/houses/{house_id}/apply-placement")
+async def apply_placement(house_id: str, body: ApplyPlacementIn):
+    """Act on the placement decision: free the sensors it says are redundant.
+
+    WHY THIS IS ONE CALL AND NOT TWELVE.
+    The app used to finish the placement flow by setting the lifecycle to active
+    and nothing else, so the farmer was told which sensors to take out and the
+    system carried on believing all twelve were still there. Doing the unassign
+    from the client would mean a dozen requests that can stop half way, leaving
+    a house where some sections were freed and some were not, and no record of
+    which was which.
+
+    CLEARING `latest` IS THE PART THAT MATTERS.
+    Unassigning alone does not produce the behaviour anyone wants. Both the map
+    and `_display` prefer a section's own measurement over an estimate - "the
+    measurement is the thing that happened" - and that rule is right while a
+    sensor exists. Once the sensor is physically removed, the section's last
+    reading is frozen at the moment it was pulled, and a day later the app would
+    still be showing yesterday's temperature in green as though it were current,
+    while a perfectly good kriged estimate sat unused beside it.
+
+    So the reading is deleted with the assignment. The claim "this section has a
+    reading of its own" stops being true the moment the sensor leaves, and the
+    honest consequence is that kriging takes over - which is exactly what the
+    placement analysis promised would happen.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    if not sections:
+        raise HTTPException(400, "House has no sections.")
+
+    keep = {str(k) for k in (body.keep or [])}
+    unknown = keep - set(sections)
+    if unknown:
+        raise HTTPException(400, f"Not sections of {house_id}: {sorted(unknown)}")
+    if not keep:
+        raise HTTPException(400, "Refusing to strip every sensor from the house.")
+
+    # The promise this flow makes to the farmer is that the freed sections keep
+    # working, estimated from the ones that kept a sensor. Below the kriging
+    # minimum that promise is false: interpolate_house returns
+    # "insufficient-anchors" and writes nothing, so those zones would go blank
+    # for good. Refused here rather than left to the caller, because this is the
+    # call that makes it irreversible - the readings are deleted.
+    from app.api.routes.spatial_service import MIN_ANCHORS
+    if len(keep) < MIN_ANCHORS:
+        raise HTTPException(
+            400,
+            f"Keeping {len(keep)} sensor(s) would leave nothing to estimate from. "
+            f"Kriging needs at least {MIN_ANCHORS} reporting sections, so the other "
+            f"zones would stay blank rather than being interpolated.")
+
+    devices = _fb_get("/devices.json") or {}
+    by_section = {}
+    for mac, rec in devices.items():
+        assigned = (rec or {}).get("assignedTo")
+        if assigned:
+            by_section[assigned] = mac
+
+    freed, cleared = [], []
+    for sid in sorted(sections, key=_natural_key):
+        if sid in keep:
+            continue
+        mac = by_section.get(f"{house_id}/{sid}")
+        if mac:
+            _fb_delete(f"/devices/{mac}/assignedTo.json")
+            _fb_delete(f"/farm/houses/{house_id}/sections/{sid}/deviceMac.json")
+            freed.append({"sectionId": sid, "mac": mac})
+        # Cleared even when no node was linked: a section can hold a stale
+        # reading from a board that was moved by hand earlier.
+        if (sections[sid] or {}).get("latest"):
+            _fb_delete(f"/farm/houses/{house_id}/sections/{sid}/latest.json")
+            cleared.append(sid)
+
+    meta["lifecycle"] = "active"
+    meta["placement"] = {"keep": sorted(keep, key=_natural_key),
+                         "appliedAt": _server_now_ms(),
+                         "freed": [f["mac"] for f in freed]}
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _DEVICE_CACHE["devices"] = None                 # assignments just changed
+
+    return {
+        "status": "success",
+        "houseId": house_id,
+        "lifecycle": "active",
+        "kept": sorted(keep, key=_natural_key),
+        "freed": freed,
+        "clearedReadings": cleared,
+        "message": (f"{len(freed)} sensor(s) freed. Those sections are now "
+                    "estimated from the ones that kept theirs; the first "
+                    "estimate appears within a few minutes."),
+    }
 
 
 @router.get("/houses/{house_id}/calibration")

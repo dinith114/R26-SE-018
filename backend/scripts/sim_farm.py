@@ -35,6 +35,7 @@ import os
 import random
 import sys
 import time
+import zlib
 from typing import Dict, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -146,7 +147,13 @@ class Field:
     def __init__(self, house_id: str, width: float, length: float):
         self.w = max(float(width or 10), 1.0)
         self.l = max(float(length or 14), 1.0)
-        rng = random.Random(abs(hash(house_id)) & 0xFFFF)
+        # zlib.crc32, NOT hash(). Python randomises string hashing per
+        # process, so `hash(house_id)` drew a DIFFERENT building every run:
+        # the posts and thin netting moved, and a house's archive ended up
+        # holding readings from several different buildings. The comment
+        # above promised the opposite and was simply wrong. Measured:
+        # abs(hash('H5')) & 0xFFFF gave 56931, 872, 32728 on three runs.
+        rng = random.Random(zlib.crc32(house_id.encode()) & 0xFFFF)
 
         self.anoms = [(rng.uniform(0, self.w), rng.uniform(0, self.l),
                        rng.uniform(-1.0, 1.0) * ANOMALY_STRENGTH_C)

@@ -1,0 +1,1020 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Orchid node bench</title>
+<!--
+  A bench of virtual ESP32 nodes.
+
+  WHAT THIS IS
+  ------------
+  Twenty sensor boards cost about LKR 47,000 and take a week to build. This page
+  stands in for them: each virtual node speaks the SAME Firebase protocol as
+  firmware validation-1.8, on the same paths, with the same payload keys. The
+  mobile app has no way to tell one of these from a board on the bench, and that
+  is the entire point - a simulator the app knows about tests the simulator, not
+  the app.
+
+  It runs on the laptop, in a browser. It is not part of the app and must never
+  become part of it.
+
+  WHAT IT COPIES, LINE FOR LINE
+  -----------------------------
+    announce      PATCH /devices/{MAC}.json     {mac,ip,rssi,fw,ssid,lastSeen}
+    assignment    GET   /devices/{MAC}.json     reads assignedTo, readIntervalMs
+    reading       PUT   /farm/houses/{h}/sections/{s}/latest.json
+                  POST  /farm/history/{h}/{s}.json
+    section cmd   GET   /farm/houses/{h}/sections/{s}/command.json
+                  PUT   .../commandAck.json
+    master queue  GET   /farm/masters/{MAC}/queue.json
+                  PUT   /farm/masters/{MAC}/acks/{id}.json  then DELETE the entry
+
+  PATCH, never PUT, on the device record. A PUT wipes `assignedTo`, which the
+  APP owns; the firmware comments on this and so does this file, because it is
+  the one mistake here that silently unpairs every node in the house.
+
+  THE GUARD
+  ---------
+  Nothing is written to a house whose meta lacks `simulated: true`. Invented
+  readings in a measured archive cannot be separated afterwards, and H1 is a
+  real house with real plants. The Claim button marks a house simulated, and it
+  refuses H1 outright.
+
+  ONE WRITER PER SECTION
+  ----------------------
+  Do not run this at the same time as backend/scripts/sim_farm.py against the
+  same house, and do not leave two tabs of it open. Two writers on one section
+  interleave readings from two different clocks, and the result looks like a
+  hardware fault rather than an operator error. The older FARM_SIMULATOR.html
+  in this folder ran a fast-forward clock and once stamped 2027 dates onto the
+  live farm; this page uses real wall-clock time only, and never writes ahead
+  of now.
+-->
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
+    --ink:#d7dee7; --dim:#8b97a6; --faint:#5d6875;
+    --ok:#3fb950; --warn:#d29922; --bad:#f85149; --live:#58a6ff; --sim:#a371f7;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.5 var(--mono);display:flex;flex-direction:column}
+
+  header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+         padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:13px;font-weight:700;letter-spacing:.04em;
+            text-transform:uppercase;color:var(--dim)}
+  header .sp{flex:1}
+
+  select,input,button{font:inherit;color:var(--ink);background:var(--panel2);
+    border:1px solid var(--line);border-radius:5px;padding:5px 9px}
+  input[type=number]{width:74px}
+  button{cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--faint)}
+  button:disabled{opacity:.38;cursor:not-allowed}
+  button.go{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+  button.warn{background:#7a4a09;border-color:#9e6a10;color:#ffd9a0}
+  button.bad{background:#5c1c1c;border-color:#8b2b2b;color:#ffc9c9}
+
+  main{flex:1;display:grid;grid-template-columns:300px 1fr 380px;
+       min-height:0;overflow:hidden}
+  @media (max-width:1200px){main{grid-template-columns:260px 1fr}
+                            #logpane{display:none}}
+
+  section.pane{min-height:0;display:flex;flex-direction:column;
+               border-right:1px solid var(--line);overflow:hidden}
+  section.pane:last-child{border-right:0}
+  .paneHead{padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);
+            font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);
+            display:flex;align-items:center;gap:8px}
+  .paneHead .sp{flex:1}
+  .paneBody{flex:1;overflow:auto;padding:10px}
+
+  /* ── node cards ───────────────────────────────────────────────────── */
+  .node{border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+        margin-bottom:7px;background:var(--panel);cursor:pointer;
+        display:flex;align-items:center;gap:9px}
+  .node:hover{border-color:var(--faint)}
+  .node.sel{border-color:var(--live);background:#132133;
+            box-shadow:0 0 0 1px var(--live) inset}
+  .node.off{opacity:.5}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--faint)}
+  .dot.on{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+  .dot.busy{background:var(--live);box-shadow:0 0 6px var(--live)}
+  .node .id{font-weight:700}
+  .node .meta{color:var(--faint);font-size:11px}
+  .node .col{flex:1;min-width:0}
+  .node .where{font-size:11px;color:var(--sim)}
+
+  /* ── house map ────────────────────────────────────────────────────── */
+  #map{position:relative;margin:auto;background:
+        repeating-linear-gradient(0deg,transparent 0 39px,#1e2630 39px 40px),
+        repeating-linear-gradient(90deg,transparent 0 39px,#1e2630 39px 40px),
+        var(--panel);
+       border:1px solid var(--line);border-radius:4px}
+  .sec{position:absolute;transform:translate(-50%,-50%);width:62px;height:62px;
+       border:1px solid var(--line);border-radius:6px;background:var(--panel2);
+       display:flex;flex-direction:column;align-items:center;justify-content:center;
+       gap:1px;cursor:pointer;font-size:10px;text-align:center;padding:2px}
+  .sec:hover{border-color:var(--live)}
+  .sec.has{border-color:var(--ok);background:#12241a}
+  .sec.master{box-shadow:0 0 0 2px var(--warn)}
+  .sec .sid{font-weight:700;font-size:11px}
+  .sec .t{color:var(--dim)}
+  .sec .nd{color:var(--ok);font-size:9px}
+  .sec .none{color:var(--faint);font-size:9px}
+  .sunbar{position:absolute;left:0;right:0;height:5px;border-radius:3px;
+          background:linear-gradient(90deg,#3a2c07,#d29922,#3a2c07)}
+
+  /* ── log ──────────────────────────────────────────────────────────── */
+  #log{font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  #log div{padding:1px 0;border-bottom:1px solid #1a212a}
+  .t-err{color:var(--bad)} .t-ok{color:var(--ok)} .t-cmd{color:var(--live)}
+  .t-sys{color:var(--warn)} .t-dim{color:var(--faint)}
+
+  .bar{padding:8px 12px;border-top:1px solid var(--line);background:var(--panel);
+       display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .note{color:var(--faint);font-size:11px;padding:10px 12px;line-height:1.6}
+  .kv{display:flex;gap:6px;font-size:11px;color:var(--dim)}
+  .kv b{color:var(--ink);font-weight:700}
+  .banner{padding:9px 14px;background:#5c1c1c;color:#ffc9c9;font-size:12px;
+          border-bottom:1px solid #8b2b2b;display:none}
+  .banner.show{display:block}
+</style>
+
+<header>
+  <h1>Node bench</h1>
+  <label class="kv">house
+    <select id="house"></select>
+  </label>
+  <button id="claim" class="warn">Mark simulated</button>
+  <span class="sp"></span>
+  <label class="kv">cycle
+    <input type="number" id="cycle" value="30" min="5" max="600"> s
+  </label>
+  <label class="kv"><input type="checkbox" id="run"> run</label>
+  <span class="kv" id="stat">idle</span>
+</header>
+<div class="banner" id="banner"></div>
+
+<main>
+  <section class="pane">
+    <div class="paneHead">Nodes <span class="sp"></span><span id="nodeCount" class="t-dim"></span></div>
+    <div class="paneBody" id="pool"></div>
+    <div class="bar">
+      <input type="number" id="mk" value="8" min="1" max="40">
+      <button id="add">Add boards</button>
+      <button id="wipe" class="bad">Forget all</button>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="paneHead">
+      House <span class="sp"></span>
+      <span id="hint" class="t-dim">pick a node, then tap a section</span>
+    </div>
+    <div class="paneBody" style="display:flex"><div id="map"></div></div>
+    <div class="bar">
+      <button id="skip" class="go">Skip to ready</button>
+      <button id="unassignAll">Unlink all</button>
+      <span class="sp"></span>
+      <span class="kv" id="cal">&mdash;</span>
+    </div>
+  </section>
+
+  <section class="pane" id="logpane">
+    <div class="paneHead">Traffic <span class="sp"></span>
+      <button id="clr" style="padding:2px 7px;font-size:11px">clear</button></div>
+    <div class="paneBody"><div id="log"></div></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+/* The database the real boards write to. Already public: it is compiled into
+   firmware/sensor_node_validate/sensor_node_validate.ino line 311, which is in
+   this same public repository. Putting it here exposes nothing new. */
+const FB = 'https://orchid-smart-care-default-rtdb.firebaseio.com';
+
+const FW = 'validation-1.8';   // must stay >= 1.6 or the backend treats these
+                               // nodes as legacy and widens the online window
+
+/* ══════════════════════════════════════ Firebase REST ═════════════════════ */
+
+async function fb(method, path, body) {
+  const opt = { method: method };
+  if (body !== undefined) {
+    opt.headers = { 'Content-Type': 'application/json' };
+    opt.body = JSON.stringify(body);
+  }
+  try {
+    const r = await fetch(FB + path, opt);
+    if (!r.ok) { log('t-err', method + ' ' + path + ' -> ' + r.status); return null; }
+    const txt = await r.text();
+    return (txt === 'null' || txt === '') ? null : JSON.parse(txt);
+  } catch (e) {
+    log('t-err', method + ' ' + path + ' -> ' + e.message);
+    return null;
+  }
+}
+const fbGet    = function (p)    { return fb('GET', p); };
+const fbPut    = function (p, d) { return fb('PUT', p, d); };
+const fbPatch  = function (p, d) { return fb('PATCH', p, d); };
+const fbPost   = function (p, d) { return fb('POST', p, d); };
+const fbDelete = function (p)    { return fb('DELETE', p); };
+
+/* Firebase push ids, the real algorithm. Generating our own keys lets a whole
+   backfill go up as ONE patch per section instead of 432 POSTs, and these sort
+   chronologically exactly as server-generated ones do, so any reader that
+   trusts key order still gets the right answer. */
+const PUSH_CHARS = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
+let lastPushMs = 0;
+const lastRand = [];
+function pushId(ms) {
+  let now = (ms === undefined) ? Date.now() : ms;
+  const dup = (now === lastPushMs);
+  lastPushMs = now;
+  const tc = new Array(8);
+  for (let i = 7; i >= 0; i--) { tc[i] = PUSH_CHARS.charAt(now % 64); now = Math.floor(now / 64); }
+  let id = tc.join('');
+  if (!dup) { for (let i = 0; i < 12; i++) lastRand[i] = Math.floor(Math.random() * 64); }
+  else { let i = 11; for (; i >= 0 && lastRand[i] === 63; i--) lastRand[i] = 0; lastRand[i]++; }
+  for (let i = 0; i < 12; i++) id += PUSH_CHARS.charAt(lastRand[i]);
+  return id;
+}
+
+/* ══════════════════════════════════════ Randomness ════════════════════════ */
+
+function crc32(str) {
+  let c, crc = 0xFFFFFFFF;
+  for (let i = 0; i < str.length; i++) {
+    c = (crc ^ str.charCodeAt(i)) & 0xFF;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (c >>> 1) ^ 0xEDB88320 : c >>> 1;
+    crc = (crc >>> 8) ^ c;
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rnd, mu, sd) {
+  let u = 0, v = 0;
+  while (u === 0) u = rnd();
+  while (v === 0) v = rnd();
+  return mu + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+/* Beta(2,5) exactly, via order statistics: for integer a,b the a-th smallest of
+   a+b-1 uniforms IS Beta(a,b). Cheaper and more obviously correct than a gamma
+   ratio, and it matches random.betavariate(2,5) in sim_farm.py. */
+function beta25(rnd) {
+  const u = [];
+  for (let i = 0; i < 6; i++) u.push(rnd());
+  u.sort(function (p, q) { return p - q; });
+  return u[1];
+}
+
+/* ══════════════════════════════════════ The field ═════════════════════════ */
+/*
+   Ported from backend/scripts/sim_farm.py. Same structure, same constants, same
+   reasoning - read that file for why each term exists; the comments there are
+   the argument and are not repeated here.
+
+   ONE DELIBERATE DIFFERENCE. sim_farm seeded the building from
+   abs(hash(house_id)), and Python randomises string hashing per process, so it
+   drew a DIFFERENT building on every run - measured 56931, 872 and 32728 for
+   'H5' on three consecutive runs - while its comment promised the opposite.
+   Both files now use crc32, so a house keeps its posts and thin netting in the
+   same places for good. The two layouts are not identical to each other, since
+   the PRNGs differ, but each is stable and drawn from the same distribution.
+*/
+const N_ANOMALIES = 6, ANOMALY_RADIUS_M = 2.2, ANOMALY_STRENGTH_C = 0.8;
+const MAX_LAG_HOURS = 0.75;
+const DRAFT_COOLING_C = 1.2, DRAFT_REACH_M = 3.5;
+const SENSOR_NOISE_C = 0.5;                 // DHT22 datasheet, not a guess
+const CLOUD_BAND_M = 9.0, CLOUD_DRIFT_MS = 4.0;
+
+function makeField(houseId, width, length) {
+  const w = Math.max(Number(width) || 10, 1), l = Math.max(Number(length) || 14, 1);
+  const rnd = mulberry32(crc32(houseId) & 0xFFFF);
+  const anoms = [];
+  for (let i = 0; i < N_ANOMALIES; i++)
+    anoms.push([rnd() * w, rnd() * l, (rnd() * 2 - 1) * ANOMALY_STRENGTH_C]);
+  const doorX = rnd() * w, doorY = (rnd() < 0.5) ? 0 : l;
+
+  function structural(x, y, elev, sunDir) {
+    const len = Math.min(6.0, 1.2 / Math.max(0.2, elev));
+    const shift = len * sunDir;
+    let t = 0;
+    for (let i = 0; i < anoms.length; i++) {
+      const ax = anoms[i][0], ay = anoms[i][1], amp = anoms[i][2];
+      const d2 = Math.pow(x - (ax + shift), 2) + Math.pow(y - ay, 2);
+      t += amp * Math.exp(-d2 / (2 * ANOMALY_RADIUS_M * ANOMALY_RADIUS_M));
+    }
+    return t;
+  }
+
+  return {
+    w: w, l: l,
+    at: function (x, y, hour, cloud, ambient, wind, noise, tMin) {
+      const depth = y / l;
+      const shade = Math.exp(-2.2 * depth);
+      const edge = 1.0 - 0.35 * Math.abs((x / w) - 0.5) * 2.0;
+
+      const h = hour - MAX_LAG_HOURS * depth;
+      const elev = (h >= 6 && h <= 18)
+        ? Math.max(0, Math.sin(Math.PI * (h - 6.0) / 12.0)) : 0;
+      const sun = elev * (1 - cloud);
+      const sunDir = (hour < 12) ? -1 : 1;
+
+      const span = l + 2 * CLOUD_BAND_M;
+      const bandPos = ((((tMin * 60 * CLOUD_DRIFT_MS) % span) + span) % span) - CLOUD_BAND_M;
+      const shadow = Math.exp(-Math.pow(y - bandPos, 2) / (2 * Math.pow(CLOUD_BAND_M / 2.5, 2)));
+      const localSun = sun * (1 - 0.55 * shadow * cloud);
+
+      let temp = 24.0 + ambient + 9.0 * shade * edge * localSun;
+      temp += structural(x, y, elev, sunDir) * (0.3 + 0.7 * localSun);
+
+      const dd = Math.hypot(x - doorX, y - doorY);
+      if (dd < DRAFT_REACH_M) temp -= DRAFT_COOLING_C * wind * (1 - dd / DRAFT_REACH_M);
+      temp += gauss(noise, 0, SENSOR_NOISE_C);
+
+      let humid = 92.0 - 2.6 * (temp - 24.0) + gauss(noise, 0, 1.0);
+      humid = Math.min(99, Math.max(30, humid));
+      const light = 32000 * shade * edge * localSun + gauss(noise, 0, 300);
+
+      temp = Math.round(temp * 10) / 10;
+      humid = Math.round(humid * 10) / 10;
+      const svp = 0.6108 * Math.exp(17.27 * temp / (temp + 237.3));
+      return {
+        temperature: temp,
+        humidity: humid,
+        light: Math.round(Math.max(0, light) * 10) / 10,
+        vpd: Math.round(svp * (1 - humid / 100) * 1000) / 1000
+      };
+    }
+  };
+}
+function weatherAt(rnd) {
+  return { cloud: beta25(rnd), ambient: gauss(rnd, 0, 1.4),
+           wind: Math.max(0, gauss(rnd, 0.35, 0.3)) };
+}
+
+/* ══════════════════════════════════════ State ═════════════════════════════ */
+
+const RELAY_MAX_SEC = 120;          // firmware ceiling, honoured here too
+const CAL_DAYS = 3, CAL_MIN_READINGS = 400;
+const BACKFILL_STEP_MS = 10 * 60 * 1000;   // 10 min, matching the placement bucket
+const BACKFILL_DAYS = 3.05;                // 439 readings - clears 400 with room
+
+let nodes = [];                     // the bench
+let houseId = null, houseMeta = null, sections = {}, field = null;
+let selected = null;                // mac awaiting a section tap
+let ticking = false;
+const fieldCache = {};              // houseId -> {meta, sections, field}
+
+const $ = function (id) { return document.getElementById(id); };
+
+function log(cls, msg) {
+  const el = $('log');
+  if (!el) return;
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = new Date().toLocaleTimeString('en-GB') + '  ' + msg;
+  el.insertBefore(d, el.firstChild);
+  while (el.childNodes.length > 400) el.removeChild(el.lastChild);
+}
+
+function save() {
+  try {
+    localStorage.setItem('orchidBench', JSON.stringify({
+      nodes: nodes.map(function (n) {
+        return { mac: n.mac, on: n.on, ip: n.ip, ssid: n.ssid, rssi: n.rssi };
+      }),
+      houseId: houseId
+    }));
+  } catch (e) { /* private window; the bench still works, it just forgets */ }
+}
+function restore() {
+  try {
+    const raw = localStorage.getItem('orchidBench');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    nodes = (d.nodes || []).map(function (n) {
+      return { mac: n.mac, on: !!n.on, ip: n.ip, ssid: n.ssid, rssi: n.rssi,
+               assignedTo: null, busy: false, last: null, lastCmdId: null };
+    });
+    houseId = d.houseId || null;
+  } catch (e) { /* ignore a corrupt entry rather than dying on load */ }
+}
+
+/* MACs in Espressif's range, so they look like what they are pretending to be.
+   The real node on the bench is 1CC3ABC321A0. */
+function newMac() {
+  let m;
+  do {
+    m = '1CC3AB';
+    for (let i = 0; i < 6; i++) m += '0123456789ABCDEF'[Math.floor(Math.random() * 16)];
+  } while (nodes.some(function (n) { return n.mac === m; }));
+  return m;
+}
+
+/* ══════════════════════════════════════ One node cycle ════════════════════ */
+/*
+   The order is the firmware's order and the order matters: announce, then read
+   the assignment, THEN post - so a reading always lands in whatever section the
+   board currently belongs to, never in the one it belonged to a moment ago.
+*/
+
+async function announce(n) {
+  // PATCH. A PUT here would wipe assignedTo, which the app owns, and silently
+  // unpair every node in the house.
+  await fbPatch('/devices/' + n.mac + '.json', {
+    mac: n.mac, ip: n.ip, rssi: n.rssi, fw: FW, ssid: n.ssid,
+    lastSeen: Math.floor(Date.now() / 1000)
+  });
+}
+
+async function fetchAssignment(n) {
+  const rec = await fbGet('/devices/' + n.mac + '.json');
+  if (!rec) return;
+  const was = n.assignedTo;
+  const v = rec.assignedTo;
+  n.assignedTo = (v && String(v).indexOf('/') > 0) ? String(v) : null;
+  if (was !== n.assignedTo) {
+    log('t-sys', n.mac.slice(-4) + ' assignment ' + (n.assignedTo || 'cleared'));
+    renderPool(); renderMap();
+  }
+}
+
+/* The house a node is assigned to is not necessarily the one on screen, so the
+   geometry is fetched per house and cached. A real board has no idea where it
+   is; it reports to the section the app named, and the field is sampled at that
+   section's stored coordinates. */
+async function geomFor(hid) {
+  if (fieldCache[hid]) return fieldCache[hid];
+  const meta = await fbGet('/farm/houses/' + hid + '/meta.json');
+  if (!meta) return null;
+  if (!meta.simulated) {
+    log('t-err', 'REFUSED: ' + hid + ' is not marked simulated. Nothing written.');
+    fieldCache[hid] = null;
+    return null;
+  }
+  const secs = await fbGet('/farm/houses/' + hid + '/sections.json') || {};
+  const pos = {};
+  Object.keys(secs).forEach(function (sid) {
+    const m = (secs[sid] || {}).meta || {};
+    if (m.x !== undefined && m.y !== undefined)
+      pos[sid] = { x: Number(m.x), y: Number(m.y), name: m.name || sid };
+  });
+  const g = { meta: meta, pos: pos,
+              field: makeField(hid, meta.width, meta.length) };
+  fieldCache[hid] = g;
+  return g;
+}
+
+/* One reading, at one place, at one moment. Weather is drawn from the MOMENT so
+   every section in the house sees the same sky - that shared term is what makes
+   the field spatially coherent instead of eight independent noise generators. */
+function readingAt(g, sid, tMs) {
+  const p = g.pos[sid];
+  if (!p) return null;
+  const wr = mulberry32(crc32(String(tMs)) & 0xFFFFFFF);
+  const w = weatherAt(wr);
+  const nr = mulberry32(crc32(sid + ':' + tMs) & 0xFFFFFFF);
+  const d = new Date(tMs);
+  const hour = d.getHours() + d.getMinutes() / 60;
+  const r = g.field.at(p.x, p.y, hour, w.cloud, w.ambient, w.wind, nr, tMs / 60000);
+
+  // The probe. Raw counts drift slowly with the tray; the percentage is the
+  // firmware's mapping of that raw value, not an independent number.
+  const raw = Math.round(1750 + 260 * Math.sin(tMs / 36e5) + gauss(nr, 0, 40));
+  return {
+    temperature: r.temperature,
+    humidity: r.humidity,
+    light: r.light,
+    vpd: r.vpd,
+    timestamp: tMs,
+    sampleMoisture: Math.round(Math.max(0, Math.min(100, (2600 - raw) / 12)) * 10) / 10,
+    soilRaw: raw,
+    sensorFault: false,
+    node: 'validation'
+  };
+}
+
+async function postReading(n) {
+  const parts = n.assignedTo.split('/');
+  const hid = parts[0], sid = parts[1];
+  const g = await geomFor(hid);
+  if (!g || !g.pos[sid]) return;
+
+  const now = Date.now();                 // real wall clock, never ahead of it
+  const rd = readingAt(g, sid, now);
+  if (!rd) return;
+  n.last = rd;
+  await fbPut('/farm/houses/' + hid + '/sections/' + sid + '/latest.json', rd);
+  await fbPost('/farm/history/' + hid + '/' + sid + '.json', rd);
+  log('t-dim', n.mac.slice(-4) + ' ' + sid + '  ' + rd.temperature + 'C  '
+      + rd.humidity + '%  ' + Math.round(rd.light) + ' lx');
+}
+
+/* ── commands ───────────────────────────────────────────────────────────── */
+/*
+   Two contracts, both real, both polled - exactly as the firmware does.
+
+   A section command at .../command is what an unrouted action uses; the master
+   queue at /farm/masters/{MAC}/queue is what every pour goes through now. A
+   simulator that only implemented one of them would pass tests the hardware
+   fails.
+*/
+
+function pourSeconds(secs) {
+  const s = Math.max(0, Math.min(RELAY_MAX_SEC, Number(secs) || 0));
+  return new Promise(function (res) { setTimeout(res, s * 1000); });
+}
+
+async function pollSectionCommand(n) {
+  if (!n.assignedTo || n.busy) return;
+  const parts = n.assignedTo.split('/');
+  const base = '/farm/houses/' + parts[0] + '/sections/' + parts[1];
+  const c = await fbGet(base + '/command.json');
+  if (!c || !c.id || c.id === n.lastCmdId) return;
+
+  n.lastCmdId = c.id;
+  const secs = Math.max(0, Math.min(RELAY_MAX_SEC, Number(c.durationSec) || 0));
+  n.busy = true; renderPool();
+  log('t-cmd', n.mac.slice(-4) + ' section cmd ' + c.action + ' ' + secs + 's');
+  await pourSeconds(secs);
+  n.busy = false; renderPool();
+
+  await fbPut(base + '/commandAck.json', {
+    id: c.id, action: c.action, durationSec: secs,
+    started: true, stopped: false, done: true,
+    at: Math.floor(Date.now() / 1000)
+  });
+  log('t-ok', n.mac.slice(-4) + ' acked ' + c.id);
+}
+
+async function pollMasterQueue(n) {
+  if (n.busy) return;
+  const q = await fbGet('/farm/masters/' + n.mac + '/queue.json');
+  if (!q) return;
+  const ids = Object.keys(q);
+  if (!ids.length) return;
+
+  // ONE at a time. Eight channels, one pump: two valves open together halves
+  // the pressure at both and under-waters two sections instead of watering one.
+  const id = ids.sort()[0];
+  const c = q[id] || {};
+  const ch = Number(c.channel) || 0;
+  const target = c.targetSection || '?';
+
+  if (ch < 1 || ch > 8) {
+    await ackMaster(n, id, target, ch, 0, 'invalid');
+    log('t-err', n.mac.slice(-4) + ' bad channel ' + ch + ' -> invalid');
+    return;
+  }
+  if (c.action !== 'water' && c.action !== 'tray') {
+    await ackMaster(n, id, target, ch, 0, 'unsupported');
+    return;
+  }
+
+  const secs = Math.max(0, Math.min(RELAY_MAX_SEC, Number(c.durationSec) || 0));
+  n.busy = true; renderPool();
+  log('t-cmd', n.mac.slice(-4) + ' MASTER ' + c.action + ' ' + target
+      + ' ch' + ch + ' ' + secs + 's');
+  await pourSeconds(secs);
+  n.busy = false; renderPool();
+
+  await ackMaster(n, id, target, ch, secs, 'ok');
+  log('t-ok', n.mac.slice(-4) + ' ' + target + ' poured ' + secs + 's');
+}
+
+async function ackMaster(n, id, section, channel, ranSec, outcome) {
+  // Ack FIRST, then delete: a crash between the two leaves evidence the pour
+  // happened rather than a silently empty queue.
+  await fbPut('/farm/masters/' + n.mac + '/acks/' + id + '.json', {
+    id: id, targetSection: section, channel: channel, ranSec: ranSec,
+    outcome: outcome, by: n.mac, at: Math.floor(Date.now() / 1000)
+  });
+  await fbDelete('/farm/masters/' + n.mac + '/queue/' + id + '.json');
+}
+
+async function cycleOne(n) {
+  if (!n.on) return;
+  await announce(n);
+  await fetchAssignment(n);
+  if (n.assignedTo) await postReading(n);
+  await pollSectionCommand(n);
+  await pollMasterQueue(n);
+}
+
+/* Commands are polled far more often than readings are posted, because that is
+   what the firmware does: a pour has to start within seconds of the button, but
+   a reading every ten seconds would be a different sensor. */
+async function tick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    for (const n of nodes) {
+      if (!n.on) continue;
+      await pollSectionCommand(n);
+      await pollMasterQueue(n);
+    }
+  } finally { ticking = false; }
+}
+
+let lastFull = 0;
+async function fullCycle() {
+  const every = Math.max(5, Number($('cycle').value) || 30) * 1000;
+  if (Date.now() - lastFull < every) return;
+  lastFull = Date.now();
+  for (const n of nodes) await cycleOne(n);
+  refreshCal();
+}
+
+/* ══════════════════════════════════════ Skip to ready ═════════════════════ */
+/*
+   Writes the calibration window that three real days would have produced, and
+   moves startedAt back to match. Both halves are needed: the backend's
+   readiness check requires the elapsed days AND every section above
+   minReadings, deliberately, so that a progress bar cannot advance while a node
+   is unplugged.
+
+   The readings are real field samples at real past timestamps, ten minutes
+   apart and ALIGNED ACROSS SECTIONS - which is what the placement analysis
+   needs, since it only uses moments every section contributed to.
+*/
+async function skipToReady() {
+  if (!houseId || !houseMeta) return;
+  if (!houseMeta.simulated) { alert('Mark the house simulated first.'); return; }
+
+  const placed = nodes.filter(function (n) {
+    return n.assignedTo && n.assignedTo.split('/')[0] === houseId;
+  });
+  const sids = Object.keys(sections).sort();
+  const covered = {};
+  placed.forEach(function (n) { covered[n.assignedTo.split('/')[1]] = true; });
+  const missing = sids.filter(function (s) { return !covered[s]; });
+
+  if (missing.length) {
+    if (!confirm('These sections have no node and will get no data:\n  '
+        + missing.join(', ')
+        + '\n\nThe house will NOT reach ready until they do. Continue anyway?')) return;
+  }
+  const n = Math.ceil(BACKFILL_DAYS * 86400000 / BACKFILL_STEP_MS);
+  if (!confirm('Write ' + n + ' readings to each of ' + (sids.length - missing.length)
+      + ' section(s), covering the last ' + BACKFILL_DAYS + ' days, and move the '
+      + 'calibration start back to match?')) return;
+
+  const g = await geomFor(houseId);
+  if (!g) return;
+
+  $('skip').disabled = true;
+  const t0 = Date.now();
+  // Align every section to the same grid of instants, ending now.
+  const stamps = [];
+  for (let k = n - 1; k >= 0; k--) stamps.push(t0 - k * BACKFILL_STEP_MS);
+
+  let written = 0;
+  for (const sid of sids) {
+    if (!covered[sid]) continue;
+    const batch = {};
+    let last = null;
+    for (const t of stamps) {
+      const rd = readingAt(g, sid, t);
+      if (!rd) continue;
+      batch[pushId(t)] = rd;
+      last = rd;
+    }
+    // A successful PATCH echoes the object back; fb() returns null on failure.
+    const echo = await fbPatch('/farm/history/' + houseId + '/' + sid + '.json', batch);
+    if (echo === null) { log('t-err', sid + ' backfill FAILED - not counted'); continue; }
+    written += Object.keys(batch).length;
+    if (last) await fbPut('/farm/houses/' + houseId + '/sections/' + sid + '/latest.json', last);
+    log('t-ok', 'backfilled ' + sid + ': ' + Object.keys(batch).length + ' readings');
+  }
+
+  await fbPatch('/farm/houses/' + houseId + '/meta/calibration.json', {
+    startedAt: t0 - BACKFILL_DAYS * 86400000,
+    targetDays: CAL_DAYS,
+    minReadings: CAL_MIN_READINGS
+  });
+  log('t-sys', 'calibration start moved back ' + BACKFILL_DAYS + ' days; '
+      + written + ' readings written');
+  $('skip').disabled = false;
+  await loadHouse(houseId);
+  refreshCal();
+}
+
+/* Counted the way the backend counts it - from stored readings, shallow so the
+   whole archive is not downloaded to find its length. */
+async function refreshCal() {
+  if (!houseId) { $('cal').textContent = '—'; return; }
+  const sids = Object.keys(sections).sort();
+  if (!sids.length) { $('cal').textContent = 'no sections'; return; }
+  let ready = 0;
+  for (const sid of sids) {
+    const keys = await fbGet('/farm/history/' + houseId + '/' + sid + '.json?shallow=true');
+    const c = keys ? Object.keys(keys).length : 0;
+    sections[sid].readings = c;
+    if (c >= CAL_MIN_READINGS) ready++;
+  }
+  const cal = (houseMeta && houseMeta.calibration) || {};
+  const days = cal.startedAt ? (Date.now() - cal.startedAt) / 86400000 : 0;
+  $('cal').innerHTML = '<b>' + ready + '/' + sids.length + '</b> sections have data &middot; <b>'
+    + days.toFixed(2) + '</b> of ' + CAL_DAYS + ' days';
+  renderMap();
+}
+
+/* ══════════════════════════════════════ Assignment ════════════════════════ */
+/*
+   The same two writes the app's own assign endpoint makes (devices.py), in the
+   same order, including displacing whoever held the section first - so there is
+   never a moment where two boards both believe they own it.
+
+   Doing it here is a shortcut for the tapping, not a second source of truth:
+   every node re-reads assignedTo from /devices each cycle, so a link made in
+   the APP is picked up exactly the same way. Both routes work; neither wins.
+*/
+async function assign(mac, sid) {
+  const target = houseId + '/' + sid;
+
+  const holder = nodes.find(function (n) { return n.assignedTo === target && n.mac !== mac; });
+  if (holder) {
+    await fbDelete('/devices/' + holder.mac + '/assignedTo.json');
+    holder.assignedTo = null;
+    log('t-sys', holder.mac.slice(-4) + ' displaced from ' + sid);
+  }
+  await fbPut('/devices/' + mac + '/assignedTo.json', target);
+  await fbPut('/farm/houses/' + houseId + '/sections/' + sid + '/deviceMac.json', mac);
+
+  const n = nodes.find(function (x) { return x.mac === mac; });
+  if (n) { n.assignedTo = target; n.on = true; }
+  log('t-ok', mac.slice(-4) + ' installed in ' + sid);
+  selected = null;
+  renderPool(); renderMap();
+  if (n) cycleOne(n);
+}
+
+async function unassign(mac) {
+  const n = nodes.find(function (x) { return x.mac === mac; });
+  if (!n || !n.assignedTo) return;
+  const parts = n.assignedTo.split('/');
+  await fbDelete('/devices/' + mac + '/assignedTo.json');
+  await fbDelete('/farm/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json');
+  log('t-sys', mac.slice(-4) + ' taken out of ' + parts[1]);
+  n.assignedTo = null;
+  renderPool(); renderMap();
+}
+
+/* Taking a board out of the house for good - what the placement result tells
+   the farmer to do with the sensors it found redundant. The device record goes
+   too, otherwise the app keeps offering a node that is sitting in a drawer. */
+async function removeNode(mac) {
+  const n = nodes.find(function (x) { return x.mac === mac; });
+  if (!n) return;
+  if (!confirm('Remove board ' + mac.slice(-4) + ' from the farm?\n'
+      + 'It is unlinked from its section and deleted from /devices.')) return;
+  await unassign(mac);
+  await fbDelete('/devices/' + mac + '.json');
+  nodes = nodes.filter(function (x) { return x.mac !== mac; });
+  if (selected === mac) selected = null;
+  save(); renderPool(); renderMap();
+  log('t-sys', mac.slice(-4) + ' removed');
+}
+
+/* ══════════════════════════════════════ Rendering ═════════════════════════ */
+
+function renderPool() {
+  const el = $('pool');
+  el.innerHTML = '';
+  $('nodeCount').textContent = nodes.length
+    ? nodes.filter(function (n) { return n.on; }).length + ' on / ' + nodes.length
+    : '';
+
+  if (!nodes.length) {
+    el.innerHTML = '<div class="note">No boards on the bench.<br><br>'
+      + 'Add some below. Each one announces itself to <b>/devices</b> exactly as a '
+      + 'real ESP32 does, so it turns up in the app’s <i>Link a node</i> list '
+      + 'within about 30 seconds.</div>';
+    return;
+  }
+
+  nodes.forEach(function (n) {
+    const d = document.createElement('div');
+    d.className = 'node' + (selected === n.mac ? ' sel' : '') + (n.on ? '' : ' off');
+    const where = n.assignedTo
+      ? n.assignedTo.replace('/', ' › ')
+      : 'unassigned';
+    const dot = n.busy ? 'dot busy' : (n.on ? 'dot on' : 'dot');
+    const lastTxt = n.last
+      ? n.last.temperature + 'C ' + n.last.humidity + '%'
+      : (n.on ? 'waiting' : 'powered off');
+
+    d.innerHTML =
+      '<span class="' + dot + '"></span>' +
+      '<span class="col">' +
+        '<div class="id">' + n.mac.slice(-4) + '</div>' +
+        '<div class="meta">' + lastTxt + '</div>' +
+        '<div class="where">' + where + '</div>' +
+      '</span>';
+
+    const pw = document.createElement('button');
+    pw.textContent = n.on ? 'off' : 'on';
+    pw.style.cssText = 'padding:2px 7px;font-size:11px';
+    pw.onclick = function (ev) {
+      ev.stopPropagation();
+      n.on = !n.on;
+      log('t-sys', n.mac.slice(-4) + ' powered ' + (n.on ? 'on' : 'off'));
+      save(); renderPool();
+      if (n.on) cycleOne(n);
+    };
+    d.appendChild(pw);
+
+    const rm = document.createElement('button');
+    rm.textContent = '×';
+    rm.style.cssText = 'padding:2px 7px;font-size:11px';
+    rm.onclick = function (ev) { ev.stopPropagation(); removeNode(n.mac); };
+    d.appendChild(rm);
+
+    d.onclick = function () {
+      selected = (selected === n.mac) ? null : n.mac;
+      $('hint').textContent = selected
+        ? 'now tap the section board ' + n.mac.slice(-4) + ' goes into'
+        : 'pick a node, then tap a section';
+      renderPool();
+    };
+    el.appendChild(d);
+  });
+}
+
+function renderMap() {
+  const el = $('map');
+  el.innerHTML = '';
+  if (!houseId) { el.style.cssText = ''; el.innerHTML =
+      '<div class="note">Pick a house above.</div>'; return; }
+
+  const W = Number(houseMeta && houseMeta.width) || 10;
+  const L = Number(houseMeta && houseMeta.length) || 14;
+  const px = Math.min(560 / W, 460 / L, 46);
+  el.style.width = (W * px) + 'px';
+  el.style.height = (L * px) + 'px';
+
+  // The open, sun-facing edge is y = 0 - the same convention the field uses,
+  // where shade falls off with depth from that edge.
+  const sun = document.createElement('div');
+  sun.className = 'sunbar';
+  sun.style.top = '-9px';
+  sun.title = 'open sun-facing edge';
+  el.appendChild(sun);
+
+  const masterMac = houseMeta && houseMeta.masterMac;
+
+  Object.keys(sections).sort().forEach(function (sid) {
+    const s = sections[sid];
+    const holder = nodes.find(function (n) { return n.assignedTo === houseId + '/' + sid; });
+    const d = document.createElement('div');
+    d.className = 'sec' + (holder ? ' has' : '')
+                + (holder && masterMac === holder.mac ? ' master' : '');
+    d.style.left = ((s.x / W) * 100) + '%';
+    d.style.top = ((s.y / L) * 100) + '%';
+    d.title = sid + '  (' + s.x.toFixed(1) + ', ' + s.y.toFixed(1) + ' m)'
+            + (s.readings !== undefined ? '\n' + s.readings + ' readings' : '');
+    d.innerHTML =
+      '<span class="sid">' + sid + '</span>' +
+      (holder
+        ? '<span class="nd">' + holder.mac.slice(-4) + '</span>'
+          + '<span class="t">' + (holder.last ? holder.last.temperature + 'C' : '…') + '</span>'
+        : '<span class="none">no node</span>') +
+      (s.readings !== undefined
+        ? '<span class="t" style="font-size:9px">' + s.readings + '</span>' : '');
+
+    d.onclick = function () {
+      if (selected) { assign(selected, sid); return; }
+      if (holder) unassign(holder.mac);
+    };
+    el.appendChild(d);
+  });
+}
+
+/* ══════════════════════════════════════ Houses ════════════════════════════ */
+
+async function loadHouses() {
+  const hs = await fbGet('/farm/houses.json?shallow=true') || {};
+  const ids = Object.keys(hs).sort();
+  const sel = $('house');
+  sel.innerHTML = '<option value="">— pick —</option>';
+  for (const id of ids) {
+    const m = await fbGet('/farm/houses/' + id + '/meta.json') || {};
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = id + '  ' + (m.name || '') + (m.simulated ? '  [sim]' : '  [REAL]');
+    sel.appendChild(o);
+  }
+  if (houseId && ids.indexOf(houseId) >= 0) sel.value = houseId;
+  if (sel.value) await loadHouse(sel.value);
+}
+
+async function loadHouse(id) {
+  houseId = id || null;
+  delete fieldCache[id];
+  if (!houseId) { houseMeta = null; sections = {}; renderMap(); return; }
+
+  houseMeta = await fbGet('/farm/houses/' + houseId + '/meta.json') || {};
+  const secs = await fbGet('/farm/houses/' + houseId + '/sections.json') || {};
+  sections = {};
+  Object.keys(secs).forEach(function (sid) {
+    const m = (secs[sid] || {}).meta || {};
+    sections[sid] = { x: Number(m.x) || 0, y: Number(m.y) || 0, name: m.name || sid };
+  });
+
+  const b = $('banner');
+  if (!houseMeta.simulated) {
+    b.className = 'banner show';
+    b.textContent = houseId + ' is NOT marked simulated. Nothing will be written to it. '
+      + 'Readings invented into a measured archive cannot be separated out afterwards.';
+  } else {
+    b.className = 'banner';
+  }
+  $('claim').disabled = !!houseMeta.simulated;
+  save(); renderMap(); refreshCal();
+}
+
+async function claimHouse() {
+  if (!houseId) return;
+  if (houseId === 'H1') {
+    alert('H1 is the real house with real plants and real sensors.\n'
+        + 'It will not be marked simulated from here.');
+    return;
+  }
+  if (!confirm('Mark ' + houseId + ' as simulated?\n\n'
+      + 'Everything written to it from then on is invented, and it should never '
+      + 'be used as evidence of anything the hardware did.')) return;
+  await fbPatch('/farm/houses/' + houseId + '/meta.json', { simulated: true });
+  log('t-sys', houseId + ' marked simulated');
+  await loadHouses();
+}
+
+/* ══════════════════════════════════════ Wiring ════════════════════════════ */
+
+$('add').onclick = function () {
+  const k = Math.max(1, Math.min(40, Number($('mk').value) || 1));
+  for (let i = 0; i < k; i++) {
+    nodes.push({
+      mac: newMac(), on: true,
+      ip: '192.168.1.' + (100 + Math.floor(Math.random() * 130)),
+      ssid: 'OrchidFarm', rssi: -(45 + Math.floor(Math.random() * 35)),
+      assignedTo: null, busy: false, last: null, lastCmdId: null
+    });
+  }
+  save(); renderPool();
+  log('t-sys', k + ' board(s) added; they announce on the next cycle');
+  nodes.slice(-k).forEach(function (n) { cycleOne(n); });
+};
+
+$('wipe').onclick = function () {
+  if (!nodes.length) return;
+  if (!confirm('Forget all ' + nodes.length + ' boards on this bench?\n\n'
+      + 'Their /devices records stay in Firebase and will still show in the app '
+      + 'until they age out. Use × on a card to delete one properly.')) return;
+  nodes = []; selected = null; save(); renderPool(); renderMap();
+};
+
+$('house').onchange = function () { loadHouse(this.value); };
+$('claim').onclick = claimHouse;
+$('skip').onclick = skipToReady;
+$('clr').onclick = function () { $('log').innerHTML = ''; };
+
+$('unassignAll').onclick = async function () {
+  const mine = nodes.filter(function (n) {
+    return n.assignedTo && n.assignedTo.split('/')[0] === houseId;
+  });
+  if (!mine.length) return;
+  if (!confirm('Unlink ' + mine.length + ' node(s) from ' + houseId + '?')) return;
+  for (const n of mine) await unassign(n.mac);
+};
+
+$('run').onchange = function () {
+  log('t-sys', this.checked ? 'bench running' : 'bench stopped');
+  $('stat').textContent = this.checked ? 'running' : 'idle';
+};
+
+/* Two loops at two rates, matching the firmware: commands are polled every two
+   seconds so a pour starts when the button is pressed, readings go up on the
+   node's own read interval. */
+setInterval(function () { if ($('run').checked) tick(); }, 2000);
+setInterval(function () { if ($('run').checked) fullCycle(); }, 1000);
+
+restore();
+renderPool();
+loadHouses();
+log('t-sys', 'bench ready — ' + FB);
+log('t-dim', 'Do not run backend/scripts/sim_farm.py against the same house at '
+    + 'the same time, and do not open this page in two tabs.');
+</script>
