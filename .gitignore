@@ -39,6 +39,12 @@ wandb/
 mlruns/
 *.tfevents*
 
+# Trained model artifacts we do want in git
+!ml-models/bloom_prediction/models/vanda_bloom_model.h5
+!ml-models/bloom_prediction/models/tabular_scaler.pkl
+!ml-models/growth_stage/models/vanda_growth_model.h5
+!ml-models/growth_stage/models/label_encoder.pkl
+
 # Large datasets (store in cloud, not git)
 ml-models/*/data/raw/
 ml-models/*/data/raw.zip
