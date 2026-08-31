@@ -29,6 +29,10 @@ const HybridPollinationScreen = ({ navigation }) => {
   // Corrections start folded: the photograph answers all four traits,
   // so showing empty inputs first is what made the system look input-driven.
   const [showCorrections, setShowCorrections] = useState(false);
+  // Optional close-up of ONE leaf. Disease cannot be read from a whole-plant
+  // frame - measured at AUC 0.51 - so this is the image that actually goes to
+  // Component 1's disease model.
+  const [closeupImage, setCloseupImage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [guidanceData, setGuidanceData] = useState(null);
   const [activeTab, setActiveTab] = useState('assess'); // 'assess' | 'cross' | 'varieties'
@@ -82,6 +86,40 @@ const HybridPollinationScreen = ({ navigation }) => {
     }
   };
 
+  const pickCloseup = async () => {
+    const permResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permResult.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      return;
+    }
+    const pickerResult = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.8,
+      allowsEditing: true,
+    });
+    if (!pickerResult.canceled && pickerResult.assets?.[0]) {
+      setCloseupImage(pickerResult.assets[0].uri);
+      setResult(null);
+      setRejection(null);
+    }
+  };
+
+  const captureCloseup = async () => {
+    const permResult = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permResult.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your camera.');
+      return;
+    }
+    const pickerResult = await ImagePicker.launchCameraAsync({
+      quality: 0.8, allowsEditing: true,
+    });
+    if (!pickerResult.canceled && pickerResult.assets?.[0]) {
+      setCloseupImage(pickerResult.assets[0].uri);
+      setResult(null);
+      setRejection(null);
+    }
+  };
+
   const takePhoto = async () => {
     const permResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permResult.granted) {
@@ -119,7 +157,7 @@ const HybridPollinationScreen = ({ navigation }) => {
     setRejection(null);
 
     try {
-      const response = await assessSuitability(selectedImage, traits);
+      const response = await assessSuitability(selectedImage, traits, closeupImage);
       setResult(response);
 
       // Auto-fetch guidance
@@ -236,6 +274,43 @@ const HybridPollinationScreen = ({ navigation }) => {
       </View>
 
       {/* Trait Selection */}
+      {/* Optional leaf close-up.
+          Disease was measured at AUC 0.51 from a whole-plant frame - lesions
+          span 1-3 px at that distance. Component 1's model is trained on
+          leaves, so this is the image that actually reaches it. Optional
+          because the rest of the assessment works without it. */}
+      <Text style={styles.sectionTitle}>Leaf close-up (optional)</Text>
+      <Text style={styles.traitsIntro}>
+        Disease cannot be judged from a whole-plant photo. Add a close-up of one
+        leaf and it is sent to the disease model.
+      </Text>
+      <View style={[styles.imageCard, SHADOW.sm]}>
+        {closeupImage ? (
+          <Image source={{ uri: closeupImage }} style={styles.previewImage} />
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Ionicons name="leaf-outline" size={30} color={COLORS.textTertiary} />
+            <Text style={styles.placeholderText}>No close-up added</Text>
+          </View>
+        )}
+        <View style={styles.imageActions}>
+          <TouchableOpacity style={styles.imageBtn} onPress={pickCloseup}>
+            <Ionicons name="images-outline" size={16} color={COLORS.primary} />
+            <Text style={styles.imageBtnText}>Gallery</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.imageBtn} onPress={captureCloseup}>
+            <Ionicons name="camera-outline" size={16} color={COLORS.primary} />
+            <Text style={styles.imageBtnText}>Camera</Text>
+          </TouchableOpacity>
+          {closeupImage && (
+            <TouchableOpacity style={styles.imageBtn} onPress={() => setCloseupImage(null)}>
+              <Ionicons name="close-outline" size={16} color={COLORS.textTertiary} />
+              <Text style={[styles.imageBtnText, { color: COLORS.textTertiary }]}>Remove</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
       {/* Collapsed by default, and that is the point.
           The review asked whether user input was necessary. It is not - all
           four traits are read from the photograph. Keeping the fields visible
