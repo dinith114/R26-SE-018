@@ -45,6 +45,14 @@
   real house with real plants. The Claim button marks a house simulated, and it
   refuses H1 outright.
 
+  THE ENGINE PASS IS FARM-WIDE
+  ----------------------------
+  run-now is not scoped to a section. It evaluates EVERY house, so a button
+  aimed at a simulated one can open a valve in a real one - and the pretend
+  clock makes that likelier, not less, because it can land on a minute the real
+  house is due. Every scenario button therefore checks the non-simulated houses
+  first and refuses if any of them would act. See realRisk().
+
   FORCING A CONDITION
   -------------------
   A node can be pushed to a dry or a hot state so the farm has to react. That is
@@ -1233,8 +1241,21 @@ async function runEngine(at, why) {
   return d;
 }
 
-$('runNow').onclick = function () {
-  runEngine(null, null).catch(function (e) { log('t-err', 'engine: ' + e.message); });
+$('runNow').onclick = async function () {
+  // Same reach as the scenario buttons, so the same check. It runs at the real
+  // minute rather than a pretend one, which makes it likelier to be harmless -
+  // not guaranteed to be.
+  try {
+    const risk = await realRisk(farmNow(), 'water');
+    if (risk.length) {
+      log('t-err', 'REFUSED: a pass right now would water a REAL section:');
+      risk.forEach(function (r) { log('t-err', '   ' + r); });
+      return;
+    }
+    await runEngine(null, null);
+  } catch (e) {
+    log('t-err', 'engine: ' + e.message);
+  }
 };
 
 /* ═══════════════════ Scenarios ════════════════════════════════════════════
@@ -1281,6 +1302,61 @@ async function showMode() {
   return alone;
 }
 
+/* Which REAL sections could this pass command?
+ *
+ * `simulated: true` is the same flag the writing guard uses, so a house is
+ * either the bench's to play with or it is somebody's plants. There is no
+ * middle case and this deliberately does not invent one.
+ *
+ * `kind` is 'water' or 'tray'. Watering is decided from data this function can
+ * read, so it answers precisely. The tray is decided by a model from the live
+ * reading, so it does not guess - it returns every section that is eligible and
+ * lets the operator decide.
+ */
+const WATER_WINDOW_MIN = 20;      // _due_sessions in automation.py
+
+async function realRisk(at, kind) {
+  const houses = await fbGet('/farm/houses.json') || {};
+  const farmAuto = !!(await fbGet('/farm/meta/autoMode.json'));
+  const day = at.getFullYear() + '-' + String(at.getMonth() + 1).padStart(2, '0')
+            + '-' + String(at.getDate()).padStart(2, '0');
+  const mins = at.getHours() * 60 + at.getMinutes();
+  const risk = [];
+
+  Object.keys(houses).forEach(function (hid) {
+    const h = houses[hid] || {};
+    if (((h.meta || {}).simulated) === true) return;        // the bench's own
+    const secs = h.sections || {};
+    Object.keys(secs).forEach(function (sid) {
+      const sec = secs[sid] || {};
+      const ctrl = sec.control || {};
+      // section_acts_alone(): an override wins over the farm switch, absent
+      // means follow it. Only a section that acts ALONE opens a valve; one that
+      // alarms instead is harmless here.
+      const alone = ctrl.override === 'auto' ? true
+                  : ctrl.override === 'manual' ? false : farmAuto;
+      if (!alone) return;
+      const name = (h.meta || {}).name || hid;
+
+      if (kind === 'water') {
+        const plan = sec.plan || {};
+        if (plan.date !== day || !plan.waterTime) return;
+        const hm = String(plan.waterTime).split(':');
+        const due = Number(hm[0]) * 60 + Number(hm[1]);
+        if (mins < due || mins > due + WATER_WINDOW_MIN) return;
+        const log = (sec.watering || {}).log || {};
+        if (log[day + '-first']) return;                    // _already_done
+        risk.push(hid + '/' + sid + ' (' + name + ') is due at ' + plan.waterTime
+                  + ' for ' + plan.durationSec + 's');
+      } else {
+        if (ctrl.trayEnabled === false) return;
+        risk.push(hid + '/' + sid + ' (' + name + ') tray is automatic');
+      }
+    });
+  });
+  return risk;
+}
+
 /* PLAN, THEN RUN AT THE PLANNED MINUTE.
    The engine plans once a day (lastPlanDay) and skips any section that had no
    reading at the time, so a section whose node came online at 06:24 gets no
@@ -1309,6 +1385,18 @@ async function scWater() {
     const hm = String(plan.waterTime).split(':');
     const at = farmNow();
     at.setHours(Number(hm[0]), Number(hm[1]) + 1, 0, 0);
+
+    // The pass is farm-wide. Refuse rather than water somebody's plants.
+    const risk = await realRisk(at, 'water');
+    if (risk.length) {
+      log('t-err', 'REFUSED: a pass at ' + stamp(at) + ' would also water a REAL '
+          + 'section, because run-now evaluates the whole farm:');
+      risk.forEach(function (r) { log('t-err', '   ' + r); });
+      log('t-dim', 'Wait until that window has passed, or water it from the app '
+          + 'first so the day is logged, then try again.');
+      return;
+    }
+
     const did = await runEngine(stamp(at), 'the planned minute');
 
     const w = did.water || {};
@@ -1349,6 +1437,26 @@ async function scTray() {
       log('t-err', 'the tray is never filled outside 06:00-18:00 farm time (now '
           + stamp(at) + ') - the engine will skip it');
     }
+    /* No precise check is possible here: the fill is decided by a model from
+       the live reading, and this page cannot run it. So it says exactly what it
+       does not know, lists what is exposed, and asks. */
+    const risk = await realRisk(at, 'tray');
+    if (risk.length) {
+      log('t-err', 'A tray pass covers the WHOLE farm, and whether a real tray '
+          + 'fills is decided by the model from its own reading - this page '
+          + 'cannot know in advance.');
+      risk.forEach(function (r) { log('t-err', '   ' + r); });
+      if (!confirm('This runs the tray cycle for the WHOLE farm, including '
+          + risk.length + ' real section(s):\n\n  ' + risk.join('\n  ')
+          + '\n\nWhether their valves open is the model\'s decision from their '
+          + 'own readings, so it cannot be predicted here. Real pumps may run.\n\n'
+          + 'Continue?')) {
+        log('t-sys', 'tray pass cancelled - nothing was sent');
+        return;
+      }
+      log('t-sys', 'operator accepted the farm-wide tray pass');
+    }
+
     const did = await runEngine(stamp(at), 'past the 15 min tray guard');
     const t = did.tray || {};
     const key = houseId + '-' + sid;
