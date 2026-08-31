@@ -202,7 +202,14 @@
       <button id="fHot" class="warn">Hot</button>
       <span class="sp"></span>
       <button id="runNow" class="go">Run engine now</button>
-      <button id="runAt">Run at 06:30</button>
+    </div>
+    <div class="bar">
+      <span class="kv">scenario</span>
+      <select id="scSec" style="min-width:150px"></select>
+      <span class="kv" id="scMode">&mdash;</span>
+      <span class="sp"></span>
+      <button id="scWater" class="go">Watering</button>
+      <button id="scTray" class="go">Tray</button>
     </div>
   </section>
 
@@ -1083,7 +1090,7 @@ async function loadHouse(id) {
     b.className = 'banner';
   }
   $('claim').disabled = !!houseMeta.simulated;
-  save(); renderMap(); refreshCal();
+  save(); renderMap(); refreshCal(); fillScenario();
 }
 
 async function claimHouse() {
@@ -1152,6 +1159,212 @@ $('wipe').onclick = async function () {
   }
   log('t-sys', gone + ' board(s) removed from /devices - they will stop showing in the app');
 };
+
+function setForce(kind) {
+  const n = nodes.find(function (x) { return x.mac === selected; });
+  if (!n) { log('t-err', 'Pick a node first, then force it.'); return; }
+  if (!n.assignedTo) { log('t-err', n.mac.slice(-4) + ' is not in a section yet.'); return; }
+  n.force = kind;
+  log(kind ? 't-sys' : 't-ok',
+      n.mac.slice(-4) + ' -> ' + (kind ? kind.toUpperCase() + ': ' + FORCE[kind].why
+                                       : 'back to the simulated field'));
+  renderPool();
+  cycleOne(n);          // report it immediately rather than on the next cycle
+}
+$('fNormal').onclick = function () { setForce(null); };
+$('fDry').onclick    = function () { setForce('dry'); };
+$('fHot').onclick    = function () { setForce('hot'); };
+
+/* ═══════════════════ Talking to the backend ═══════════════════════════════
+   Everything else on this bench writes to Firebase directly, the way a node
+   does. These calls do not: they ask the BACKEND to decide, because deciding
+   is the thing being rehearsed.
+
+   The key is TYPED BY THE OPERATOR and kept in this browser. This file lives in
+   a public repository and a key committed to one has already had to be rotated
+   once on this project. */
+const API = 'https://orchidfarm.duckdns.org/api/v2';
+
+function apiKey() {
+  let k = null;
+  try { k = localStorage.getItem('orchidApiKey'); } catch (e) { /* private window */ }
+  if (!k) {
+    k = prompt('Backend API key (kept in this browser only, never in the file):');
+    if (!k) return null;
+    try { localStorage.setItem('orchidApiKey', k.trim()); } catch (e) { /* ignore */ }
+  }
+  return k.trim();
+}
+
+async function api(method, path) {
+  const k = apiKey();
+  if (!k) throw new Error('no API key');
+  const r = await fetch(API + path, { method: method, headers: { 'X-API-Key': k } });
+  let j = null;
+  try { j = await r.json(); } catch (e) { /* empty body */ }
+  if (!r.ok) throw new Error((j && j.detail) ? j.detail : (method + ' ' + path + ' -> ' + r.status));
+  return j;
+}
+
+/* Farm local time as the backend wants it. `at` is read as FARM time, and the
+   farm is UTC+5:30 with no DST, so this is built from the browser's own clock
+   shifted onto that offset rather than from toISOString(), which would hand the
+   engine a UTC hour and plan a 06:47 watering for the middle of the night. */
+const FARM_OFFSET_MIN = 330;
+function farmNow(plusMinutes) {
+  const d = new Date(Date.now() + (plusMinutes || 0) * 60000);
+  return new Date(d.getTime() + (FARM_OFFSET_MIN + d.getTimezoneOffset()) * 60000);
+}
+function stamp(d) {
+  const p = function (v) { return String(v).padStart(2, '0'); };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+       + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+async function runEngine(at, why) {
+  log('t-cmd', 'engine pass' + (at ? ' as if it were ' + at : ' now')
+      + (why ? '  (' + why + ')' : '') + '...');
+  const j = await api('POST', '/auto/engine/run-now' + (at ? '?at=' + encodeURIComponent(at) : ''));
+  const d = j.did || {};
+  log('t-ok', 'engine ran at ' + j.at);
+  Object.keys(d).forEach(function (step) {
+    log('t-dim', '   ' + step + ': ' + JSON.stringify(d[step]).slice(0, 200));
+  });
+  return d;
+}
+
+$('runNow').onclick = function () {
+  runEngine(null, null).catch(function (e) { log('t-err', 'engine: ' + e.message); });
+};
+
+/* ═══════════════════ Scenarios ════════════════════════════════════════════
+   Six manual steps stood between "I want to see the alarm" and seeing it: link
+   a node, wait for a reading, plan the section by hand because the engine plans
+   only once a day, read the planned hour back, type it into a prompt, and know
+   that 20 minutes is the window. Every one of those is a place to get it wrong,
+   and getting it wrong looks identical to the feature being broken - which is
+   how a whole night went into "the alarm did not fire".
+
+   THIS DOES NOT TOUCH `control.override`. Whether a section alarms or pours is
+   the farm's decision, and a bench that quietly flipped it would be rehearsing
+   its own setting rather than the farm's. It is READ and shown instead, so the
+   button says what is about to happen before it is pressed. */
+
+function fillScenario() {
+  const sel = $('scSec');
+  const keep = sel.value;
+  const ids = Object.keys(sections).sort(function (a, b) {
+    const na = parseInt(String(a).replace(/\D/g, ''), 10) || 0;
+    const nb = parseInt(String(b).replace(/\D/g, ''), 10) || 0;
+    return na - nb;
+  });
+  sel.innerHTML = ids.map(function (sid) {
+    return '<option value="' + sid + '">' + sid + '  ' + (sections[sid].name || '') + '</option>';
+  }).join('');
+  if (ids.indexOf(keep) >= 0) sel.value = keep;
+  showMode();
+}
+
+/* What the farm will do with this section, read from the farm itself.
+   `override` is 'auto' | 'manual' | absent, and absent means follow the farm
+   switch - the same three-way the backend applies in section_acts_alone(). */
+async function showMode() {
+  const el = $('scMode');
+  const sid = $('scSec').value;
+  if (!houseId || !sid) { el.textContent = '—'; return; }
+  const ov = await fbGet('/farm/houses/' + houseId + '/sections/' + sid + '/control/override.json');
+  const farm = await fbGet('/farm/meta/autoMode.json');
+  const alone = ov === 'auto' ? true : ov === 'manual' ? false : !!farm;
+  el.textContent = (ov ? 'override ' + ov : 'farm ' + (farm ? 'auto' : 'off'))
+                 + (alone ? '  -> POURS' : '  -> ALARMS');
+  el.style.color = alone ? '#7fd4a2' : '#e0b44a';
+  return alone;
+}
+
+/* PLAN, THEN RUN AT THE PLANNED MINUTE.
+   The engine plans once a day (lastPlanDay) and skips any section that had no
+   reading at the time, so a section whose node came online at 06:24 gets no
+   plan at all and the watering link has nothing to fire on - which is not a
+   failure anyone can see, because an absent plan produces an absent alarm.
+   The per-section endpoint has no such guard, so it is used to make one.
+
+   The pass is then asked to pretend it is one minute past the planned time.
+   `_due_sessions` accepts a session from its minute until 20 minutes later, so
+   +1 lands safely inside without depending on how long the plan call took. */
+async function scWater() {
+  const sid = $('scSec').value;
+  if (!houseId || !sid) { log('t-err', 'Pick a house and a section first.'); return; }
+  const alone = await showMode();
+  try {
+    log('t-cmd', 'planning ' + houseId + '/' + sid + '...');
+    const j = await api('POST', '/care/houses/' + houseId + '/sections/' + sid + '/plan');
+    const plan = j.plan || j;
+    if (!plan.waterTime) {
+      log('t-err', 'no waterTime in the plan - the section probably has no reading yet');
+      return;
+    }
+    log('t-ok', 'plan ' + plan.waterTime + ' for ' + plan.durationSec + 's'
+        + (plan.litres ? '  (' + plan.litres + ' L)' : ''));
+
+    const hm = String(plan.waterTime).split(':');
+    const at = farmNow();
+    at.setHours(Number(hm[0]), Number(hm[1]) + 1, 0, 0);
+    const did = await runEngine(stamp(at), 'the planned minute');
+
+    const w = did.water || {};
+    const key = houseId + '-' + sid;
+    const hit = function (list) {
+      return (list || []).some(function (k) { return k.indexOf(key) === 0; });
+    };
+    if (hit(w.alarmed)) log('t-ok', 'ALARM raised - check the phone');
+    else if (hit(w.watered)) log('t-ok', 'watered - the node should be pouring now');
+    else log('t-err', 'nothing fired for ' + key + '. Already done today? '
+                    + 'watering/log holds one entry per day per session.');
+  } catch (e) {
+    log('t-err', 'watering scenario: ' + e.message);
+  }
+}
+
+/* The tray decision is made from the CURRENT reading, so force the node Dry or
+   Hot first or a comfortable section will correctly ask for nothing.
+
+   Runs the ENGINE rather than /tray-check, and the difference matters:
+   /tray-check decides and acts, but the ALARM is raised by run_tray_cycle, so
+   calling the endpoint would show the decision and never produce the alarm this
+   button exists to produce. The pass is dated 16 minutes ahead because the
+   engine checks trays every 15 and would otherwise skip the cycle entirely. */
+async function scTray() {
+  const sid = $('scSec').value;
+  if (!houseId || !sid) { log('t-err', 'Pick a house and a section first.'); return; }
+  await showMode();
+  const holder = nodes.find(function (n) { return n.assignedTo === houseId + '/' + sid; });
+  if (holder && !holder.force) {
+    log('t-dim', 'note: ' + holder.mac.slice(-4) + ' is not forced. A comfortable '
+        + 'section asks for no fill - press Dry first if nothing happens.');
+  }
+  try {
+    const at = farmNow(16);
+    const h = at.getHours();
+    if (h < 6 || h > 18) {
+      log('t-err', 'the tray is never filled outside 06:00-18:00 farm time (now '
+          + stamp(at) + ') - the engine will skip it');
+    }
+    const did = await runEngine(stamp(at), 'past the 15 min tray guard');
+    const t = did.tray || {};
+    const key = houseId + '-' + sid;
+    if ((t.alarmed || []).some(function (k) { return k === key; }))
+      log('t-ok', 'TRAY ALARM raised - check the phone');
+    else
+      log('t-dim', 'no tray alarm for ' + key + '. Either it filled automatically, '
+                 + 'it is in cooldown, or the model asked for nothing.');
+  } catch (e) {
+    log('t-err', 'tray scenario: ' + e.message);
+  }
+}
+
+$('scSec').onchange = showMode;
+$('scWater').onclick = scWater;
+$('scTray').onclick = scTray;
 
 $('house').onchange = function () { loadHouse(this.value); };
 $('claim').onclick = claimHouse;
