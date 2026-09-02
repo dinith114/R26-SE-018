@@ -69,15 +69,21 @@ def auth_client():
     Firebase app, which this project never initialises.
     """
     global _auth_app
+    if _auth_app is not None:
+        return _auth_app
+
+    # Checked BEFORE the import: it is the cheaper failure, and it is the
+    # one that must behave identically whether or not firebase-admin is
+    # installed. CI runs on a trimmed requirements file without it, so an
+    # import-first order would fail there with ModuleNotFoundError and a
+    # test asserting on the missing-key path would pass for the wrong reason.
+    path = os.environ.get("FIREBASE_ADMIN_KEY") or FIREBASE_KEY_DEFAULT
+    if not os.path.exists(path):
+        raise RuntimeError(f"no service-account key at {path}")
     import firebase_admin
     from firebase_admin import credentials
-
-    if _auth_app is None:
-        path = os.environ.get("FIREBASE_ADMIN_KEY") or FIREBASE_KEY_DEFAULT
-        if not os.path.exists(path):
-            raise RuntimeError(f"no service-account key at {path}")
-        _auth_app = firebase_admin.initialize_app(
-            credentials.Certificate(path), name="orchid-auth")
+    _auth_app = firebase_admin.initialize_app(
+        credentials.Certificate(path), name="orchid-auth")
     return _auth_app
 
 

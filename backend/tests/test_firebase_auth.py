@@ -9,7 +9,7 @@ route.
 import pytest
 
 from app.services.firebase_auth import (
-    ROLE_ADMIN, ROLE_VIEWER, AuthContext, set_decoder, verify_bearer,
+    ROLE_ADMIN, ROLE_VIEWER, AuthContext, auth_client, set_decoder, verify_bearer,
 )
 
 
@@ -72,10 +72,12 @@ def test_a_decoder_that_raises_is_a_refusal_not_a_crash():
 
 
 def test_auth_client_raises_when_the_key_file_is_missing(monkeypatch):
-    """The caller turns this into an HTTP error. Returning None instead would
-    make a missing key look like a working client until the first call."""
+    """The caller turns this into an HTTP error. It must be the SAME failure
+    with or without firebase-admin installed - CI has no firebase-admin, and
+    a test that passes there via ModuleNotFoundError would be proving
+    nothing about the branch it names."""
     import app.services.firebase_auth as fa
     monkeypatch.setattr(fa, "_auth_app", None)
     monkeypatch.setenv("FIREBASE_ADMIN_KEY", "/definitely/not/a/real/key.json")
-    with pytest.raises(Exception):
-        fa.auth_client()
+    with pytest.raises(RuntimeError, match="no service-account key"):
+        auth_client()
