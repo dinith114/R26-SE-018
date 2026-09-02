@@ -16,7 +16,21 @@ def fake_db():
     db = {}
 
     def _get(path):
-        return db.get(path)
+        if path in db:
+            return db[path]
+        # Firebase returns the SUBTREE when you GET a parent path whose
+        # children were written beneath it - the same way /farm/houses.json
+        # behaves everywhere else in this codebase. A flat dict does not, and
+        # a fake that cannot model this pushes the real schema flat to suit
+        # itself, which is exactly backwards.
+        prefix = path[:-len(".json")] + "/" if path.endswith(".json") else path + "/"
+        kids = {}
+        for key, value in db.items():
+            if key.startswith(prefix) and key.endswith(".json"):
+                child = key[len(prefix):-len(".json")]
+                if "/" not in child:          # direct children only
+                    kids[child] = value
+        return kids or None
 
     def _put(path, value):
         db[path] = value

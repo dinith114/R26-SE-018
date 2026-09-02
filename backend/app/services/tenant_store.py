@@ -72,10 +72,7 @@ def list_users(tenant_id: str) -> list:
 
 def get_user(tenant_id: str, uid: str) -> Optional[dict]:
     get, _, _ = _fb()
-    users = get(f"/tenants/{tenant_id}/users.json") or {}
-    if not isinstance(users, dict):
-        return None
-    rec = users.get(uid)
+    rec = get(f"/tenants/{tenant_id}/users/{uid}.json")
     if not isinstance(rec, dict):
         return None
     return {"uid": uid, "email": rec.get("email"), "role": rec.get("role"),
@@ -85,13 +82,9 @@ def get_user(tenant_id: str, uid: str) -> Optional[dict]:
 def put_user(tenant_id: str, uid: str, email: Optional[str], role: str) -> dict:
     if role not in ROLES:
         raise ValueError(f"unknown role {role!r}")
-    get, put, _ = _fb()
-    users = get(f"/tenants/{tenant_id}/users.json") or {}
-    if not isinstance(users, dict):
-        users = {}
+    _, put, _ = _fb()
     rec = {"email": email, "role": role, "addedAt": _now()}
-    users[uid] = rec
-    put(f"/tenants/{tenant_id}/users.json", users)
+    put(f"/tenants/{tenant_id}/users/{uid}.json", rec)
     return {"uid": uid, **rec}
 
 
@@ -99,21 +92,14 @@ def set_role(tenant_id: str, uid: str, role: str) -> None:
     if role not in ROLES:
         raise ValueError(f"unknown role {role!r}")
     get, put, _ = _fb()
-    users = get(f"/tenants/{tenant_id}/users.json") or {}
-    if not isinstance(users, dict):
-        users = {}
-    if uid in users and isinstance(users[uid], dict):
-        users[uid]["role"] = role
-    put(f"/tenants/{tenant_id}/users.json", users)
+    rec = get(f"/tenants/{tenant_id}/users/{uid}.json") or {}
+    rec["role"] = role
+    put(f"/tenants/{tenant_id}/users/{uid}.json", rec)
 
 
 def remove_user(tenant_id: str, uid: str) -> None:
-    get, put, _ = _fb()
-    users = get(f"/tenants/{tenant_id}/users.json") or {}
-    if not isinstance(users, dict):
-        users = {}
-    users.pop(uid, None)
-    put(f"/tenants/{tenant_id}/users.json", users)
+    _, _, delete = _fb()
+    delete(f"/tenants/{tenant_id}/users/{uid}.json")
 
 
 def count_admins(tenant_id: str) -> int:
