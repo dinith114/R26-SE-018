@@ -53,7 +53,7 @@ presented and chosen knowingly:
   board** (a `#define TENANT_ID "..."` constant, added the same way `HOUSE_ID`
   and `SECTION_ID` already work — confirmed at `sensor_node_validate.ino:62`,
   which is a compile-time `#define`, not something the WiFi portal configures
-  at runtime), a rewrite of the ~99 call sites across 6 backend route files that
+  at runtime), and tenant scoping applied across 6 backend route files that
   hardcode `/farm/...`, and an update to `NODE_SIMULATOR.html`.
 - Chosen anyway, with the cost explicit, because it gives real database-level
   separation rather than isolation that depends on every future code path
@@ -143,20 +143,75 @@ that must work before any Firebase user exists to authenticate as), and is
 dropped from every other endpoint it currently guards, in favour of
 `require_auth` / `require_role`.
 
-**Path helper**, replacing every literal `/farm/...` string:
+**Tenant scoping is applied at ONE chokepoint, not threaded through the code.**
 
-```python
-def _tpath(tenant_id: str, suffix: str) -> str:
-    return f"/tenants/{tenant_id}/farm/{suffix}"
+This reverses what an earlier draft of this spec assumed, and the reason is a
+measurement taken before Stage 2 began rather than an estimate:
+
+```
+/farm/ call sites                                    127
+  (smart_care_v2.py alone: 100; the draft guessed ~99 in total)
+  reached through _fb_get / _fb_put / _fb_delete      112
+functions that would need a tenant_id parameter        74
 ```
 
-Every `_fb_get` / `_fb_put` / `_fb_delete` call site in `smart_care_v2.py`,
-`automation.py`, `devices.py`, `forecast.py`, `house_planner.py` and
-`spatial_service.py` that currently builds a `/farm/...` path is rewritten to
-call this helper with `request.state.tenant_id` (or, in `automation.py`'s
-background loop, the tenant id being iterated — see below). This is mechanical
-but touches every route signature that reads or writes farm data, since
-`tenant_id` now has to be threaded in.
+Threading `tenant_id` through 74 function signatures and every one of their
+callers has a silent failure mode: a call site that is missed keeps reading and
+writing the OLD shared `/farm/...` tree. After migration that tree is stale or
+empty, the code does not raise, and no test naturally covers "did we remember
+this one". Seventy-four opportunities to forget, each one a cross-tenant defect.
+
+So the prefix is applied inside the three Firebase helpers instead, from a
+`contextvars.ContextVar` that `require_auth` sets:
+
+```python
+_tenant: ContextVar[Optional[str]] = ContextVar("orchid_tenant", default=None)
+
+def _scoped(path: str) -> str:
+    """Rewrite a farm path onto the caller's tenant.
+
+    ONE chokepoint rather than 74 call sites, and the difference is the failure
+    mode. A missed call site under the threading approach keeps writing to the
+    old shared tree, silently and untested. Here there is nothing to miss: every
+    farm path in the process goes through this function.
+
+    It RAISES when no tenant is in context. Falling back to /farm/... would
+    reintroduce exactly the shared-tree bug this exists to prevent, and would do
+    it invisibly.
+    """
+    if not path.startswith("/farm/"):
+        return path
+    tenant = _tenant.get()
+    if tenant is None:
+        raise RuntimeError(f"farm path {path} used with no tenant in context")
+    return f"/tenants/{tenant}{path}"
+```
+
+All 127 call sites keep their literal `/farm/...` strings unchanged. No route
+signature changes. `_tpath()`, added inert in Stage 1, is removed — the
+chokepoint supersedes it.
+
+Two things this approach does NOT get for free, and both must be handled
+explicitly:
+
+- **`ThreadPoolExecutor` does not inherit context.** `_run_per_section` in
+  `smart_care_v2.py` fans sections out across a thread pool, and a `ContextVar`
+  set on the calling task is invisible inside those workers. Each submitted call
+  must carry `contextvars.copy_context().run(...)`, or every parallel section
+  raises "no tenant in context".
+- **One path bypasses the helpers entirely.** `automation.py:277` calls
+  `_req.delete(f"{FIREBASE_BASE_URL}/farm/pushTokens/{k}.json")` directly. It
+  must be routed through `_fb_delete` or it will keep writing to the shared
+  tree — the single instance of exactly the failure this design avoids
+  everywhere else.
+
+**Isolation this buys, and what it does not.** The chokepoint enforces tenancy
+in the API process. It does nothing about direct database access: the Firebase
+Realtime Database rules are still open, so anyone holding the client config can
+read and write any tenant's tree over REST. Real isolation needs both layers,
+and closing the rules is Stage 3 work because it requires auth tokens in the
+firmware and the backend at the same time or both stop writing. Until Stage 3
+lands, tenant isolation is a property of this backend, not of the data.
 
 **`automation.py`'s engine loop** currently fetches `/farm/houses.json` once per
 pass and runs the plan/tray/water cycles over it. It gains an outer loop:
@@ -210,25 +265,73 @@ Existing `pytest` suite (57 passing at the time of writing) needs a
 `tests/test_accounts.py` covering both, using two fake tenants and three fake
 roles rather than any real Firebase project.
 
-## Suggested implementation sequencing
+## Implementation sequencing
 
-This is too large for one plan. Each stage below should ship and be verified
-before the next starts, so a mistake in stage 2 does not require re-touching
-stage 1's already-working code:
+An earlier draft of this section had four stages that each "ship and be verified
+before the next starts". **That is not possible, and the reason is worth stating
+plainly because it was missed twice.**
 
-1. **Backend accounts + auth infra**, tested against a mock Firebase Auth
-   token, with the `/farm/...` schema still flat and `_tpath()` a no-op —
-   proves login, role enforcement and the tenant bootstrap endpoint work
-   before anything about paths changes.
-2. **Path migration**: introduce the `/tenants/{t}/farm/...` prefix, the
-   ~99-call-site rewrite, the migration script for H1/H2 data, and the
-   automation engine's per-tenant loop — the mechanical, error-prone stage,
-   kept isolated from stage 1's logic changes.
-3. **Firmware + reflash**: add `TENANT_ID`, reflash the real boards, update
-   `NODE_SIMULATOR.html` — done last, once the backend it reports to is proven
-   stable, so a board is never reflashed against a moving target.
-4. **Mobile UI**: login screen, Team screen, role-gated controls — depends on
-   stages 1-2 being live so there is something real to authenticate against.
+The sensor nodes do not talk to this backend. They write to Firebase
+**directly**, over REST, to a path compiled into the firmware —
+`sensor_node_validate.ino:323` builds
+`String(FB_HOST) + "/farm/houses/" HOUSE_ID "/sections/" SECTION_ID`. The mobile
+app likewise holds the database URL itself. So the moment the backend starts
+reading `/tenants/{t}/farm/...`:
+
+- the nodes are still writing to `/farm/...` and the farm goes dark — readings
+  land somewhere nothing reads, and no watering is planned from them
+- the app sends a static API key and no bearer token, so nothing sets the tenant
+  context, so every farm route raises
+
+Stages 2, 3 and 4 are therefore **one atomic cutover**, not a sequence.
+
+### Stage 1 — backend accounts and auth infrastructure — COMPLETE
+
+Shipped 3 September 2026, 13 commits, 127 tests. Changes no existing endpoint's
+behaviour: the static-key middleware is untouched, no farm route is guarded, and
+`_tpath()` is inert with zero callers.
+
+### Stage 2 — the cutover, prepared as one release
+
+Everything below is built and tested together, and nothing is deployed until all
+of it is ready:
+
+- **Backend** — the `ContextVar` chokepoint in the three Firebase helpers; the
+  `contextvars.copy_context()` fix for `_run_per_section`'s thread pool; the one
+  direct `_req.delete` in `automation.py:277` routed through `_fb_delete`;
+  `require_auth` / `require_role` applied to the farm routes per the table
+  above; the automation engine's per-tenant loop; `_tpath()` removed.
+- **Firmware** — `TENANT_ID` as a compile-time constant beside `HOUSE_ID` and
+  `SECTION_ID`, and `NODE_SIMULATOR.html` updated to match.
+- **Mobile** — login screen, bearer tokens replacing the static key on every
+  call, the Team screen, and role-gated controls.
+- **Data** — the migration script copying `/farm/*` to `/tenants/{t0}/farm/*`.
+
+### The cutover itself
+
+Ordered, and with the farm's own clock in mind — the engine plans at 05:00 and
+waters between 06:00 and 09:00, so this runs **after 09:00 farm time**:
+
+1. Verify every piece on the bench and in CI, with the migration script
+   dry-run against a copy.
+2. Set the farm to Auto OFF. The system keeps deciding and alarming; it stops
+   acting, so nothing can fire mid-cutover.
+3. Run the migration. **Copy, do not move** — `/farm/*` stays exactly where it
+   is until the new tree is verified serving.
+4. Deploy the backend, install the app, reflash the boards. The farm is
+   effectively down for this window; it is minutes, and it is planned.
+5. Verify: readings arriving under the new path, a plan generated, a manual
+   Water Now confirmed by a node ack.
+6. Auto back ON.
+7. Only then delete the old `/farm/*` tree — and not on the same day.
+
+### Stage 3 — close the Firebase rules
+
+Deliberately AFTER the cutover, because it needs the new path layout to write
+rules against. Until this lands, tenant isolation is a property of this backend
+and not of the data: anyone holding the client config can still read and write
+any tenant's tree over REST. This is the half of "multi-tenancy" that the
+chokepoint cannot provide, and it is what makes the isolation real.
 
 ## Explicitly out of scope
 
