@@ -249,7 +249,7 @@ def test_admin_changes_a_role_and_the_claims_follow(env):
                    json={"role": ROLE_VIEWER})
     assert r.status_code == 200
     assert store.get_user(tid, uid)["role"] == ROLE_VIEWER
-    assert users[uid]["claims"]["role"] == ROLE_VIEWER
+    assert users[uid]["claims"] == {"tenantId": tid, "role": ROLE_VIEWER}
 
 
 def test_admin_deletes_a_user_from_both_places(env):
@@ -274,6 +274,23 @@ def test_an_admin_cannot_delete_themselves(env):
                       headers=_tok(uid, tid, ROLE_ADMIN))
     assert r.status_code == 400
     assert store.get_user(tid, uid) is not None
+
+
+def test_an_admin_cannot_delete_themselves_even_with_another_admin_present(env):
+    """The single-admin case is also caught by the last-admin guard, so it
+    cannot tell whether the self-delete rule exists at all. With a second
+    admin present, only the self-delete rule can refuse this."""
+    client, _, users = env
+    body = _make_tenant(client)
+    tid, first = body["tenantId"], body["adminUid"]
+    _add(client, tid, "admin2@example.com", ROLE_ADMIN)
+    assert store.count_admins(tid) == 2
+
+    r = client.delete(f"/api/v2/accounts/users/{first}",
+                      headers=_tok(first, tid, ROLE_ADMIN))
+    assert r.status_code == 400
+    assert store.get_user(tid, first) is not None
+    assert first in users
 
 
 def test_the_last_admin_cannot_be_demoted(env):

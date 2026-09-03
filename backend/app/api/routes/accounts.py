@@ -209,6 +209,9 @@ async def delete_user(uid: str,
         # The app offers no other way back in; the only remaining route would
         # be a vendor-side repair.
         raise HTTPException(400, "You cannot delete your own account.")
+    # Unreachable while the caller must itself be an admin - a lone admin
+    # deleting an admin is deleting themselves, and the check above fires
+    # first. Kept because that reasoning lives in require_role, not here.
     if (existing.get("role") == ROLE_ADMIN
             and store.count_admins(ctx.tenant_id) <= 1):
         raise HTTPException(400, "This is the only admin.")
