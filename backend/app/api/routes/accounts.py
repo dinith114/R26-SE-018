@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import require_auth
 from app.services import tenant_store as store
-from app.services.firebase_auth import ROLE_ADMIN, ROLES, AuthContext
+from app.services.firebase_auth import ROLE_ADMIN, AuthContext
 
 router = APIRouter()
 
@@ -113,11 +113,17 @@ async def create_tenant(body: TenantIn, request: Request):
         store.create_tenant(tenant_id, body.name, uid, body.plan)
         store.put_user(tenant_id, uid, email, ROLE_ADMIN)
     except Exception as e:
+        # create_tenant may have already written meta.json before put_user
+        # raised. A tenant with no admin cannot be logged into and cannot be
+        # repaired from the app, so both the auth user AND the half-made
+        # tenant must be undone - and one failed undo must not abandon the
+        # other.
         _, _, rm = _identity()
-        try:
-            rm(uid)
-        except Exception:
-            pass
+        for undo in (lambda: rm(uid), lambda: store.delete_tenant(tenant_id)):
+            try:
+                undo()
+            except Exception:
+                pass
         raise HTTPException(500, f"Could not provision the tenant: {e}")
 
     return {"status": "success", "tenantId": tenant_id, "adminUid": uid}

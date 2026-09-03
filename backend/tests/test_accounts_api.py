@@ -41,10 +41,24 @@ def env(monkeypatch):
                     kids[child] = value
         return kids or None
 
+    def _delete(path):
+        # Mirror of _get's subtree behaviour: deleting a parent path in real
+        # Firebase removes everything written beneath it, which is exactly
+        # what delete_tenant() relies on to roll a half-made tenant back in
+        # one call (/tenants/{id}.json) rather than needing to know every
+        # child path (meta, each user) that create_tenant/put_user wrote.
+        existed = db.pop(path, None) is not None
+        stem = path[:-len(".json")] if path.endswith(".json") else path
+        prefix = stem + "/"
+        descendants = [k for k in db if k.startswith(prefix)]
+        for k in descendants:
+            db.pop(k, None)
+        return existed or bool(descendants)
+
     store.set_backend(
         _get,
         lambda p, v: db.__setitem__(p, v) or v,
-        lambda p: db.pop(p, None) is not None,
+        _delete,
     )
 
     def _create_user(email, password):
@@ -163,3 +177,28 @@ def test_a_token_for_another_tenant_sees_nothing_of_this_one(env):
     emails = {u["email"] for u in r.json()["users"]}
     assert emails == {"b@example.com"}
     assert a not in r.text
+
+
+def test_a_store_failure_after_the_tenant_is_written_leaves_nothing_behind(env):
+    """The gap the identity-provider test does not reach. If put_user fails
+    AFTER create_tenant has written meta.json, that meta record must not
+    survive - a tenant with no admin can never be logged into, and there is
+    no screen in the app that could repair it."""
+    client, db, users = env
+    before = dict(db)
+
+    original = store.put_user
+    def _explode(*a, **k):
+        raise RuntimeError("firebase write failed")
+    store.put_user = _explode
+    try:
+        r = client.post("/api/v2/accounts/tenants",
+                        headers={"X-API-Key": VENDOR_KEY},
+                        json={"name": "Doomed", "adminEmail": "x@example.com",
+                              "adminPassword": "sup3rsecret"})
+    finally:
+        store.put_user = original
+
+    assert r.status_code == 500
+    assert db == before, "a tenant with no admin survived a failed provisioning"
+    assert users == {}, "the orphaned Firebase Auth user was not rolled back"

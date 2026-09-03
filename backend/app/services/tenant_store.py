@@ -102,5 +102,13 @@ def remove_user(tenant_id: str, uid: str) -> None:
     delete(f"/tenants/{tenant_id}/users/{uid}.json")
 
 
+def delete_tenant(tenant_id: str) -> None:
+    """Remove a tenant outright. Only ever used to roll back a failed
+    provisioning - a half-made tenant with no admin cannot be logged into
+    and cannot be repaired from the app, so it must not survive."""
+    _, _, delete = _fb()
+    delete(f"/tenants/{tenant_id}.json")
+
+
 def count_admins(tenant_id: str) -> int:
     return sum(1 for u in list_users(tenant_id) if u.get("role") == ROLE_ADMIN)
