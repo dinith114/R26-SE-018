@@ -41,7 +41,12 @@ jobs:
             tests/test_freshness.py \
             tests/test_farm_clock.py \
             tests/test_auto_switch.py \
-            tests/test_alarm_repeat.py
+            tests/test_alarm_repeat.py \
+            tests/test_firebase_auth.py \
+            tests/test_auth_deps.py \
+            tests/test_tenant_store.py \
+            tests/test_accounts_api.py \
+            tests/test_tpath.py
 
   deps:
     name: dependencies resolve

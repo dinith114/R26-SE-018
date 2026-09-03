@@ -151,6 +151,9 @@ app.include_router(smart_care_v2.router,      prefix="/api/v2/care",        tags
 app.include_router(devices.router,            prefix="/api/v2/devices",     tags=["Devices"])
 app.include_router(automation.router,         prefix="/api/v2/auto",        tags=["Automation Engine"])
 
+from app.api.routes import accounts
+app.include_router(accounts.router, prefix="/api/v2/accounts", tags=["Accounts"])
+
 
 @app.on_event("startup")
 async def _start_automation():

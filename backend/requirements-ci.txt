@@ -35,3 +35,6 @@ PyKrige==1.7.2
 # collides with the numpy==1.26.4 this project pins for its saved models.
 # 0.4.1 leaves numpy unpinned and carries the same SSPOR / SVD API.
 python-sensors==0.4.1
+# fastapi.testclient needs httpx. The accounts and guard tests drive real
+# routing through TestClient rather than calling the dependencies directly.
+httpx==0.27.0

@@ -62,6 +62,22 @@ def _fb_delete(path: str) -> bool:
     except Exception:
         return False
 
+
+def _tpath(tenant_id, suffix: str) -> str:
+    """Build a farm path, tenant-aware.
+
+    A SEAM FOR STAGE 2, deliberately inert today. The farm subtree is about to
+    move from /farm/... to /tenants/{id}/farm/..., which is a rewrite of every
+    hardcoded path across six route files. Introducing the helper in its own
+    stage - proven, and returning exactly today's strings while every caller
+    passes None - makes that rewrite a substitution instead of a substitution
+    plus a function nobody has exercised.
+    """
+    tail = suffix[1:] if suffix.startswith("/") else suffix
+    if not tenant_id:
+        return f"/farm/{tail}"
+    return f"/tenants/{tenant_id}/farm/{tail}"
+
 # ─── Model loading ────────────────────────────────────────────────────────────
 _MODEL_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "..", "..", "..", "..", "ml_pipeline", "results"))
