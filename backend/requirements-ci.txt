@@ -38,3 +38,8 @@ python-sensors==0.4.1
 # fastapi.testclient needs httpx. The accounts and guard tests drive real
 # routing through TestClient rather than calling the dependencies directly.
 httpx==0.27.0
+# app/main.py imports uvicorn at module load, and test_main_wiring.py has to
+# import app.main - the thing it tests is main.py's static-key middleware
+# sitting in front of the accounts routes, which every other test misses
+# because they all build a bare FastAPI() and mount the router themselves.
+uvicorn==0.30.6
