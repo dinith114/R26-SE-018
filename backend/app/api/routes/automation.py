@@ -718,6 +718,20 @@ def _state_for(tenant_id: Optional[str]) -> dict:
     })
 
 
+def _any_tenant_id() -> str:
+    """Some tenant, only ever to read a clock with before the real loop starts.
+
+    Not a default and not a fallback: run_all_tenants still visits every tenant
+    and every decision is made under that tenant's own scope. This exists purely
+    so parsing an `at` string has somebody's timezone to parse it in.
+    """
+    tenants = _fb_get("/tenants.json?shallow=true") or {}
+    for tid in tenants:
+        return tid
+    from fastapi import HTTPException
+    raise HTTPException(503, "No tenants exist yet, so there is no farm to run.")
+
+
 def run_all_tenants(now) -> dict:
     """One engine pass per tenant.
 
@@ -727,7 +741,10 @@ def run_all_tenants(now) -> dict:
     engine that gives up on the first bad row is an engine that stops watering
     everybody the first time one customer's record is malformed.
     """
-    tenants = _fb_get("/tenants.json") or {}
+    # shallow: the ids are all this needs, and the full subtree carries every
+    # tenant's meta and users. This file already learned that lesson once - see
+    # _engine_pass's note on /farm/houses.json and the 10 GB a day it cost.
+    tenants = _fb_get("/tenants.json?shallow=true") or {}
     out = {}
     for tenant_id in tenants:
         try:
@@ -848,14 +865,24 @@ async def run_now(at: Optional[str] = None):
     """
     # `at` is given in FARM local time, because that is the clock every watering
     # decision is expressed in - "06:34" in a plan means 06:34 for the plants.
-    if at:
-        try:
-            now = datetime.strptime(at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
-        except ValueError:
-            from fastapi import HTTPException
-            raise HTTPException(400, "at must look like '2026-08-21 06:01'")
-    else:
-        now = farm_now()
+    # farm_tz() and farm_now() both read /farm/meta, so they need a tenant of
+    # their own before the per-tenant loop starts. Any tenant's clock will do to
+    # PARSE the string - the loop below then re-runs the pass under each tenant,
+    # and every decision inside uses that farm's own clock.
+    with tenant_scope(_any_tenant_id()):
+        if at:
+            try:
+                now = datetime.strptime(at.strip(),
+                                        "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
+            except ValueError:
+                from fastapi import HTTPException
+                raise HTTPException(400, "at must look like '2026-08-21 06:01'")
+        else:
+            now = farm_now()
 
-    did = await asyncio.to_thread(_engine_pass, now)
+    # Every tenant, exactly like the scheduled loop. Calling _engine_pass
+    # directly here left this endpoint with no tenant in context, so every call
+    # raised on the first farm read - and both simulators drive their accelerated
+    # clock through it, so both were dead.
+    did = await asyncio.to_thread(run_all_tenants, now)
     return {"status": "success", "at": now.strftime("%Y-%m-%d %H:%M:%S %Z"), "did": did}

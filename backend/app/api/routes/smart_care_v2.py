@@ -920,7 +920,12 @@ FARM_TZ_NAME_DEFAULT   = "Asia/Colombo"
 FARM_TZ_OFFSET_DEFAULT = 330      # minutes. Sri Lanka is UTC+5:30, and has no DST.
 _TZ_CACHE_SEC          = 300      # this is read on every tick; do not hit Firebase each time
 
-_tz_cache: Dict[str, object] = {"tz": None, "at": 0.0}
+# PER TENANT. One farm's timezone must never be served to another: it shifts
+# farm_now(), which hour counts as dawn, and when the plan day rolls over - so a
+# farm would be watered on somebody else's clock. Shared, that was guaranteed
+# rather than unlikely, because run_all_tenants walks every tenant inside a
+# single tick and the whole loop fits inside this cache's five minutes.
+_tz_cache: Dict[str, dict] = {}
 
 
 def farm_tz() -> tzinfo:
@@ -932,8 +937,10 @@ def farm_tz() -> tzinfo:
     the `tzdata` package - and is exactly right here, Sri Lanka having no DST.
     """
     now = time.time()
-    cached = _tz_cache.get("tz")
-    if cached is not None and now - float(_tz_cache["at"]) < _TZ_CACHE_SEC:
+    from app.services.tenant_context import current_tenant
+    slot = _tz_cache.setdefault(current_tenant() or "-", {"tz": None, "at": 0.0})
+    cached = slot.get("tz")
+    if cached is not None and now - float(slot["at"]) < _TZ_CACHE_SEC:
         return cached                                    # type: ignore[return-value]
 
     meta = _fb_get("/farm/meta.json") or {}
@@ -949,7 +956,7 @@ def farm_tz() -> tzinfo:
             mins = FARM_TZ_OFFSET_DEFAULT
         tz = timezone(timedelta(minutes=mins))
 
-    _tz_cache["tz"], _tz_cache["at"] = tz, now
+    slot["tz"], slot["at"] = tz, now
     return tz
 
 
@@ -975,17 +982,24 @@ def farm_now() -> datetime:
 # `section_is_auto` in automation.py now delegates here. Do not reintroduce a
 # second answer.
 _AUTO_CACHE_SEC = 5.0        # asked once per section in a fan-out; do not re-fetch each time
-_auto_cache: Dict[str, object] = {"on": None, "at": 0.0}
+# PER TENANT, and this one is the dangerous half. run_all_tenants walks every
+# tenant inside ONE tick, far inside these five seconds, so a single shared entry
+# would apply the first farm's Auto switch to every other farm in the pass - one
+# customer's Auto ON running another customer's pumps. That is the worst thing
+# this codebase can do.
+_auto_cache: Dict[str, dict] = {}
 
 
 def farm_auto_mode() -> bool:
     """The farm-level switch. Defaults to ON for a freshly set-up farm."""
     now = time.time()
-    if _auto_cache["on"] is not None and now - float(_auto_cache["at"]) < _AUTO_CACHE_SEC:
-        return bool(_auto_cache["on"])
+    from app.services.tenant_context import current_tenant
+    slot = _auto_cache.setdefault(current_tenant() or "-", {"on": None, "at": 0.0})
+    if slot["on"] is not None and now - float(slot["at"]) < _AUTO_CACHE_SEC:
+        return bool(slot["on"])
     meta = _fb_get("/farm/meta.json") or {}
     on = bool(meta.get("autoMode", True))
-    _auto_cache["on"], _auto_cache["at"] = on, now
+    slot["on"], slot["at"] = on, now
     return on
 
 
