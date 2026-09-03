@@ -146,7 +146,14 @@ from app.api.routes import automation
 app.include_router(smart_watering.router,     prefix="/api/v1/watering",    tags=["Smart Watering"])
 app.include_router(hybrid_pollination.router, prefix="/api/v1/pollination", tags=["Hybrid Pollination"])
 app.include_router(house_planner.router,      prefix="/api/v2/care/houses", tags=["House Planner"])
-app.include_router(houses.router,             prefix="/api/v1/houses",      tags=["Houses"])
+# UNMOUNTED 4 Sep 2026. houses.py is the deprecated v1 multi-house API,
+# superseded by smart_care_v2. It had no auth of any kind and it reads and
+# writes /houses/... paths, which the tenant chokepoint does not rewrite -
+# only /farm/... is scoped. Left mounted it would be an unauthenticated way
+# into unscoped data, including a waterCommand, on a multi-tenant system.
+# The file stays in the tree: CLAUDE.md keeps it so older report results
+# remain reproducible, and reproducing them needs the code, not a live route.
+# app.include_router(houses.router, prefix="/api/v1/houses", tags=["Houses"])
 app.include_router(smart_care_v2.router,      prefix="/api/v2/care",        tags=["Smart Care v2"])
 app.include_router(devices.router,            prefix="/api/v2/devices",     tags=["Devices"])
 app.include_router(automation.router,         prefix="/api/v2/auto",        tags=["Automation Engine"])
