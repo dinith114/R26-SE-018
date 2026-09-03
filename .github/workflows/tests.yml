@@ -46,7 +46,7 @@ jobs:
             tests/test_auth_deps.py \
             tests/test_tenant_store.py \
             tests/test_accounts_api.py \
-            tests/test_tpath.py \
+            tests/test_scoping_chokepoint.py \
             tests/test_main_wiring.py
 
   deps:

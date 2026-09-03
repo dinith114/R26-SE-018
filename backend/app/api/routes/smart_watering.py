@@ -22,6 +22,8 @@ import pandas as pd
 import requests as _req
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 
+from app.services.tenant_context import NoTenantInContext, scoped
+
 router = APIRouter()
 
 # ======================== CONSTANTS ========================
@@ -92,16 +94,20 @@ def _models_ready() -> bool:
 
 def _fb_get(path: str) -> Optional[dict]:
     try:
-        resp = _req.get(f"{FIREBASE_BASE_URL}{path}", timeout=8)
+        resp = _req.get(f"{FIREBASE_BASE_URL}{scoped(path)}", timeout=8)
         return resp.json() if resp.status_code == 200 else None
+    except NoTenantInContext:
+        raise
     except Exception:
         return None
 
 
 def _fb_put(path: str, data: dict) -> bool:
     try:
-        resp = _req.put(f"{FIREBASE_BASE_URL}{path}", json=data, timeout=8)
+        resp = _req.put(f"{FIREBASE_BASE_URL}{scoped(path)}", json=data, timeout=8)
         return resp.status_code == 200
+    except NoTenantInContext:
+        raise
     except Exception:
         return False
 

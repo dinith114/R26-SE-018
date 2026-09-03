@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import requests as _req
 
 from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
+from app.services.tenant_context import NoTenantInContext, scoped
 
 router = APIRouter()
 
@@ -75,7 +76,9 @@ def device_liveness(rec: dict) -> dict:
 # That made unassign report success and change nothing.
 def _fb_delete(path: str) -> bool:
     try:
-        return _req.delete(f"{FIREBASE_BASE_URL}{path}", timeout=8).status_code == 200
+        return _req.delete(f"{FIREBASE_BASE_URL}{scoped(path)}", timeout=8).status_code == 200
+    except NoTenantInContext:
+        raise
     except Exception:
         return False
 

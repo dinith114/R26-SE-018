@@ -52,31 +52,19 @@ from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
 # Liveness lives with the registry that owns lastSeen; importing it keeps one
 # definition of "is this board there" instead of two that can drift apart.
 from app.api.routes.devices import device_liveness as _device_liveness
+from app.services.tenant_context import NoTenantInContext, scoped
 
 router = APIRouter()
 
 
 def _fb_delete(path: str) -> bool:
     try:
-        return _req.delete(f"{FIREBASE_BASE_URL}{path}", timeout=8).status_code == 200
+        return _req.delete(f"{FIREBASE_BASE_URL}{scoped(path)}", timeout=8).status_code == 200
+    except NoTenantInContext:
+        raise
     except Exception:
         return False
 
-
-def _tpath(tenant_id, suffix: str) -> str:
-    """Build a farm path, tenant-aware.
-
-    A SEAM FOR STAGE 2, deliberately inert today. The farm subtree is about to
-    move from /farm/... to /tenants/{id}/farm/..., which is a rewrite of every
-    hardcoded path across six route files. Introducing the helper in its own
-    stage - proven, and returning exactly today's strings while every caller
-    passes None - makes that rewrite a substitution instead of a substitution
-    plus a function nobody has exercised.
-    """
-    tail = suffix[1:] if suffix.startswith("/") else suffix
-    if not tenant_id:
-        return f"/farm/{tail}"
-    return f"/tenants/{tenant_id}/farm/{tail}"
 
 # ─── Model loading ────────────────────────────────────────────────────────────
 _MODEL_DIR = os.path.abspath(os.path.join(

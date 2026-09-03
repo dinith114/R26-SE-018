@@ -47,7 +47,7 @@ from pydantic import BaseModel
 import requests as _req
 
 from app.api.routes.smart_care_v2 import (
-    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section,
+    _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL, _ready,
     _record_fertilized, _log_event,
@@ -274,7 +274,7 @@ def _drop_push_token(token: str) -> None:
     for k, v in (raw or {}).items():
         if isinstance(v, dict) and v.get("token") == token:
             try:
-                _req.delete(f"{FIREBASE_BASE_URL}/farm/pushTokens/{k}.json", timeout=8)
+                _fb_delete(f"/farm/pushTokens/{k}.json")
                 print(f"[AUTO] dropped dead push token {k}")
             except Exception:
                 pass
