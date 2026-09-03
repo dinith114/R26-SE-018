@@ -21,7 +21,9 @@ import requests as _req
 from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
-from app.services.tenant_context import NoTenantInContext, scoped
+from app.services.tenant_context import (
+    NoTenantInContext, current_tenant, scoped,
+)
 
 router = APIRouter()
 
@@ -111,7 +113,40 @@ class AssignBody(BaseModel):
 
 
 def _all_devices() -> Dict[str, dict]:
+    """Every device record, unfiltered. Callers must narrow it - see `_mine`."""
     return _fb_get("/devices.json") or {}
+
+
+def _is_mine(rec: dict) -> bool:
+    """Is this board the caller's to see and touch?
+
+    Three cases, and the third is the one worth stating. A board carrying
+    ANOTHER tenant's id is not ours. A board carrying OURS is. A board carrying
+    NONE is unclaimed and belongs to whoever claims it first - true today,
+    because no board has been flashed with a tenant yet, and true afterwards for
+    a brand-new board out of its box.
+    """
+    owner = (rec or {}).get("tenantId")
+    return not owner or owner == current_tenant()
+
+
+def _mine(mac: str) -> dict:
+    """One device the caller owns, or 404.
+
+    404 AND NOT 403. A 403 says "this exists and is not yours", which confirms a
+    MAC is registered on the platform - the same leak wearing a different hat.
+    To this caller the board simply does not exist.
+    """
+    if current_tenant() is None:
+        # Every route here is guarded, so the tenant is always set by the time
+        # we arrive. If that ever stops being true, refuse rather than fall
+        # back to showing everything.
+        raise NoTenantInContext("device route reached with no tenant in context")
+    rec = _fb_get(f"/devices/{mac}.json")
+    if not isinstance(rec, dict) or not _is_mine(rec):
+        raise HTTPException(404, f"No device {mac} has announced itself yet. "
+                                 "Power the node on and wait about 30 seconds.")
+    return rec
 
 
 def _decorate(mac: str, rec: dict) -> dict:
@@ -159,7 +194,11 @@ def list_devices(only_unassigned: bool = False, ctx: AuthContext = Depends(requi
     powered on and waiting to be claimed.
     """
     devices = _all_devices()
-    out: List[dict] = [_decorate(m, r or {}) for m, r in devices.items()]
+    # Another farm's boards are not merely uninteresting here, they are a leak:
+    # the decorated record carries the MAC, the IP and the house and section the
+    # board is installed in.
+    out: List[dict] = [_decorate(m, r or {}) for m, r in devices.items()
+                       if _is_mine(r or {})]
     if only_unassigned:
         out = [d for d in out if not d["assignedTo"]]
     # Online first, then most recently seen: a farmer standing next to a board
@@ -171,6 +210,7 @@ def list_devices(only_unassigned: bool = False, ctx: AuthContext = Depends(requi
 @router.put("/{mac}/assign")
 def assign_device(mac: str, body: AssignBody, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Bind one node to one section, both directions, refusing to break the 1:1 rule."""
+    _mine(mac)          # 404 unless this board is the caller's
     devices = _all_devices()
     if mac not in devices:
         raise HTTPException(404, f"No device {mac} has announced itself yet. "
@@ -197,6 +237,12 @@ def assign_device(mac: str, body: AssignBody, ctx: AuthContext = Depends(require
         raise HTTPException(502, "Could not write the assignment to Firebase.")
 
     # Convenience copy for the app. The device registry above stays authoritative.
+    # CLAIM IT. An unclaimed board belongs to whoever assigns it first; without
+    # this, a second tenant could assign the same board and silently take it.
+    # A board that already carries a tenant never reaches here - _mine() 404s.
+    if not (devices[mac] or {}).get("tenantId"):
+        _fb_put(f"/devices/{mac}/tenantId.json", current_tenant())
+
     _fb_put(f"/farm/houses/{body.house}/sections/{body.section}/deviceMac.json", mac)
 
     return {"status": "success", "mac": mac, "assignedTo": target,
@@ -209,6 +255,7 @@ def assign_device(mac: str, body: AssignBody, ctx: AuthContext = Depends(require
 def unassign_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Release a node. It keeps reporting to its fallback section rather than
     going silent, so an unclaimed board is still visibly alive."""
+    _mine(mac)          # 404 unless this board is the caller's
     devices = _all_devices()
     if mac not in devices:
         raise HTTPException(404, f"No device {mac}.")
@@ -228,6 +275,7 @@ def set_read_interval(mac: str, body: IntervalBody, ctx: AuthContext = Depends(r
     The node picks this up inside the assignment fetch it already makes every
     cycle, so it costs no extra request and takes effect within one interval.
     """
+    _mine(mac)          # 404 unless this board is the caller's
     if mac not in _all_devices():
         raise HTTPException(404, f"No device {mac}.")
 
@@ -258,6 +306,7 @@ def identify_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN
     the farmer works out which physical unit they are about to assign. The node
     clears the flag itself once it has blinked.
     """
+    _mine(mac)          # 404 unless this board is the caller's
     if mac not in _all_devices():
         raise HTTPException(404, f"No device {mac}.")
     if not _fb_put(f"/devices/{mac}/identify.json", True):
@@ -284,6 +333,7 @@ def ping_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, RO
     second as an earlier one could match a stale ack and report a dead node as
     alive - the exact false confidence this endpoint exists to remove.
     """
+    _mine(mac)          # 404 unless this board is the caller's
     if mac not in _all_devices():
         raise HTTPException(404, f"No device {mac}.")
     token = int(time.time())
@@ -307,6 +357,7 @@ def ping_result(mac: str, token: int, ctx: AuthContext = Depends(require_auth)) 
     a worker for the whole timeout, and the app already polls this way for a
     running pour.
     """
+    _mine(mac)          # 404 unless this board is the caller's
     # ONE device, not the whole registry. The app polls this every second while a
     # ping is in flight, and _all_devices() would download every board's record
     # on each of those polls - the same needless egress that pushed
@@ -342,6 +393,7 @@ def request_scan(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, R
     returns. Scanning takes a few seconds more on top, and briefly disturbs the
     node's own connection.
     """
+    _mine(mac)          # 404 unless this board is the caller's
     if mac not in _all_devices():
         raise HTTPException(404, f"No device {mac}.")
     # DELETE, not PUT-null: a PUT of None does NOT clear a Firebase key (it is a
@@ -357,6 +409,7 @@ def request_scan(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, R
 @router.get("/{mac}/scan")
 def get_scan(mac: str, ctx: AuthContext = Depends(require_auth)) -> dict:
     """The last scan result, and whether one is still running."""
+    _mine(mac)          # 404 unless this board is the caller's
     rec = _all_devices().get(mac)
     if rec is None:
         raise HTTPException(404, f"No device {mac}.")
