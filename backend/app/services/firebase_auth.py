@@ -15,8 +15,8 @@ Every failure is the same answer: None. A caller cannot act differently on
 no identity - so there is nothing to gain from distinguishing them here, and a
 raised exception would only invite a route to leak the reason.
 
-`auth_client()` is the second entry point into the same app. A later
-tenant-provisioning route runs on a static vendor key with no bearer token, so
+`auth_client()` is the second entry point into the same app. Tenant
+provisioning runs on a static vendor key with no bearer token, so
 `_firebase_decode` never runs and never initialises the app on its own. Without
 a shared accessor that route would fall through to the default Firebase app,
 which this project never initialises, and fail with "The default Firebase app
@@ -63,10 +63,12 @@ def set_decoder(fn: Optional[Callable[[str], dict]]) -> None:
 def auth_client():
     """The firebase_admin app for auth, initialised on demand.
 
-    Task 4's tenant-provisioning route runs on a vendor key with no bearer
-    token, so nothing will have verified a token by the time it needs to
-    create a user. Without this it would fall through to the default
-    Firebase app, which this project never initialises.
+    Tenant provisioning runs on the static vendor key with no bearer token, so
+    nothing will have verified a token - and nothing will have initialised the
+    app - by the time that route needs to create a user. Without a shared
+    accessor it would fall through to the DEFAULT Firebase app, which this
+    project never initialises, and fail with "The default Firebase app does not
+    exist" on the very first real provisioning.
     """
     global _auth_app
     if _auth_app is not None:

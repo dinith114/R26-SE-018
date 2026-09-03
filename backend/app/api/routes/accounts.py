@@ -16,6 +16,8 @@ firebase_auth.py.
 """
 from __future__ import annotations
 
+import hmac
+import logging
 import os
 from typing import Callable, Optional
 
@@ -28,17 +30,27 @@ from app.services.firebase_auth import ROLE_ADMIN, ROLES, AuthContext
 
 router = APIRouter()
 
+_log = logging.getLogger(__name__)
+
 VENDOR_KEY = os.environ.get("ORCHID_API_KEY", "").strip()
 
 _create_user: Optional[Callable] = None
 _set_claims: Optional[Callable] = None
 _delete_user: Optional[Callable] = None
+_revoke_tokens: Optional[Callable] = None
 
 
-def set_identity_backend(create_user, set_claims, delete_user) -> None:
-    """Swap the three admin-SDK calls. Pass (None, None, None) to restore."""
-    global _create_user, _set_claims, _delete_user
+def set_identity_backend(create_user, set_claims, delete_user,
+                         revoke_tokens=None) -> None:
+    """Swap the admin-SDK calls. Pass (None, None, None) to restore.
+
+    `revoke_tokens` is optional so the seam still reads the way it did before
+    session revocation existed; a test that does not care about it passes three
+    arguments and gets a no-op.
+    """
+    global _create_user, _set_claims, _delete_user, _revoke_tokens
     _create_user, _set_claims, _delete_user = create_user, set_claims, delete_user
+    _revoke_tokens = revoke_tokens
 
 
 def _identity():
@@ -67,6 +79,69 @@ def _identity():
     return _mk, _claims, _rm
 
 
+def _revoker() -> Callable:
+    if _create_user is not None:
+        return _revoke_tokens or (lambda uid: None)
+    from firebase_admin import auth as fb_auth
+    from app.services.firebase_auth import auth_client
+
+    app = auth_client()
+    return lambda uid: fb_auth.revoke_refresh_tokens(uid, app=app)
+
+
+def _revoke_sessions(uid: str) -> None:
+    """Cut an account's refresh tokens, best effort.
+
+    Defence in depth ONLY. Revocation bites solely on a verify that passes
+    `check_revoked=True`, and the read path deliberately does not pay for that,
+    so this does not on its own close the window in which a stale ID token
+    still carries the old role - `_still_admin` below is what does that. It
+    shortens the window for everything downstream of the token instead. A
+    failure here must not fail an operation that has already succeeded, and it
+    must not be silent either.
+    """
+    try:
+        _revoker()(uid)
+    except Exception as e:
+        _log.warning("could not revoke refresh tokens for %s: %s", uid, e)
+
+
+def _auth_user_already_gone(exc: Exception) -> bool:
+    """True when firebase_admin is saying the auth user is not there.
+
+    Imported lazily, and matched by name as a fallback, because CI installs a
+    trimmed requirements file with no firebase-admin in it and the test seam
+    raises its own stand-in - neither can produce the real class.
+    """
+    try:
+        from firebase_admin.auth import UserNotFoundError
+        if isinstance(exc, UserNotFoundError):
+            return True
+    except Exception:
+        pass
+    return type(exc).__name__ == "UserNotFoundError"
+
+
+def _still_admin(ctx: AuthContext) -> None:
+    """Ask the STORE whether the caller is an admin right now.
+
+    Identity rides on Firebase custom claims, which is what keeps a read at
+    zero Firebase lookups - but a claim is a snapshot taken when the ID token
+    was minted, and a Firebase token lives an hour. A demoted or deleted admin
+    therefore keeps admin claims in their pocket for up to an hour, which is
+    long enough to call POST /users and mint themselves a fresh, entirely
+    legitimate admin account: the removal undoes itself, and nothing logs it.
+
+    So the three endpoints that CHANGE who can do what pay one Firebase read to
+    ask the authority on who is an admin *now*. The read endpoints deliberately
+    do not - they cannot escalate anything, and the per-request read budget is
+    the reason claims are used at all.
+    """
+    caller = store.get_user(ctx.tenant_id, ctx.uid)
+    if not caller or caller.get("role") != ROLE_ADMIN:
+        raise HTTPException(403, "Your account cannot do this.")
+
+
 # EmailStr is deliberately NOT used. It needs the email-validator package,
 # which is in neither requirements.txt nor requirements-ci.txt, and this project
 # has lost enough time to dependency pins already - the numpy 1.26.4 floor, the
@@ -91,7 +166,9 @@ class TenantIn(BaseModel):
 @router.post("/tenants")
 async def create_tenant(body: TenantIn, request: Request):
     """Provision a customer. Vendor key only - see the module docstring."""
-    if not VENDOR_KEY or request.headers.get("x-api-key", "") != VENDOR_KEY:
+    supplied = request.headers.get("x-api-key", "")
+    if not VENDOR_KEY or not hmac.compare_digest(supplied.encode("utf-8"),
+                                                 VENDOR_KEY.encode("utf-8")):
         raise HTTPException(401, "This endpoint needs the vendor key.")
 
     try:
@@ -106,25 +183,32 @@ async def create_tenant(body: TenantIn, request: Request):
     except Exception as e:
         # Nothing was written yet, and nothing may be. A tenant with no admin
         # cannot be logged into and cannot be repaired from the app.
-        raise HTTPException(409, f"Could not create that account: {e}")
+        # The provider's own words are logged, never returned: verbatim they
+        # tell the caller whether an address already has an account somewhere
+        # on this deployment, which is somebody else's tenant's business.
+        _log.warning("tenant provisioning could not create %s: %s", email, e)
+        raise HTTPException(409, "Could not create that account.")
 
     try:
         claims(uid, {"tenantId": tenant_id, "role": ROLE_ADMIN})
         store.create_tenant(tenant_id, body.name, uid, body.plan)
         store.put_user(tenant_id, uid, email, ROLE_ADMIN)
-    except Exception as e:
+    except Exception:
         # create_tenant may have already written meta.json before put_user
-        # raised. A tenant with no admin cannot be logged into and cannot be
+        # failed. A tenant with no admin cannot be logged into and cannot be
         # repaired from the app, so both the auth user AND the half-made
         # tenant must be undone - and one failed undo must not abandon the
-        # other.
+        # other. The rollback names the two records provisioning wrote instead
+        # of deleting the tenant node; see tenant_store.rollback_new_tenant.
+        _log.exception("provisioning tenant %s failed, rolling back", tenant_id)
         _, _, rm = _identity()
-        for undo in (lambda: rm(uid), lambda: store.delete_tenant(tenant_id)):
+        for undo in (lambda: rm(uid),
+                     lambda: store.rollback_new_tenant(tenant_id, uid)):
             try:
                 undo()
             except Exception:
-                pass
-        raise HTTPException(500, f"Could not provision the tenant: {e}")
+                _log.exception("rollback step failed for tenant %s", tenant_id)
+        raise HTTPException(500, "Could not provision the tenant.")
 
     return {"status": "success", "tenantId": tenant_id, "adminUid": uid}
 
@@ -156,6 +240,7 @@ def _check_role(role: str) -> str:
 async def add_user(body: UserIn,
                    ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Create a sub-account inside the caller's own tenant."""
+    _still_admin(ctx)
     _check_role(body.role)
     try:
         email = _looks_like_email(body.email)
@@ -165,22 +250,30 @@ async def add_user(body: UserIn,
     try:
         uid = mk(email, body.password)
     except Exception as e:
-        raise HTTPException(409, f"Could not create that account: {e}")
+        # Logged, not returned. Verbatim, the provider's message tells one
+        # tenant's admin whether an address already has an account in somebody
+        # else's tenant on this deployment.
+        _log.warning("could not create %s in tenant %s: %s",
+                     email, ctx.tenant_id, e)
+        raise HTTPException(409, "Could not create that account.")
     try:
         claims(uid, {"tenantId": ctx.tenant_id, "role": body.role})
         rec = store.put_user(ctx.tenant_id, uid, email, body.role)
-    except Exception as e:
+    except Exception:
+        _log.exception("could not add %s to tenant %s, rolling back",
+                       email, ctx.tenant_id)
         try:
             rm(uid)
         except Exception:
-            pass
-        raise HTTPException(500, f"Could not add that user: {e}")
+            _log.exception("could not roll back the auth user %s", uid)
+        raise HTTPException(500, "Could not add that user.")
     return {"status": "success", "user": rec}
 
 
 @router.put("/users/{uid}/role")
 async def change_role(uid: str, body: RoleIn,
                       ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    _still_admin(ctx)
     role = _check_role(body.role)
     # Looked up INSIDE the caller's tenant, so a uid from elsewhere is simply
     # not found. No cross-tenant check to forget, because there is no path.
@@ -194,14 +287,34 @@ async def change_role(uid: str, body: RoleIn,
                                  "before changing this one.")
 
     _, claims, _ = _identity()
-    claims(uid, {"tenantId": ctx.tenant_id, "role": role})
-    store.set_role(ctx.tenant_id, uid, role)
+    try:
+        claims(uid, {"tenantId": ctx.tenant_id, "role": role})
+        store.set_role(ctx.tenant_id, uid, role)
+    except Exception:
+        # Two authorities, written one after the other: if the store write
+        # fails the claims already say the new role, and the account would keep
+        # a power the store does not grant it. Put the claims back rather than
+        # leave the two disagreeing.
+        _log.exception("could not change %s to %s in tenant %s",
+                       uid, role, ctx.tenant_id)
+        if existing.get("role") in ROLES:
+            try:
+                claims(uid, {"tenantId": ctx.tenant_id,
+                             "role": existing["role"]})
+            except Exception:
+                _log.exception("could not restore the claims of %s", uid)
+        raise HTTPException(500, "Could not change that role.")
+
+    # The old ID token still carries the OLD role for up to an hour, in either
+    # direction. Cutting the refresh tokens shortens that.
+    _revoke_sessions(uid)
     return {"status": "success", "user": store.get_user(ctx.tenant_id, uid)}
 
 
 @router.delete("/users/{uid}")
 async def delete_user(uid: str,
                       ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    _still_admin(ctx)
     existing = store.get_user(ctx.tenant_id, uid)
     if existing is None:
         raise HTTPException(404, "No such user in your account.")
@@ -217,6 +330,27 @@ async def delete_user(uid: str,
         raise HTTPException(400, "This is the only admin.")
 
     _, _, rm = _identity()
-    rm(uid)
-    store.remove_user(ctx.tenant_id, uid)
+    # Before the delete: deleting an auth user does not invalidate an ID token
+    # already issued to it any more than demoting one does.
+    _revoke_sessions(uid)
+    try:
+        rm(uid)
+    except Exception as e:
+        # An auth user that has already vanished - deleted from the Firebase
+        # console, say - must not strand its store record. That record still
+        # says `role: admin` to count_admins, which is what lets the real sole
+        # admin demote themselves into a tenant with no working admin at all.
+        if not _auth_user_already_gone(e):
+            _log.exception("could not delete the auth user %s", uid)
+            raise HTTPException(500, "Could not remove that user.")
+        _log.warning("auth user %s was already gone; clearing its record", uid)
+    try:
+        store.remove_user(ctx.tenant_id, uid)
+    except Exception:
+        # The store now raises on a failed delete rather than swallowing it, so
+        # this is reachable. Reporting success here would leave a record that
+        # count_admins still believes in, behind an auth user that is gone.
+        _log.exception("could not remove %s from tenant %s",
+                       uid, ctx.tenant_id)
+        raise HTTPException(500, "Could not remove that user.")
     return {"status": "success", "removed": uid}
