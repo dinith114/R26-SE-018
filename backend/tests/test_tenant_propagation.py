@@ -64,8 +64,9 @@ def test_the_engine_runs_one_pass_per_tenant_each_in_its_own_context(monkeypatch
     seen = []
     monkeypatch.setattr(automation, "_engine_pass",
                         lambda now: seen.append(current_tenant()))
+    monkeypatch.setattr(automation, "farm_now", lambda: None)
 
-    automation.run_all_tenants(now=None)
+    automation.run_all_tenants()
     assert sorted(seen) == ["t_a", "t_b"]
 
 
@@ -87,7 +88,8 @@ def test_one_tenants_failure_does_not_stop_the_next(monkeypatch):
         done.append(t)
 
     monkeypatch.setattr(automation, "_engine_pass", _pass)
-    out = automation.run_all_tenants(now=None)
+    monkeypatch.setattr(automation, "farm_now", lambda: None)
+    out = automation.run_all_tenants()
 
     assert done == ["t_good"]
     assert "t_bad" in out and "error" in str(out["t_bad"]).lower()
@@ -99,8 +101,9 @@ def test_the_context_does_not_leak_between_tenants(monkeypatch):
     monkeypatch.setattr(automation, "_fb_get",
                         lambda path: {"t_a": True} if path.startswith("/tenants.json") else {})
     monkeypatch.setattr(automation, "_engine_pass", lambda now: None)
+    monkeypatch.setattr(automation, "farm_now", lambda: None)
 
-    automation.run_all_tenants(now=None)
+    automation.run_all_tenants()
     assert current_tenant() is None, "the last tenant was left in context"
 
 
@@ -173,3 +176,47 @@ def test_the_clock_is_not_shared_between_farms(monkeypatch):
 
     assert lk == timedelta(minutes=330)
     assert uk == timedelta(0), "the first farm's timezone leaked into the second"
+
+
+def test_the_scheduled_loop_reaches_the_pass_at_all(monkeypatch):
+    """The bug that made the whole engine silently dead.
+
+    farm_now() reads /farm/meta.json. It was passed as an argument to
+    asyncio.to_thread, so Python evaluated it BEFORE the call and outside every
+    tenant scope - it raised each tick, the loop's own except swallowed it, and
+    run_all_tenants was never reached. No plan, no tray check, no watering, on a
+    system with real pumps, and the only symptom was a log line.
+
+    The loop must therefore hand run_all_tenants nothing that touches a farm
+    path. This asserts on the source, because the failure was in the argument
+    expression rather than in anything the function did.
+    """
+    import inspect
+
+    from app.api.routes import automation
+
+    src = inspect.getsource(automation._engine_loop)
+    call = [ln.strip() for ln in src.splitlines() if "run_all_tenants" in ln]
+    assert call, "the loop no longer calls run_all_tenants at all"
+    assert not any("farm_now" in ln or "farm_tz" in ln for ln in call), (
+        "the loop evaluates a farm-path clock outside every tenant scope: %s"
+        % call)
+
+
+def test_each_farm_is_passed_its_own_clock(monkeypatch):
+    """One `now` shared across tenants would let one farm's local hour decide
+    another farm's dawn check and plan-day rollover."""
+    from app.api.routes import automation
+
+    monkeypatch.setattr(automation, "_fb_get",
+                        lambda path: {"t_a": True, "t_b": True}
+                        if path.startswith("/tenants.json") else {})
+    clocks = {"t_a": "A-clock", "t_b": "B-clock"}
+    monkeypatch.setattr(automation, "farm_now", lambda: clocks[current_tenant()])
+
+    got = {}
+    monkeypatch.setattr(automation, "_engine_pass",
+                        lambda now: got.__setitem__(current_tenant(), now))
+
+    automation.run_all_tenants()
+    assert got == {"t_a": "A-clock", "t_b": "B-clock"}

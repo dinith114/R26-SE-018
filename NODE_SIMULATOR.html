@@ -1233,8 +1233,36 @@ async function runEngine(at, why) {
   log('t-cmd', 'engine pass' + (at ? ' as if it were ' + at : ' now')
       + (why ? '  (' + why + ')' : '') + '...');
   const j = await api('POST', '/auto/engine/run-now' + (at ? '?at=' + encodeURIComponent(at) : ''));
-  const d = j.did || {};
   log('t-ok', 'engine ran at ' + j.at);
+
+  /* The engine is multi-tenant now, so `did` arrives keyed by tenant:
+       { t_abc: { plan: {...}, tray: {...}, water: {...} } }
+     rather than the flat { plan, tray, water } it used to be. The callers below
+     read `did.water` and `did.tray`, and against the nested shape those are
+     simply undefined - so every scenario would report "nothing fired" while the
+     backend had in fact watered. A false negative in the one tool whose whole
+     job is telling you whether the farm reacted.
+
+     Flattened here rather than at each call site, and tolerant of both shapes so
+     this page still works against a backend from before the cutover. */
+  const raw = j.did || {};
+  const d = {};
+  const nested = Object.keys(raw).filter(function (k) {
+    return k.indexOf('t_') === 0 && raw[k] && typeof raw[k] === 'object';
+  });
+  if (!nested.length) {
+    Object.assign(d, raw);                       // pre-cutover: already flat
+  } else {
+    nested.forEach(function (tid) {
+      log('t-dim', '   tenant ' + tid + ':');
+      Object.keys(raw[tid] || {}).forEach(function (step) {
+        // One bench drives one farm, so merging is safe and keeps the callers
+        // below unchanged. If two tenants ever both act in one pass, the log
+        // above still shows each separately.
+        d[step] = raw[tid][step];
+      });
+    });
+  }
   Object.keys(d).forEach(function (step) {
     log('t-dim', '   ' + step + ': ' + JSON.stringify(d[step]).slice(0, 200));
   });
