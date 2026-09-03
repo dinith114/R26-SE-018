@@ -13,12 +13,14 @@ import re
 import time
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import requests as _req
 
 from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
+from app.api.deps import require_auth, require_role
+from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
 from app.services.tenant_context import NoTenantInContext, scoped
 
 router = APIRouter()
@@ -150,7 +152,7 @@ def _device_for_section(devices: Dict[str, dict], house: str, section: str) -> O
 
 
 @router.get("/")
-def list_devices(only_unassigned: bool = False) -> dict:
+def list_devices(only_unassigned: bool = False, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Every node that has ever announced itself.
 
     `only_unassigned=true` is what the Add Section flow shows: boards that are
@@ -167,7 +169,7 @@ def list_devices(only_unassigned: bool = False) -> dict:
 
 
 @router.put("/{mac}/assign")
-def assign_device(mac: str, body: AssignBody) -> dict:
+def assign_device(mac: str, body: AssignBody, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Bind one node to one section, both directions, refusing to break the 1:1 rule."""
     devices = _all_devices()
     if mac not in devices:
@@ -204,7 +206,7 @@ def assign_device(mac: str, body: AssignBody) -> dict:
 
 
 @router.delete("/{mac}/assign")
-def unassign_device(mac: str) -> dict:
+def unassign_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Release a node. It keeps reporting to its fallback section rather than
     going silent, so an unclaimed board is still visibly alive."""
     devices = _all_devices()
@@ -220,7 +222,7 @@ def unassign_device(mac: str) -> dict:
 
 
 @router.put("/{mac}/interval")
-def set_read_interval(mac: str, body: IntervalBody) -> dict:
+def set_read_interval(mac: str, body: IntervalBody, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """How often this node reads its sensors and reports.
 
     The node picks this up inside the assignment fetch it already makes every
@@ -249,7 +251,7 @@ def set_read_interval(mac: str, body: IntervalBody) -> dict:
 
 
 @router.post("/{mac}/identify")
-def identify_device(mac: str) -> dict:
+def identify_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
     """Blink the node's onboard LED for ~10 seconds.
 
     Four identical boxes on a bench are indistinguishable in a list. This is how
@@ -265,7 +267,7 @@ def identify_device(mac: str) -> dict:
 
 
 @router.post("/{mac}/ping")
-def ping_device(mac: str) -> dict:
+def ping_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
     """Ask the node to prove it is there, right now.
 
     Passive liveness costs a heartbeat interval to notice - fine for a status
@@ -298,7 +300,7 @@ def ping_device(mac: str) -> dict:
 
 
 @router.get("/{mac}/ping")
-def ping_result(mac: str, token: int) -> dict:
+def ping_result(mac: str, token: int, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Has the node answered the ping with this token yet?
 
     Deliberately a poll rather than a wait: holding the request open would tie up
@@ -326,7 +328,7 @@ def ping_result(mac: str, token: int) -> dict:
 
 
 @router.post("/{mac}/scan")
-def request_scan(mac: str) -> dict:
+def request_scan(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
     """Ask the node which Wi-Fi networks IT can see.
 
     The scan has to happen on the board, not the phone. They are in different
@@ -353,7 +355,7 @@ def request_scan(mac: str) -> dict:
 
 
 @router.get("/{mac}/scan")
-def get_scan(mac: str) -> dict:
+def get_scan(mac: str, ctx: AuthContext = Depends(require_auth)) -> dict:
     """The last scan result, and whether one is still running."""
     rec = _all_devices().get(mac)
     if rec is None:
@@ -374,7 +376,7 @@ def get_scan(mac: str) -> dict:
 
 
 @router.get("/section/{house}/{section}")
-def device_for_section(house: str, section: str) -> dict:
+def device_for_section(house: str, section: str, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Which node, if any, is reporting for this section.
 
     Answers the 'No device - not reporting' state the app shows for a section

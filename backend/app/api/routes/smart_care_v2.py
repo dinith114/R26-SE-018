@@ -44,7 +44,7 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import requests as _req
@@ -53,6 +53,8 @@ from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
 # Liveness lives with the registry that owns lastSeen; importing it keeps one
 # definition of "is this board there" instead of two that can drift apart.
 from app.api.routes.devices import device_liveness as _device_liveness
+from app.api.deps import require_auth, require_role
+from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
 from app.services.tenant_context import NoTenantInContext, scoped
 
 router = APIRouter()
@@ -2102,7 +2104,7 @@ class FarmSetup(BaseModel):
 
 
 @router.post("/setup")
-async def setup_farm(cfg: FarmSetup):
+async def setup_farm(cfg: FarmSetup, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """First-time setup wizard: farm -> houses -> sections."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     meta = {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
@@ -2132,7 +2134,7 @@ async def setup_farm(cfg: FarmSetup):
 
 
 @router.post("/houses")
-async def add_house(h: HouseIn):
+async def add_house(h: HouseIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Add a house later (farmer can extend the farm any time)."""
     existing = _fb_get("/farm/houses.json") or {}
     hid = h.id or f"H{len(existing) + 1}"
@@ -2157,7 +2159,7 @@ async def add_house(h: HouseIn):
 
 
 @router.post("/houses/{house_id}/sections")
-async def add_section(house_id: str, s: SectionIn):
+async def add_section(house_id: str, s: SectionIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Add a section to an existing house."""
     house = _fb_get(f"/farm/houses/{house_id}/meta.json")
     if not house:
@@ -2189,7 +2191,7 @@ async def add_section(house_id: str, s: SectionIn):
 
 
 @router.put("/houses/{house_id}/sections/{section_id}")
-async def update_section(house_id: str, section_id: str, s: SectionIn):
+async def update_section(house_id: str, section_id: str, s: SectionIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json")
     if not meta:
         raise HTTPException(404, "Section not found")
@@ -2204,7 +2206,7 @@ async def update_section(house_id: str, section_id: str, s: SectionIn):
 # ═══════════════════════ Read endpoints ═══════════════════════════════════════
 
 @router.get("/overview")
-async def overview():
+async def overview(ctx: AuthContext = Depends(require_auth)):
     """Everything the dashboard needs: every house, every section, current status."""
     farm   = _fb_get("/farm/meta.json") or {}
     houses = _fb_get("/farm/houses.json") or {}
@@ -2354,7 +2356,7 @@ async def overview():
 
 
 @router.get("/houses/{house_id}")
-async def get_house(house_id: str):
+async def get_house(house_id: str, ctx: AuthContext = Depends(require_auth)):
     """One house, with each section aged the same way /overview ages it.
 
     This used to return the raw Firebase document, so the section screen had no
@@ -2401,7 +2403,7 @@ async def get_house(house_id: str):
 # ═══════════════════════ ML endpoints ═════════════════════════════════════════
 
 @router.post("/houses/{house_id}/sections/{section_id}/plan")
-async def plan_section(house_id: str, section_id: str):
+async def plan_section(house_id: str, section_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Today's watering plan for one section: time + duration + 2nd session."""
     if not _ready():
         raise HTTPException(503, "v2 models not loaded — run train_models_v2.py")
@@ -2415,7 +2417,7 @@ async def plan_section(house_id: str, section_id: str):
 
 
 @router.post("/plan-all")
-async def plan_all():
+async def plan_all(ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Generate today's plan for every section (run once each morning)."""
     if not _ready():
         raise HTTPException(503, "v2 models not loaded")
@@ -2425,7 +2427,7 @@ async def plan_all():
 
 
 @router.post("/houses/{house_id}/sections/{section_id}/tray-check")
-async def tray_check(house_id: str, section_id: str):
+async def tray_check(house_id: str, section_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Should this section's humidity tray be topped up right now?"""
     if not _ready():
         raise HTTPException(503, "v2 models not loaded")
@@ -2437,7 +2439,7 @@ async def tray_check(house_id: str, section_id: str):
 
 
 @router.post("/tray-check-all")
-async def tray_check_all():
+async def tray_check_all(ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Humidity check for every section (run every few minutes)."""
     if not _ready():
         raise HTTPException(503, "v2 models not loaded")
@@ -2457,7 +2459,7 @@ class WaterCmd(BaseModel):
 
 
 @router.post("/houses/{house_id}/sections/{section_id}/water")
-async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
+async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Manual watering. Fertilizer, if requested, rides along in the same water."""
     s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
     if not s:
@@ -2503,7 +2505,7 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/events")
-def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
+def section_events(house_id: str, section_id: str, limit: int = 40, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Everything that moved water in this section, newest first.
 
     Includes whether the node confirmed it. A command the server accepted and a
@@ -2530,7 +2532,7 @@ def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
 
 @router.get("/houses/{house_id}/sections/{section_id}/command-status")
 def command_status(house_id: str, section_id: str,
-                   id: Optional[str] = None) -> dict:
+                   id: Optional[str] = None, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Has the node actually carried out the last command sent to this section?
 
     The run screen polls this so it can say "node confirmed" instead of only
@@ -2709,7 +2711,7 @@ def command_status(house_id: str, section_id: str,
 
 
 @router.post("/houses/{house_id}/sections/{section_id}/stop")
-def stop_section(house_id: str, section_id: str) -> dict:
+def stop_section(house_id: str, section_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
     """Cut a running pour short.
 
     Until the firmware loop was made cooperative this was impossible: the node
@@ -2759,7 +2761,7 @@ class WifiCmd(BaseModel):
 
 
 @router.post("/houses/{house_id}/sections/{section_id}/wifi")
-def set_node_wifi(house_id: str, section_id: str, body: WifiCmd) -> dict:
+def set_node_wifi(house_id: str, section_id: str, body: WifiCmd, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Move this section's node onto a different Wi-Fi network.
 
     The node treats the change as PROVISIONAL: `saveCredsProvisional` keeps the
@@ -2801,7 +2803,7 @@ class TrayCmd(BaseModel):
 
 
 @router.post("/houses/{house_id}/sections/{section_id}/tray-fill")
-async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
+async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     """Manually top up this section's humidity tray."""
     s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
     if not s:
@@ -2891,13 +2893,13 @@ def _apply_mode(house_id: str, section_id: str, cmd: ModeCmd) -> dict:
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/mode")
-async def set_mode(house_id: str, section_id: str, cmd: ModeCmd):
+async def set_mode(house_id: str, section_id: str, cmd: ModeCmd, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Switch a section between automatic and manual control."""
     return {"status": "success", "control": _apply_mode(house_id, section_id, cmd)}
 
 
 @router.put("/mode-all")
-async def set_mode_all(cmd: ModeCmd):
+async def set_mode_all(cmd: ModeCmd, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Set watering / plant-food automation for the WHOLE farm at once.
 
     The farmer thinks in terms of "is the system looking after my plants?", not
@@ -2939,7 +2941,7 @@ def _clean_name(raw: str, limit: int = 40) -> str:
 
 
 @router.put("/farm")
-async def rename_farm(body: RenameIn):
+async def rename_farm(body: RenameIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Rename the farm. The wizard used to be the only way to set this, so a
     typo during setup was permanent unless the whole farm was rebuilt."""
     meta = _fb_get("/farm/meta.json") or {}
@@ -2954,7 +2956,7 @@ class LocationIn(BaseModel):
 
 
 @router.put("/farm/location")
-async def set_farm_location(body: LocationIn):
+async def set_farm_location(body: LocationIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Where this farm actually is.
 
     forecast.farm_location() has always READ /farm/meta/{latitude,longitude},
@@ -3013,7 +3015,7 @@ class FlowIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/flow")
-async def set_section_flow(house_id: str, section_id: str, body: FlowIn):
+async def set_section_flow(house_id: str, section_id: str, body: FlowIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Record what this section's valve actually delivers.
 
     Measured the same way the pump's 300 ml/s was: open the valve for a known
@@ -3048,7 +3050,7 @@ class DimensionsIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/dimensions")
-async def set_house_dimensions(house_id: str, body: DimensionsIn):
+async def set_house_dimensions(house_id: str, body: DimensionsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Give an existing house its size in metres.
 
     Houses created before dimensions were stored have none, and every spatial
@@ -3069,7 +3071,7 @@ class LifecycleIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/lifecycle")
-async def set_house_lifecycle(house_id: str, body: LifecycleIn):
+async def set_house_lifecycle(house_id: str, body: LifecycleIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Move a house between calibrating and active.
 
     Calibrating means sensors are spread out collecting the data that will
@@ -3103,7 +3105,7 @@ class ApplyPlacementIn(BaseModel):
 
 
 @router.post("/houses/{house_id}/apply-placement")
-async def apply_placement(house_id: str, body: ApplyPlacementIn):
+async def apply_placement(house_id: str, body: ApplyPlacementIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Act on the placement decision: free the sensors it says are redundant.
 
     WHY THIS IS ONE CALL AND NOT TWELVE.
@@ -3208,7 +3210,7 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn):
 
 
 @router.get("/houses/{house_id}/calibration")
-async def calibration_status(house_id: str):
+async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_auth)):
     """How calibration is really going, counted from the stored readings.
 
     Every number here is read from `/farm/history`, never from a timer. A
@@ -3313,7 +3315,7 @@ class MasterIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/master")
-async def set_house_master(house_id: str, body: MasterIn):
+async def set_house_master(house_id: str, body: MasterIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Name the controller that actuates this house's unmonitored sections.
 
     One ESP32 on a multi-channel relay board, opening a valve per section. A
@@ -3351,7 +3353,7 @@ class PumpsIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/pumps")
-async def set_house_pumps(house_id: str, body: PumpsIn):
+async def set_house_pumps(house_id: str, body: PumpsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Which channels drive the watering pump and the tray pump.
 
     This farm has TWO PUMPS, not one pump behind eight valves: watering runs off
@@ -3405,7 +3407,7 @@ class ChannelIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/channel")
-async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
+async def set_section_channel(house_id: str, section_id: str, body: ChannelIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Which relay channel on the master opens this section's valve.
 
     This has to match the physical wiring, so it is set rather than inferred.
@@ -3466,7 +3468,7 @@ class PositionIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/position")
-async def set_section_position(house_id: str, section_id: str, body: PositionIn):
+async def set_section_position(house_id: str, section_id: str, body: PositionIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Place a section in the house, so its microclimate can be interpolated.
 
     Sections were purely logical until now - a name, a label and a light-exposure
@@ -3498,7 +3500,7 @@ class DurationsIn(BaseModel):
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/durations")
-async def set_section_durations(house_id: str, section_id: str, body: DurationsIn):
+async def set_section_durations(house_id: str, section_id: str, body: DurationsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Let a grower fix the pour lengths for one section.
 
     Only the LENGTHS. The models keep deciding the time of day and whether any
@@ -3591,7 +3593,7 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/name")
-async def rename_section(house_id: str, section_id: str, body: RenameIn):
+async def rename_section(house_id: str, section_id: str, body: RenameIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Rename one section, touching nothing else about it."""
     path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
     meta = _fb_get(path)
@@ -3603,7 +3605,7 @@ async def rename_section(house_id: str, section_id: str, body: RenameIn):
 
 
 @router.put("/houses/{house_id}")
-async def edit_house(house_id: str, body: HouseEdit):
+async def edit_house(house_id: str, body: HouseEdit, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Rename a house or change its type / plant count."""
     meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
     if not meta:
@@ -3617,7 +3619,7 @@ async def edit_house(house_id: str, body: HouseEdit):
 
 
 @router.delete("/houses/{house_id}")
-async def delete_house(house_id: str):
+async def delete_house(house_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Remove a house, its readings, and the claim its nodes have on it.
 
     RELEASING THE NODES IS NOT TIDYING UP - it is what makes the delete stick.
@@ -3665,7 +3667,7 @@ async def delete_house(house_id: str):
 
 
 @router.delete("/houses/{house_id}/sections/{section_id}")
-async def delete_section(house_id: str, section_id: str):
+async def delete_section(house_id: str, section_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Deleting a section must also release its node.
 
     Otherwise the device keeps `assignedTo` pointing at a section that no longer
@@ -3699,7 +3701,7 @@ async def delete_section(house_id: str, section_id: str):
 
 @router.get("/houses/{house_id}/sections/{section_id}/history")
 async def section_history(house_id: str, section_id: str, points: int = 48,
-                          hours: int = 24):
+                          hours: int = 24, ctx: AuthContext = Depends(require_auth)):
     """Down-sampled history for the section's charts (oldest first).
 
     `hours` is the window the farmer picked in the chart's range menu. Nodes
@@ -3750,7 +3752,7 @@ async def section_history(house_id: str, section_id: str, points: int = 48,
 
 
 @router.get("/alerts")
-async def alerts():
+async def alerts(ctx: AuthContext = Depends(require_auth)):
     """Everything the farmer should be told about right now."""
     houses = _fb_get("/farm/houses.json") or {}
     items = []
@@ -3864,7 +3866,7 @@ async def alerts():
 
 
 @router.get("/model-info")
-async def model_info():
+async def model_info(ctx: AuthContext = Depends(require_auth)):
     """Model metrics — used by the app's About screen and for the viva."""
     if not _ready():
         raise HTTPException(503, "v2 models not loaded")

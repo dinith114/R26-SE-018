@@ -41,7 +41,7 @@ from functools import partial
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 import requests as _req
@@ -52,6 +52,8 @@ from app.api.routes.smart_care_v2 import (
     farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event,
 )
+from app.api.deps import require_auth, require_role
+from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
 from app.services.tenant_context import current_tenant, tenant_scope
 
 router = APIRouter()
@@ -94,7 +96,7 @@ class AutoModeIn(BaseModel):
 
 
 @router.put("/auto-mode")
-async def set_auto_mode(body: AutoModeIn):
+async def set_auto_mode(body: AutoModeIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Flip the whole farm between acting by itself and alarming the farmer."""
     meta = _fb_get("/farm/meta.json") or {}
     meta["autoMode"] = bool(body.autoMode)
@@ -104,7 +106,7 @@ async def set_auto_mode(body: AutoModeIn):
 
 
 @router.get("/auto-mode")
-async def read_auto_mode():
+async def read_auto_mode(ctx: AuthContext = Depends(require_auth)):
     return {"status": "success", "autoMode": get_auto_mode()}
 
 
@@ -114,7 +116,7 @@ class OverrideIn(BaseModel):
 
 
 @router.put("/sections/{house_id}/{section_id}/override")
-async def set_section_override(house_id: str, section_id: str, body: OverrideIn):
+async def set_section_override(house_id: str, section_id: str, body: OverrideIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Pin ONE section against the farm switch.
 
     For the case where a single tray leaks or a section is being repotted, and
@@ -248,7 +250,7 @@ class PushTokenIn(BaseModel):
 
 
 @router.post("/push/register")
-async def register_push_token(body: PushTokenIn):
+async def register_push_token(body: PushTokenIn, ctx: AuthContext = Depends(require_auth)):
     """Remember a phone so alarms can reach it."""
     tok = (body.token or "").strip()
     if not tok:
@@ -458,7 +460,7 @@ def _flush_pending_pushes():
 
 
 @router.post("/push/test")
-async def push_test(alarm: bool = False):
+async def push_test(alarm: bool = False, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Prove the phone is reachable, without waiting for a real alarm.
 
     `?alarm=true` sends it down the REAL alarm path - data-only, so the app's
@@ -486,7 +488,7 @@ async def push_test(alarm: bool = False):
 
 
 @router.get("/alarms")
-async def list_alarms(limit: int = 50):
+async def list_alarms(limit: int = 50, ctx: AuthContext = Depends(require_auth)):
     """Newest first. `action` items are the ones that need the farmer."""
     raw = _fb_get("/farm/alarms.json") or {}
     items = []
@@ -500,7 +502,7 @@ async def list_alarms(limit: int = 50):
 
 
 @router.put("/alarms/{alarm_id}/ack")
-async def ack_alarm(alarm_id: str):
+async def ack_alarm(alarm_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     a = _fb_get(f"/farm/alarms/{alarm_id}.json")
     if a:
         a["acknowledged"] = True
@@ -832,7 +834,7 @@ def start_engine():
 
 
 @router.get("/engine")
-async def engine_status():
+async def engine_status(ctx: AuthContext = Depends(require_auth)):
     """Proof the clock is alive — useful in the demo and in the report."""
     return {
         "status": "success",
@@ -855,7 +857,7 @@ async def engine_status():
 
 
 @router.post("/engine/run-now")
-async def run_now(at: Optional[str] = None):
+async def run_now(at: Optional[str] = None, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Run one pass immediately, instead of waiting for the next tick.
 
     `at` lets a caller say what time it should pretend it is, as
