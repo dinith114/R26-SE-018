@@ -196,11 +196,20 @@ def test_the_scheduled_loop_reaches_the_pass_at_all(monkeypatch):
     from app.api.routes import automation
 
     src = inspect.getsource(automation._engine_loop)
-    call = [ln.strip() for ln in src.splitlines() if "run_all_tenants" in ln]
-    assert call, "the loop no longer calls run_all_tenants at all"
-    assert not any("farm_now" in ln or "farm_tz" in ln for ln in call), (
-        "the loop evaluates a farm-path clock outside every tenant scope: %s"
-        % call)
+    assert "run_all_tenants" in src, "the loop no longer calls run_all_tenants"
+
+    # The WHOLE body, not just the calling line. The first version of this test
+    # only looked at the line containing run_all_tenants, which would have
+    # missed the same bug written one line earlier:
+    #     now = farm_now()
+    #     await asyncio.to_thread(run_all_tenants, now)
+    # Nothing in this loop may touch a farm path, wherever it is written.
+    reads_a_farm_path = ("farm_now", "farm_tz", "get_auto_mode", "_fb_get")
+    offenders = [ln.strip() for ln in src.splitlines()
+                 if not ln.strip().startswith("#")
+                 and any(name in ln for name in reads_a_farm_path)]
+    assert offenders == [], (
+        "the loop reads a farm path outside every tenant scope: %s" % offenders)
 
 
 def test_each_farm_is_passed_its_own_clock(monkeypatch):

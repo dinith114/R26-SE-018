@@ -247,7 +247,17 @@ async function autoML(){
         k.startsWith('t_') && rawDid[k] && typeof rawDid[k] === 'object');
       const d = {};
       if(!tids.length){ Object.assign(d, rawDid); }
-      else { tids.forEach(t => Object.assign(d, rawDid[t])); }
+      else {
+        tids.forEach(tid => {
+          // A tenant whose pass raised comes back as {error: "..."}. Only
+          // plan/water/tray are checked below, so without this a real failure
+          // logs nothing at all - the quietest possible way for this tool to
+          // stop telling you what the farm did.
+          if(rawDid[tid] && rawDid[tid].error)
+            log(`⚠️ <b>${tid} pass failed:</b> ${rawDid[tid].error}`);
+          Object.assign(d, rawDid[tid]);
+        });
+      }
       if(d.plan)  log(`🧠 <b>engine planned ${d.plan.planned} sections</b>`);
       if(d.water && d.water.watered && d.water.watered.length)
         log(`💧 <b>engine watered: ${d.water.watered.join(', ')}</b>`);
