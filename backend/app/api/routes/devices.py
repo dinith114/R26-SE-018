@@ -437,6 +437,16 @@ def device_for_section(house: str, section: str, ctx: AuthContext = Depends(requ
     """
     devices = _all_devices()
     mac = _device_for_section(devices, house, section)
+    # The one route here that is keyed by house/section rather than by MAC, and
+    # the one the first pass missed for exactly that reason: an insertion that
+    # matched on `mac` skipped it, and so did the cross-tenant test loop. Left
+    # open it maps another farm's house and section - both trivially guessable,
+    # they are H1/S1 and so on - to that board's MAC, IP and firmware.
+    #
+    # Answered as "no device here" rather than 404: to this caller that section
+    # genuinely has no board, and saying anything else would confirm one exists.
+    if mac and not _is_mine(devices.get(mac) or {}):
+        mac = None
     if not mac:
         return {"status": "success", "house": house, "section": section,
                 "device": None, "message": "No device assigned to this section."}

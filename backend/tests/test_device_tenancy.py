@@ -36,6 +36,12 @@ def farm(monkeypatch):
             LOOSE:  {"ip": "10.0.0.3", "fw": "validation-1.9", "lastSeen": 9e12},
         },
     }
+    # DELIBERATELY the same object, not a copy, and this needs saying because
+    # the obvious "make it safer" edit to dict(rec) would break the fixture
+    # silently: _mine() reads /devices/{mac}.json while the sync below writes
+    # /devices.json, and only the shared reference keeps the two agreeing. Real
+    # Firebase is a tree, so a write to a child IS visible from the parent -
+    # this aliasing is what models that, and a copy would model nothing.
     for mac, rec in db["/devices.json"].items():
         db[f"/devices/{mac}.json"] = rec
 
@@ -140,12 +146,50 @@ def test_every_single_device_route_is_404_for_another_farms_board(farm):
         assert "403" not in r.text
 
 
-def test_my_own_board_is_reachable_on_those_same_routes(farm):
-    """The mirror of the test above. A filter that refused everything would
-    pass that one and be useless."""
+def test_the_section_lookup_does_not_expose_another_farms_board(farm):
+    """The ninth route, keyed by house/section rather than by MAC.
+
+    It was missed by the first pass for exactly that reason - the ownership
+    check was inserted by matching on `mac`, and this route has none - and it
+    was missed by the loop above for the same reason, so nothing caught it.
+    House and section ids are trivially guessable (H1/S1, H9/S9), so left open
+    this maps another farm's layout to that board's MAC, IP and firmware.
+
+    It answers "no device here" rather than 404: to this caller the section
+    genuinely has no board, and saying anything else confirms one exists.
+    """
     client, _ = farm
-    assert client.post(f"/api/v2/devices/{MINE}/identify",
-                       headers=_a()).status_code == 200
+    r = client.get("/api/v2/devices/section/H9/S9", headers=_a())
+    assert r.status_code == 200
+    assert THEIRS not in r.text, "another farm's board leaked through the section lookup"
+    assert "10.0.0.2" not in r.text
+    assert not r.json().get("device")
+
+
+def test_my_own_board_is_reachable_on_every_one_of_those_routes(farm):
+    """The mirror of the cross-tenant loop, and it has to be a LOOP too.
+
+    When this only exercised `identify`, a route-local mistake - `_mine()` given
+    the wrong argument in one route - would 404 a farmer on their OWN hardware
+    and every test still passed. Proven: mutating the interval route that way
+    left all 163 green. A filter that refuses everything and a filter wired
+    wrongly in one place are different bugs, and only a loop catches the second.
+    """
+    client, _ = farm
+    calls = [
+        ("post",   f"/api/v2/devices/{MINE}/identify", None),
+        ("post",   f"/api/v2/devices/{MINE}/ping",     None),
+        ("get",    f"/api/v2/devices/{MINE}/ping?token=1", None),
+        ("post",   f"/api/v2/devices/{MINE}/scan",     None),
+        ("get",    f"/api/v2/devices/{MINE}/scan",     None),
+        ("put",    f"/api/v2/devices/{MINE}/interval", {"readIntervalMs": 15000}),
+    ]
+    for method, url, body in calls:
+        kw = {"headers": _a()}
+        if body is not None:
+            kw["json"] = body
+        r = getattr(client, method)(url, **kw)
+        assert r.status_code != 404, f"{method.upper()} {url} 404s on the owner's own board"
 
 
 # ── claiming ───────────────────────────────────────────────────────────────
