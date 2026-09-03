@@ -49,9 +49,10 @@ import requests as _req
 from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
-    farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL, _ready,
+    farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event,
 )
+from app.services.tenant_context import current_tenant, tenant_scope
 
 router = APIRouter()
 
@@ -700,9 +701,44 @@ def run_plan_cycle(now: Optional[datetime] = None, houses: Optional[dict] = None
 # ═══════════════════════ The clock ═══════════════════════════════════════════
 
 _state: Dict[str, object] = {
-    "running": False, "lastTick": None, "lastTray": None,
-    "lastPlanDay": None, "ticks": 0, "errors": 0, "lastError": None,
+    "running": False, "ticks": 0, "errors": 0, "lastError": None,
 }
+
+# Per farm, because these are facts about a farm and not about the process.
+# Shared, the first tenant's pass would mark the day planned and every OTHER
+# farm would be skipped until tomorrow - the whole point of the engine, silently
+# not happening for everyone but one customer.
+_state_by_tenant: Dict[str, Dict[str, object]] = {}
+
+
+def _state_for(tenant_id: Optional[str]) -> dict:
+    return _state_by_tenant.setdefault(tenant_id or "-", {
+        "lastTick": None, "lastTray": None, "lastSpatial": None,
+        "lastPlanDay": None, "autoMode": None,
+    })
+
+
+def run_all_tenants(now) -> dict:
+    """One engine pass per tenant.
+
+    The engine has no request to inherit a tenant from, so it sets one per
+    iteration. EVERY tenant is attempted even when an earlier one raises: a farm
+    whose data is broken must not stop every other farm being watered, and an
+    engine that gives up on the first bad row is an engine that stops watering
+    everybody the first time one customer's record is malformed.
+    """
+    tenants = _fb_get("/tenants.json") or {}
+    out = {}
+    for tenant_id in tenants:
+        try:
+            with tenant_scope(tenant_id):
+                out[tenant_id] = _engine_pass(now)
+        except Exception as e:
+            _state["errors"] = int(_state["errors"]) + 1
+            _state["lastError"] = f"{tenant_id}: {e}"
+            print(f"[AUTO] tenant {tenant_id} pass failed: {e}\n{traceback.format_exc()}")
+            out[tenant_id] = {"error": str(e)}
+    return out
 
 
 def _engine_pass(now: datetime) -> dict:
@@ -714,31 +750,32 @@ def _engine_pass(now: datetime) -> dict:
     exhausted the Firebase free tier.
     """
     did = {}
+    st = _state_for(current_tenant())
     houses = _fb_get("/farm/houses.json") or {}
 
     # 1. Today's plan, once per day, after dawn so the dawn reading exists.
-    if _state["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
+    if st["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
         did["plan"] = run_plan_cycle(now, houses)
-        _state["lastPlanDay"] = _today(now)
+        st["lastPlanDay"] = _today(now)
 
     # 2. Estimate the zones with no hardware, BEFORE anything reads them.
     #    Placed here so that by the time the tray check and the watering link
     #    look at a section, its estimate is already current. Uses the farm
     #    document this pass already fetched rather than re-reading it.
-    last_spatial = _state.get("lastSpatial")
+    last_spatial = st.get("lastSpatial")
     if last_spatial is None or (now - last_spatial) >= timedelta(minutes=SPATIAL_MINUTES):
         try:
             from app.api.routes import spatial_service as _sp
             did["spatial"] = _sp.interpolate_all(houses, now)
         except Exception as e:               # advisory only; never stop the clock
             print(f"[SPATIAL] pass skipped: {e}")
-        _state["lastSpatial"] = now
+        st["lastSpatial"] = now
 
     # 3. Humidity trays, every TRAY_CHECK_MINUTES.
-    last_tray = _state["lastTray"]
+    last_tray = st["lastTray"]
     if last_tray is None or (now - last_tray) >= timedelta(minutes=TRAY_CHECK_MINUTES):
         did["tray"] = run_tray_cycle(now, houses)
-        _state["lastTray"] = now
+        st["lastTray"] = now
 
     # 4. Watering, checked every tick because a planned minute must not be missed.
     did["water"] = run_watering_link(now, houses)
@@ -747,7 +784,8 @@ def _engine_pass(now: datetime) -> dict:
     #    four due sections do not mean four separate buzzes.
     _flush_pending_pushes()
 
-    _state["lastTick"] = now
+    st["lastTick"] = now
+    st["autoMode"] = get_auto_mode()
     _state["ticks"] = int(_state["ticks"]) + 1
     return did
 
@@ -759,7 +797,7 @@ async def _engine_loop():
     while True:
         try:
             if _ready():
-                await asyncio.to_thread(_engine_pass, farm_now())
+                await asyncio.to_thread(run_all_tenants, farm_now())
         except Exception as e:                      # never let one bad pass kill the clock
             _state["errors"] = int(_state["errors"]) + 1
             _state["lastError"] = str(e)
@@ -783,10 +821,15 @@ async def engine_status():
         "ticks": _state["ticks"],
         "errors": _state["errors"],
         "lastError": _state["lastError"],
-        "lastTick": str(_state["lastTick"]),
-        "lastTrayCheck": str(_state["lastTray"]),
-        "lastPlanDay": _state["lastPlanDay"],
-        "autoMode": get_auto_mode(),
+        # Per farm now. lastPlanDay above all cannot be engine-wide, and
+        # autoMode is recorded during each pass rather than read here: this
+        # endpoint is polled, and reading it live would need a tenant in
+        # context that a status call does not have.
+        "tenants": {t: {"lastTick": str(s["lastTick"]),
+                        "lastTrayCheck": str(s["lastTray"]),
+                        "lastPlanDay": s["lastPlanDay"],
+                        "autoMode": s["autoMode"]}
+                    for t, s in _state_by_tenant.items()},
     }
 
 

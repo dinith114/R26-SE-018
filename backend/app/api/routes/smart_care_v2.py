@@ -38,6 +38,7 @@ import os
 import joblib
 import time
 import uuid
+import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional
@@ -1497,7 +1498,12 @@ def _run_per_section(houses: dict, fn) -> dict:
 
     results: Dict[str, dict] = {}
     with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
-        futures = {pool.submit(fn, hid, sid, s): f"{hid}-{sid}" for hid, sid, s in jobs}
+        # A ContextVar does not cross a thread boundary. Without copying the
+        # context into each worker, every section in a parallel pass raises
+        # "no tenant in context" - and it reads like a Firebase fault rather
+        # than a threading one, which is a bad afternoon to spend.
+        futures = {pool.submit(contextvars.copy_context().run, fn, hid, sid, s):
+                   f"{hid}-{sid}" for hid, sid, s in jobs}
         for fut in as_completed(futures):
             key = futures[fut]
             try:
