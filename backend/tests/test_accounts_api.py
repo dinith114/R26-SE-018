@@ -202,3 +202,115 @@ def test_a_store_failure_after_the_tenant_is_written_leaves_nothing_behind(env):
     assert r.status_code == 500
     assert db == before, "a tenant with no admin survived a failed provisioning"
     assert users == {}, "the orphaned Firebase Auth user was not rolled back"
+
+# ── user management ────────────────────────────────────────────────────────
+
+def _add(client, tid, email, role):
+    return client.post("/api/v2/accounts/users",
+                       headers=_tok("ua", tid, ROLE_ADMIN),
+                       json={"email": email, "password": "sup3rsecret",
+                             "role": role})
+
+
+def test_admin_creates_an_operator_with_the_right_claims(env):
+    client, _, users = env
+    tid = _make_tenant(client)["tenantId"]
+    r = _add(client, tid, "op@example.com", ROLE_OPERATOR)
+    assert r.status_code == 200, r.text
+    uid = r.json()["user"]["uid"]
+    assert users[uid]["claims"] == {"tenantId": tid, "role": ROLE_OPERATOR}
+    assert store.get_user(tid, uid)["role"] == ROLE_OPERATOR
+
+
+def test_operator_and_viewer_cannot_create_users(env):
+    client, _, _ = env
+    tid = _make_tenant(client)["tenantId"]
+    for role in (ROLE_OPERATOR, ROLE_VIEWER):
+        r = client.post("/api/v2/accounts/users", headers=_tok("u9", tid, role),
+                        json={"email": "x@example.com",
+                              "password": "sup3rsecret", "role": ROLE_VIEWER})
+        assert r.status_code == 403
+
+
+def test_creating_a_user_with_an_unknown_role_is_refused(env):
+    client, _, _ = env
+    tid = _make_tenant(client)["tenantId"]
+    r = _add(client, tid, "x@example.com", "superuser")
+    assert r.status_code == 422
+
+
+def test_admin_changes_a_role_and_the_claims_follow(env):
+    client, _, users = env
+    tid = _make_tenant(client)["tenantId"]
+    uid = _add(client, tid, "op@example.com", ROLE_OPERATOR).json()["user"]["uid"]
+
+    r = client.put(f"/api/v2/accounts/users/{uid}/role",
+                   headers=_tok("ua", tid, ROLE_ADMIN),
+                   json={"role": ROLE_VIEWER})
+    assert r.status_code == 200
+    assert store.get_user(tid, uid)["role"] == ROLE_VIEWER
+    assert users[uid]["claims"]["role"] == ROLE_VIEWER
+
+
+def test_admin_deletes_a_user_from_both_places(env):
+    client, _, users = env
+    tid = _make_tenant(client)["tenantId"]
+    uid = _add(client, tid, "op@example.com", ROLE_OPERATOR).json()["user"]["uid"]
+
+    r = client.delete(f"/api/v2/accounts/users/{uid}",
+                      headers=_tok("ua", tid, ROLE_ADMIN))
+    assert r.status_code == 200
+    assert store.get_user(tid, uid) is None
+    assert uid not in users
+
+
+def test_an_admin_cannot_delete_themselves(env):
+    """Not paternalism: the app offers no other way back in, and the only
+    remaining route would be a vendor-side repair."""
+    client, _, _ = env
+    body = _make_tenant(client)
+    tid, uid = body["tenantId"], body["adminUid"]
+    r = client.delete(f"/api/v2/accounts/users/{uid}",
+                      headers=_tok(uid, tid, ROLE_ADMIN))
+    assert r.status_code == 400
+    assert store.get_user(tid, uid) is not None
+
+
+def test_the_last_admin_cannot_be_demoted(env):
+    client, _, _ = env
+    body = _make_tenant(client)
+    tid, uid = body["tenantId"], body["adminUid"]
+    r = client.put(f"/api/v2/accounts/users/{uid}/role",
+                   headers=_tok(uid, tid, ROLE_ADMIN),
+                   json={"role": ROLE_VIEWER})
+    assert r.status_code == 400
+    assert store.get_user(tid, uid)["role"] == ROLE_ADMIN
+
+
+def test_a_second_admin_makes_demotion_allowed(env):
+    client, _, _ = env
+    body = _make_tenant(client)
+    tid, first = body["tenantId"], body["adminUid"]
+    _add(client, tid, "admin2@example.com", ROLE_ADMIN)
+
+    r = client.put(f"/api/v2/accounts/users/{first}/role",
+                   headers=_tok(first, tid, ROLE_ADMIN),
+                   json={"role": ROLE_VIEWER})
+    assert r.status_code == 200
+    assert store.count_admins(tid) == 1
+
+
+def test_an_admin_cannot_touch_a_user_in_another_tenant(env):
+    """The isolation test that matters most: a real admin, a real uid, and the
+    only thing wrong is that they belong to different tenants."""
+    client, _, _ = env
+    a = _make_tenant(client, name="Farm A", email="a@example.com")["tenantId"]
+    b = _make_tenant(client, name="Farm B", email="b@example.com")["tenantId"]
+    victim = _add(client, b, "worker@example.com", ROLE_OPERATOR).json()["user"]["uid"]
+
+    hdr = _tok("ua", a, ROLE_ADMIN)
+    assert client.delete(f"/api/v2/accounts/users/{victim}",
+                         headers=hdr).status_code == 404
+    assert client.put(f"/api/v2/accounts/users/{victim}/role",
+                      headers=hdr, json={"role": ROLE_VIEWER}).status_code == 404
+    assert store.get_user(b, victim)["role"] == ROLE_OPERATOR

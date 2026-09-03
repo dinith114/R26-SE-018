@@ -22,9 +22,9 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.api.deps import require_auth
+from app.api.deps import require_auth, require_role
 from app.services import tenant_store as store
-from app.services.firebase_auth import ROLE_ADMIN, AuthContext
+from app.services.firebase_auth import ROLE_ADMIN, ROLES, AuthContext
 
 router = APIRouter()
 
@@ -134,3 +134,86 @@ async def list_users(ctx: AuthContext = Depends(require_auth)):
     """Everyone in the CALLER'S tenant. The tenant is not a parameter."""
     return {"status": "success", "tenantId": ctx.tenant_id,
             "users": store.list_users(ctx.tenant_id)}
+
+
+class UserIn(BaseModel):
+    email: str = Field(min_length=5, max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+    role: str = Field(default="viewer")
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+def _check_role(role: str) -> str:
+    if role not in ROLES:
+        raise HTTPException(422, f"Role must be one of {', '.join(ROLES)}.")
+    return role
+
+
+@router.post("/users")
+async def add_user(body: UserIn,
+                   ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    """Create a sub-account inside the caller's own tenant."""
+    _check_role(body.role)
+    try:
+        email = _looks_like_email(body.email)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    mk, claims, rm = _identity()
+    try:
+        uid = mk(email, body.password)
+    except Exception as e:
+        raise HTTPException(409, f"Could not create that account: {e}")
+    try:
+        claims(uid, {"tenantId": ctx.tenant_id, "role": body.role})
+        rec = store.put_user(ctx.tenant_id, uid, email, body.role)
+    except Exception as e:
+        try:
+            rm(uid)
+        except Exception:
+            pass
+        raise HTTPException(500, f"Could not add that user: {e}")
+    return {"status": "success", "user": rec}
+
+
+@router.put("/users/{uid}/role")
+async def change_role(uid: str, body: RoleIn,
+                      ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    role = _check_role(body.role)
+    # Looked up INSIDE the caller's tenant, so a uid from elsewhere is simply
+    # not found. No cross-tenant check to forget, because there is no path.
+    existing = store.get_user(ctx.tenant_id, uid)
+    if existing is None:
+        raise HTTPException(404, "No such user in your account.")
+
+    if (existing.get("role") == ROLE_ADMIN and role != ROLE_ADMIN
+            and store.count_admins(ctx.tenant_id) <= 1):
+        raise HTTPException(400, "This is the only admin. Add another admin "
+                                 "before changing this one.")
+
+    _, claims, _ = _identity()
+    claims(uid, {"tenantId": ctx.tenant_id, "role": role})
+    store.set_role(ctx.tenant_id, uid, role)
+    return {"status": "success", "user": store.get_user(ctx.tenant_id, uid)}
+
+
+@router.delete("/users/{uid}")
+async def delete_user(uid: str,
+                      ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    existing = store.get_user(ctx.tenant_id, uid)
+    if existing is None:
+        raise HTTPException(404, "No such user in your account.")
+    if uid == ctx.uid:
+        # The app offers no other way back in; the only remaining route would
+        # be a vendor-side repair.
+        raise HTTPException(400, "You cannot delete your own account.")
+    if (existing.get("role") == ROLE_ADMIN
+            and store.count_admins(ctx.tenant_id) <= 1):
+        raise HTTPException(400, "This is the only admin.")
+
+    _, _, rm = _identity()
+    rm(uid)
+    store.remove_user(ctx.tenant_id, uid)
+    return {"status": "success", "removed": uid}
