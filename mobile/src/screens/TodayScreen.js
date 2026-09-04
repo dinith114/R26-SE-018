@@ -33,6 +33,7 @@ import { FarmSkeleton } from '../components/Skeleton';
 import { FreshnessBadge, FarmStaleBanner, isFault } from '../components/Freshness';
 import { confirmScoped, listNames } from '../utils/confirm';
 import { COLORS, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import {
   getOverview, planAll, trayCheckAll, waterSection, fillTray,
   fertilizeSection, getAlarms, RH_LOW,
@@ -88,6 +89,10 @@ function plainDuration(sec) {
 }
 
 export default function TodayScreen({ navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
   const [busy, setBusy]         = useState(false);
   const [activity, setActivity] = useState(null);  // persistent "job running" banner
 
@@ -252,7 +257,7 @@ export default function TodayScreen({ navigation }) {
               style={[s.actBtn, SHADOW.sm,
                       { backgroundColor: dry.length ? COLORS.primary : COLORS.bgCardAlt },
                       busy && { opacity: 0.6 }]}
-              onPress={dry.length ? doFillTrays : undefined}
+              onPress={dry.length && can('fillTray') ? doFillTrays : undefined}
               disabled={busy || dry.length === 0}
               activeOpacity={0.85}
               accessibilityRole="button"
@@ -275,7 +280,7 @@ export default function TodayScreen({ navigation }) {
             <TouchableOpacity
               style={[s.actBtn, SHADOW.sm, { backgroundColor: COLORS.bgCard },
                       busy && { opacity: 0.6 }]}
-              onPress={doCheck} disabled={busy} activeOpacity={0.85}
+              onPress={doCheck} disabled={busy || !can('planAll')} activeOpacity={0.85}
               accessibilityRole="button"
               accessibilityState={{ disabled: busy }}
               accessibilityLabel="Check now. Re-reads every sensor, updates today's plan, and fills any tray that is low.">
@@ -319,7 +324,8 @@ export default function TodayScreen({ navigation }) {
                   </Text>
                 </View>
               </View>
-              <TouchableOpacity style={s.fertBtn} onPress={doFertilize} disabled={busy}
+              <TouchableOpacity style={s.fertBtn} onPress={doFertilize}
+                disabled={busy || !can('fertilizeSection')}
                 activeOpacity={0.85} accessibilityRole="button"
                 accessibilityLabel={`Feed the plants now in ${fertDue.length} sections`}>
                 <Ionicons name="leaf" size={18} color="#FFF" />
@@ -390,7 +396,8 @@ export default function TodayScreen({ navigation }) {
               onChanged={refreshAuto} />
 
           {/* emergency override, deliberately quiet */}
-          <TouchableOpacity style={s.linkBtn} onPress={doWaterNow} disabled={busy}
+          <TouchableOpacity style={s.linkBtn} onPress={doWaterNow}
+            disabled={busy || !can('waterSection')}
             accessibilityRole="button"
             accessibilityLabel={`Water all ${sections.length} sections right now. Asks for confirmation first.`}>
             <Ionicons name="rainy-outline" size={20} color={COLORS.textSecondary} />

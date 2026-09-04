@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import LocationPicker from '../components/LocationPicker';
+import { useCan } from '../config/auth';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
@@ -77,6 +78,10 @@ const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
@@ -248,9 +253,12 @@ export default function SettingsScreen({ navigation }) {
               when it is unset belongs in setup, not here. */}
           <Text style={s.sectionLabel}>FARM LOCATION</Text>
           <View style={[s.card, SHADOW.sm]}>
+            {/* The coordinates stay readable - they explain which weather
+                forecast the models are using. Only moving the pin is admin. */}
             <TouchableOpacity
               style={s.locView}
-              onPress={() => setLocOpen(true)}
+              disabled={!can('setFarmLocation')}
+              onPress={can('setFarmLocation') ? () => setLocOpen(true) : undefined}
               activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Change where the farm is on the map">

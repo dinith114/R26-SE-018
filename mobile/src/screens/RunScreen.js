@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { waterSection, fillTray, getCommandStatus, stopSection } from '../services/careV2';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -48,6 +49,10 @@ const STATE = {
 };
 
 export default function RunScreen({ route, navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
   const { action = 'water', targets = [] } = route.params || {};
   const isWater = action === 'water';
 
@@ -92,6 +97,26 @@ export default function RunScreen({ route, navigation }) {
       }
       return { ok: false };
     };
+
+    /* This screen ACTS on mount - it does not wait for a button. So the
+       check has to be here and not only on the two doors that lead here: a
+       screen that starts a pour the moment it renders must refuse to render
+       for somebody who may not pour, however they arrived.
+
+       The server would refuse it anyway. The point is not to send it. */
+    /* Both action names written out rather than computed into one can() call.
+       An audit that greps for can('waterSection') has to be able to see it
+       here, and a check it cannot see is a check the next person removes. */
+    const mayRun = isWater ? can('waterSection') : can('fillTray');
+    if (!mayRun) {
+      /* 'failed' rather than a new 'blocked' state: the screen already renders
+         failed rows with their note, and inventing a state nothing draws would
+         leave a blank list, which reads as the screen being broken. */
+      setRows(targets.map(() => ({
+        state: 'failed', note: 'Your account cannot start this.',
+      })));
+      return;
+    }
 
     (async () => {
       for (let i = 0; i < targets.length; i++) {
@@ -238,7 +263,8 @@ export default function RunScreen({ route, navigation }) {
                     </View>
                     <TouchableOpacity
                       style={[s.stopBtn, stopping && { opacity: 0.6 }]}
-                      onPress={() => setAskStop(true)}
+                      disabled={!can('stopSection')}
+                      onPress={can('stopSection') ? () => setAskStop(true) : undefined}
                       disabled={stopping}
                       activeOpacity={0.85}
                       accessibilityRole="button"

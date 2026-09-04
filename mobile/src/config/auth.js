@@ -12,8 +12,9 @@
  * arrive already signed and the phone cannot edit them. That is also why there
  * is no /me endpoint to call.
  */
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
 import { onAuthChange, getClaims, signIn as fbSignIn, signOutNow } from '../services/auth';
+import { can as canDo } from './perms';
 
 const AuthContext = createContext({
   user: null, role: null, tenantId: null, email: null,
@@ -73,3 +74,26 @@ export function AuthProvider({ children }) {
 }
 
 export const useAuth = () => useContext(AuthContext);
+
+/**
+ * `const can = useCan(); ... {can('waterSection') && <WaterButton/>}`
+ *
+ * Screens ask this, never `role === 'admin'`. A comparison written inline is a
+ * second copy of the permission model that nothing checks, and it drifts the
+ * first time a route's guard changes - silently, into a button that 403s.
+ * perms.js is checked against the server on every CI run; an inline comparison
+ * is not checked by anything.
+ *
+ * Remember what this is for. It stops the app OFFERING an action the server
+ * would refuse. It is not the control - `require_role` is - so a screen may
+ * use it to decide what to draw and must never use it to decide what is safe.
+ */
+export function useCan() {
+  const { role } = useAuth();
+  return useMemo(() => (action) => canDo(role, action), [role]);
+}
+
+/** True for the one role that manages the farm's accounts and hardware. */
+export function useIsAdmin() {
+  return useAuth().role === 'admin';
+}

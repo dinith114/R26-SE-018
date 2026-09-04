@@ -25,6 +25,7 @@ import CalibrationScreen from '../screens/CalibrationScreen';
 import HouseMapScreen from '../screens/HouseMapScreen';
 import PlacementResultScreen from '../screens/PlacementResultScreen';
 import AddSensorScreen from '../screens/AddSensorScreen';
+import AdminOnly from '../components/AdminOnly';
 import FarmSetupScreen from '../screens/FarmSetupScreen';
 
 const Tab = createBottomTabNavigator();
@@ -122,6 +123,34 @@ function MainTabs() {
    the ref was never attached, navRef.current stayed null forever, and every
    `navRef.current?.navigate(...)` was silently swallowed by the optional chain.
    Tapping any notification did nothing. */
+/* The five routes that exist only to change the farm's shape.
+
+   Guarded here rather than inside each screen so the rule is one readable list
+   instead of five separate decisions, and so a route added below is an obvious
+   question rather than a silent omission. Every action on all five is
+   admin-only on the server, so an operator opening one would meet a page of
+   controls that all answer 403.
+
+   FarmDashboard, HouseMap, SectionDetail and Run are deliberately NOT here.
+   They carry admin controls but they also carry what the farm is doing, which
+   everybody signed in needs to see; their individual controls are gated
+   instead. */
+const adminOnly = (Component, what) => {
+  const Guarded = (props) => (
+    <AdminOnly what={what} navigation={props.navigation}>
+      <Component {...props} />
+    </AdminOnly>
+  );
+  Guarded.displayName = `AdminOnly(${Component.displayName || Component.name})`;
+  return Guarded;
+};
+
+const FarmSetupGuarded = adminOnly(FarmSetupScreen, 'Setting up houses and sections');
+const HousePlannerGuarded = adminOnly(HousePlannerScreen, 'Planning a house');
+const CalibrationGuarded = adminOnly(CalibrationScreen, 'Calibration');
+const PlacementResultGuarded = adminOnly(PlacementResultScreen, 'Applying a sensor placement');
+const AddSensorGuarded = adminOnly(AddSensorScreen, 'Adding a sensor');
+
 export default function AppNavigator({ navRef, onReady }) {
   return (
     <NavigationContainer ref={navRef} onReady={onReady}>
@@ -133,12 +162,12 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />
         <Stack.Screen name="Run" component={RunScreen} />
         <Stack.Screen name="Alarm" component={AlarmScreen} />
-        <Stack.Screen name="FarmSetup" component={FarmSetupScreen} />
-        <Stack.Screen name="HousePlanner" component={HousePlannerScreen} />
-        <Stack.Screen name="Calibration" component={CalibrationScreen} />
+        <Stack.Screen name="FarmSetup" component={FarmSetupGuarded} />
+        <Stack.Screen name="HousePlanner" component={HousePlannerGuarded} />
+        <Stack.Screen name="Calibration" component={CalibrationGuarded} />
         <Stack.Screen name="HouseMap" component={HouseMapScreen} />
-        <Stack.Screen name="PlacementResult" component={PlacementResultScreen} />
-        <Stack.Screen name="AddSensor" component={AddSensorScreen} />
+        <Stack.Screen name="PlacementResult" component={PlacementResultGuarded} />
+        <Stack.Screen name="AddSensor" component={AddSensorGuarded} />
 
         {/* Component 1 - disease detection */}
         <Stack.Screen name="DiseaseDetection" component={DiseaseDetectionScreen} />

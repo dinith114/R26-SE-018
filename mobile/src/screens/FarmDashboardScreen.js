@@ -36,6 +36,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import useLiveData, { LIVE_MS } from '../hooks/useLiveData';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
@@ -165,6 +166,9 @@ export default function FarmDashboardScreen({ navigation }) {
      is least sure what they just tapped. The app already owns SelectSheet and
      ConfirmSheet; this is the last screen that was not using them. */
   const [houseMenu, setHouseMenu] = useState(null);   // the house, or null
+  /* What this account may do. The server refuses the rest whatever happens
+     here; this only stops the screen offering a control that would 403. */
+  const can = useCan();
   const [confirmDel, setConfirmDel] = useState(null); // the house, or null
   const [deleting, setDeleting] = useState(false);
 
@@ -425,7 +429,8 @@ export default function FarmDashboardScreen({ navigation }) {
                 activeOpacity={0.8}
                 accessibilityRole="button"
                 accessibilityLabel={`Choose a master controller for ${h.meta?.name || h.houseId}`}
-                onPress={() => openMaster(h)}>
+                disabled={!can('setHouseMaster')}
+                onPress={can('setHouseMaster') ? () => openMaster(h) : undefined}>
                 <View style={styles.blockHead}>
                   <Ionicons name="git-network" size={18} color={COLORS.warning} />
                   <Text style={styles.blockTitle}>
@@ -479,14 +484,16 @@ export default function FarmDashboardScreen({ navigation }) {
                   roots, filling a tray only raises the air humidity around the
                   plants. The labels have to carry that difference. */}
               <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.primary }, SHADOW.md]}
-                onPress={() => startFlow('water')} disabled={!sections} activeOpacity={0.85}
+                onPress={() => startFlow('water')}
+                disabled={!sections || !can('waterSection')} activeOpacity={0.85}
                 accessibilityRole="button"
                 accessibilityLabel="Water. Choose which sections, then watch each one run.">
                 <Ionicons name="rainy-outline" size={17} color="#FFF" />
                 <Text style={styles.actText}>Water Now</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.info }, SHADOW.md]}
-                onPress={() => startFlow('tray')} disabled={!sections} activeOpacity={0.85}
+                onPress={() => startFlow('tray')}
+                disabled={!sections || !can('fillTray')} activeOpacity={0.85}
                 accessibilityRole="button"
                 accessibilityLabel="Fill humidity trays. Choose which sections, then watch each one run.">
                 <Ionicons name="add-circle-outline" size={17} color="#FFF" />
@@ -626,7 +633,8 @@ export default function FarmDashboardScreen({ navigation }) {
                     accessibilityLabel={h.meta?.masterMac
                       ? `Master controller for ${h.meta?.name || h.houseId} is node ${String(h.meta.masterMac).slice(-4)}. Tap to change.`
                       : `Choose a master controller for ${h.meta?.name || h.houseId}`}
-                    onPress={() => openMaster(h)}>
+                    disabled={!can('setHouseMaster')}
+                    onPress={can('setHouseMaster') ? () => openMaster(h) : undefined}>
                     <Ionicons name={h.meta?.masterMac ? 'git-network' : 'git-network-outline'}
                       size={16} color={h.meta?.masterMac ? COLORS.warning : COLORS.textTertiary} />
                   </TouchableOpacity>
@@ -634,7 +642,9 @@ export default function FarmDashboardScreen({ navigation }) {
                   <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
                     accessibilityLabel={`Options for ${h.meta?.name || h.houseId}: rename or delete`}
-                    onPress={() => setHouseMenu(h)}>
+                    disabled={!can('renameHouse') && !can('deleteHouse')}
+                    onPress={(can('renameHouse') || can('deleteHouse'))
+                      ? () => setHouseMenu(h) : undefined}>
                     <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textTertiary} />
                   </TouchableOpacity>
                 </View>
@@ -778,29 +788,38 @@ export default function FarmDashboardScreen({ navigation }) {
                      sending the farmer to the section-creation wizard would
                      have them making a thirteenth zone in a house with twelve.
                      Same screen the map uses; one flow, two doors. */
+                  /* These sit inside a ternary branch, so the guard has to be
+                     an expression - `{cond && ...}` is JSX-child syntax and is
+                     a syntax error here. */
+                  can('assignDevice') ? (
                   <TouchableOpacity style={styles.addSec}
                     onPress={() => navigation.navigate('AddSensor', { houseId: h.houseId })}>
                     <Ionicons name="add" size={16} color={COLORS.primary} />
                     <Text style={styles.addSecText}>Add a sensor to {h.meta?.name || h.houseId}</Text>
                   </TouchableOpacity>
+                  ) : null
                 ) : (
+                  can('addSection') ? (
                   <TouchableOpacity style={styles.addSec}
                     onPress={() => navigation.navigate('FarmSetup', { addToHouse: h.houseId })}>
                     <Ionicons name="add" size={16} color={COLORS.primary} />
                     <Text style={styles.addSecText}>Add section to {h.meta?.name || h.houseId}</Text>
                   </TouchableOpacity>
+                  ) : null
                 )}
                 </>)}
               </View>
               );
             })}
 
+            {can('addHouse') && (
             <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
               onPress={() => setAdding(true)} activeOpacity={0.8}
               accessibilityRole="button" accessibilityLabel="Add another house">
               <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
               <Text style={styles.addHouseText}>Add another house</Text>
             </TouchableOpacity>
+            )}
 
             {/* Two genuinely different ways to add a house, and the difference is
                 not cosmetic: one ends with sensors already placed and a calibration
@@ -831,6 +850,7 @@ export default function FarmDashboardScreen({ navigation }) {
               }} />
 
             {/* the farm name was previously fixed at setup, a typo was permanent */}
+            {can('renameFarm') && (
             <TouchableOpacity style={styles.renameFarm} activeOpacity={0.7}
               onPress={() => setRenaming({ kind: 'farm', name: data?.farm?.farmName || '' })}
               accessibilityRole="button"
@@ -838,6 +858,7 @@ export default function FarmDashboardScreen({ navigation }) {
               <Ionicons name="create-outline" size={16} color={COLORS.textSecondary} />
               <Text style={styles.renameFarmText}>Rename farm</Text>
             </TouchableOpacity>
+            )}
           </>
         )}
         <View style={{ height: 100 }} />
