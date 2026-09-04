@@ -5,8 +5,10 @@ alive on the old `/farm/...` tree; flashed early, its section goes dark for
 however long the rest of the cutover takes. This is the sheet you follow on the
 day, not a task to work through now.
 
-Read `docs/superpowers/specs/2026-09-02-multi-tenant-accounts-design.md`
-("The cutover itself") first. This document is step 4 of that list.
+**`docs/CUTOVER.md` is the day. This is step 4 of it.** Read that first: it
+carries the order, the rollback for every step, and the checks that are not
+optional. Nothing here makes sense on its own, because a board flashed outside
+that sequence is a section that goes dark.
 
 ---
 
