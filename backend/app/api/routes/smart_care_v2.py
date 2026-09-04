@@ -294,6 +294,17 @@ TRAY_MAX_SEC = _sec_for_depth(TRAY_MAX_DEPTH_CM)          # ~15 s
 # Below this the tray cannot buffer anything - there is nothing left to
 # evaporate - and it is refilled regardless of what the air is doing.
 TRAY_LOW_PCT = 20.0
+# And ABOVE this there is nothing useful left to add: the water is already
+# there, and what limits humidity is how fast it evaporates, not how much of it
+# is sitting in the notch.
+#
+# The probe was only ever read in the direction that ADDS water. On 31 Aug a
+# section reporting an impossible 0 % humidity had its valve opened while the
+# probe said the tray was 88.3 % full, and nothing anywhere objected. A tray
+# that is full and humidity that is still low is the definition of trayAtLimit,
+# which is what justifies a second watering - so this is flagged, not silently
+# dropped.
+TRAY_FULL_PCT = 80.0
 # Refilling an empty tray means filling it, so it is the ceiling by definition.
 TRAY_REFILL_SEC = TRAY_MAX_SEC
 
@@ -362,6 +373,24 @@ FERT_UNKNOWN_DAYS = 7.0
 # faulty (stuck, disconnected, garbage on the wire) — not a real measurement.
 LIMITS = {"temperature": (-10.0, 60.0), "humidity": (0.0, 100.0), "light": (0.0, 200000.0)}
 
+# What a WORKING sensor in a Sri Lankan shade house can actually report. Wider
+# than the plants tolerate and much narrower than the datasheet, which is the
+# point: outside this the instrument has failed, whatever it claims.
+#
+# THIS EXISTS BECAUSE CLAMPING IS NOT A CHECK. LIMITS above is the DHT22's
+# datasheet span, so a reading of exactly 0.0 C and 0.0 % RH sat inside it and
+# `min(max(v, lo), hi)` returned it untouched. It reached the tray model as a
+# 60-point humidity deficit and opened a real valve on 31 Aug.
+#
+# A DHT22 fails this way: a well-formed zero with a good checksum. The firmware
+# tests isnan() and sees a number, so `sensorFault` is false and the -999 path
+# never runs. Nothing upstream can catch it - it has to be caught here.
+#
+# 5 % RH is drier than any inhabited place on Earth; 5 C would have killed a
+# Vanda long before the reading arrived. Neither bound can reject real weather.
+PLAUSIBLE = {"temperature": (5.0, 55.0), "humidity": (5.0, 100.0),
+             "light": (0.0, 200000.0)}
+
 
 # Values the models must never see, and the app must never be shown.
 DISPLAY_DROP = (None, SENTINEL)
@@ -403,9 +432,17 @@ def _clean(reading: dict) -> dict:
     Handles three kinds of bad data:
       * missing keys            -> training-range default
       * -999 sensor-fault flag  -> training-range default
-      * physically impossible   -> clamped to the sensor's real range
-        (e.g. 150% RH or -40 C means the sensor has failed, and feeding that
-        to a model trained on 30-97% RH produces nonsense)
+      * physically impossible   -> training-range default, NOT a clamp
+
+    The last one used to clamp into LIMITS, and that is why a tray valve opened
+    on 31 Aug. LIMITS is the DHT22's datasheet span, so 0.0 C and 0.0 % RH were
+    already inside it and the clamp returned them unchanged; the tray model read
+    a 60-point humidity deficit and asked for water. A clamp only helps for a
+    value outside the band - it cannot help for an impossible value inside one.
+
+    So implausible readings are now treated exactly like -999: the sensor has
+    failed, and the model is given the safe default rather than a number that
+    is wrong in a direction that causes action.
     """
     out = dict(reading or {})
     for k, dflt in SAFE.items():
@@ -415,9 +452,12 @@ def _clean(reading: dict) -> dict:
             v = None
         if v is None or v <= SENTINEL:
             out[k] = dflt
-        else:
-            lo, hi = LIMITS[k]
-            out[k] = min(max(v, lo), hi)
+            continue
+        lo, hi = PLAUSIBLE[k]
+        if v < lo or v > hi:
+            out[k] = dflt
+            continue
+        out[k] = v
     return out
 
 
@@ -1704,6 +1744,23 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                 "pump or the water supply needs checking - humidity is being "
                 "managed from the air reading alone until it does.")
 
+    # THE PROBE OVERRULES THE MODEL WHEN THE TRAY IS ALREADY FULL.
+    # Placed before the humidity ceiling below because it answers a different
+    # question: that one asks whether the AIR needs more moisture, this one asks
+    # whether the tray can hold any. `responds is not False` for the same reason
+    # the refill path uses it - a probe that has been shown not to track water
+    # must not be allowed to decide anything.
+    if (secs > 0 and level is not None and level >= TRAY_FULL_PCT
+            and responds is not False):
+        msg = (f"The tray is already {level:.0f}% full, so there is nothing useful "
+               f"to add - humidity is limited by how fast it evaporates, not by "
+               f"how much water is in the notch.")
+        if rh < lo:
+            msg += " The tray is at its limit - extra watering may be needed."
+        secs, status, cooling_at_limit = 0, "ok", rh < lo
+    else:
+        cooling_at_limit = False
+
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
     # Overfilling a 3 cm tray into already damp air risks mould on the roots,
@@ -1798,7 +1855,11 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            "cooldownHours": round(hold, 1),
            "hoursSinceFill": round(since, 1) if since is not None else None,
            "hoursUntilNextFill": round(max(0.0, hold - since), 1) if cooling else 0,
-           "trayAtLimit": bool(cooling and rh < lo),
+           # True either because the cooldown held a fill off, or because the
+           # tray is physically full and humidity is still under the band. Both
+           # mean the same thing to the watering rule: the tray has done all it
+           # can.
+           "trayAtLimit": bool((cooling and rh < lo) or cooling_at_limit),
            "checkedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", out)
     return out
