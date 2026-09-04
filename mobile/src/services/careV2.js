@@ -399,3 +399,40 @@ export function vpdStatus(vpd) {
   if (vpd < 2.4) return { label: 'high drying', color: COLORS.warning };
   return { label: 'extreme', color: COLORS.danger };
 }
+
+/* ── accounts: the people who can use this farm ──
+ *
+ * The tenant is never a parameter. Every one of these acts on the caller's own
+ * farm, worked out from the token, so there is no way to pass somebody else's
+ * id by accident or on purpose.
+ *
+ * Reading the list is open to any signed-in member - knowing who else is on the
+ * farm is not privileged, and an operator seeing "two admins, one of them me"
+ * is how they know who to ask. The three that change anything are admin only.
+ */
+const ACCOUNTS = `${BASE_URL}/api/v2/accounts`;
+const acctReq = (path, options) => request(ACCOUNTS, path, options);
+
+/** Everyone on this farm: { uid, email, role, addedAt }, oldest first. */
+export const getTeam = () => acctReq('/users');
+
+/**
+ * Create a member of this farm.
+ *
+ * The password is set here and passed on out of band - there is no invite
+ * email, and pretending otherwise would leave somebody waiting for one.
+ */
+export const addTeamMember = (email, password, role) =>
+  acctReq('/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+
+/**
+ * Change what somebody may do.
+ *
+ * The server revokes their refresh tokens, so they are signed out and have to
+ * sign in again. Tell them that before doing it, not after.
+ */
+export const setTeamRole = (uid, role) =>
+  acctReq(`/users/${uid}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+
+/** Remove somebody. The server refuses the last admin, and refuses self-delete. */
+export const removeTeamMember = (uid) => acctReq(`/users/${uid}`, { method: 'DELETE' });

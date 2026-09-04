@@ -26,6 +26,7 @@ import HouseMapScreen from '../screens/HouseMapScreen';
 import PlacementResultScreen from '../screens/PlacementResultScreen';
 import AddSensorScreen from '../screens/AddSensorScreen';
 import AdminOnly from '../components/AdminOnly';
+import TeamScreen from '../screens/TeamScreen';
 import FarmSetupScreen from '../screens/FarmSetupScreen';
 
 const Tab = createBottomTabNavigator();
@@ -150,6 +151,7 @@ const HousePlannerGuarded = adminOnly(HousePlannerScreen, 'Planning a house');
 const CalibrationGuarded = adminOnly(CalibrationScreen, 'Calibration');
 const PlacementResultGuarded = adminOnly(PlacementResultScreen, 'Applying a sensor placement');
 const AddSensorGuarded = adminOnly(AddSensorScreen, 'Adding a sensor');
+const TeamGuarded = adminOnly(TeamScreen, 'Managing who can use this farm');
 
 export default function AppNavigator({ navRef, onReady }) {
   return (
@@ -157,6 +159,7 @@ export default function AppNavigator({ navRef, onReady }) {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Settings" component={SettingsScreen} />
+        <Stack.Screen name="Team" component={TeamGuarded} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />
         <Stack.Screen name="FarmDashboard" component={FarmDashboardScreen} />
         <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />

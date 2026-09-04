@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import LocationPicker from '../components/LocationPicker';
-import { useCan } from '../config/auth';
+import { useCan, useAuth, useIsAdmin } from '../config/auth';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
@@ -82,6 +82,8 @@ export default function SettingsScreen({ navigation }) {
      happens here; this only stops the screen offering a control that
      would come back 403. */
   const can = useCan();
+  const isAdmin = useIsAdmin();
+  const { email: authEmail, signOut } = useAuth();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
@@ -347,6 +349,43 @@ export default function SettingsScreen({ navigation }) {
           </View>
 
           {/* ── ABOUT ────────────────────────────────────────────────── */}
+          {/* ── ACCOUNT ──────────────────────────────────────────────
+              Who is signed in, and the two things they can do about it. The
+              email is shown because a farm phone gets handed around, and
+              "which account am I on" has no other answer in the app. */}
+          <Text style={s.sectionLabel}>ACCOUNT</Text>
+          <View style={[s.card, SHADOW.sm]}>
+            <Row icon="person-circle-outline" iconColor={COLORS.primary}
+              label="Signed in as" value={authEmail || '--'} />
+            {isAdmin && (<>
+              <Divider />
+              <Row
+                icon="people-outline"
+                iconColor={COLORS.info}
+                label="Team"
+                hint="Who can use this farm"
+                onPress={() => navigation.navigate('Team')}
+                right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+              />
+            </>)}
+            <Divider />
+            <Row
+              icon="log-out-outline"
+              iconColor={COLORS.danger}
+              label="Sign out"
+              /* Confirmed, because on a farm phone this is a slip that costs
+                 somebody their alarms until they remember the password. */
+              onPress={() => Alert.alert(
+                'Sign out?',
+                'You will need your email and password to sign in again, and '
+                + 'this phone will stop receiving alarms for the farm.',
+                [{ text: 'Stay signed in', style: 'cancel' },
+                 { text: 'Sign out', style: 'destructive', onPress: () => signOut() }],
+              )}
+              right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+            />
+          </View>
+
           <Text style={s.sectionLabel}>ABOUT</Text>
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="leaf"                  iconColor={COLORS.primary}   label="System"        value="Smart Orchid Care" />
