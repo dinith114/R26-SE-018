@@ -72,7 +72,16 @@ def ready() -> bool:
 # 26.4 C / 85%. For a different site, re-run fetch_real_weather.py with those
 # coordinates and retrain, or the local-delta the model learned will be wrong.
 DEFAULT_LAT, DEFAULT_LON = 7.2683, 80.5960     # Peradeniya
-_outdoor_cache: dict = {}                      # {date: features}, one fetch per day
+# {(tenant, date): features}, one fetch per farm per day.
+#
+# KEYED BY TENANT, and it was not until the final review. Keyed by date alone it
+# held exactly one farm's weather - the .clear() below guaranteed that - and
+# run_all_tenants walks every tenant inside one tick, so the first farm's
+# coordinates decided every other farm's forecast for the rest of the day.
+# Same shape as the timezone and auto-mode caches, found two rounds later.
+from app.services.tenant_context import current_tenant
+
+_outdoor_cache: dict = {}
 
 
 def farm_location() -> tuple:
@@ -91,8 +100,9 @@ def farm_location() -> tuple:
 
 def _fetch_outdoor(today: str) -> Optional[dict]:
     """Today's outdoor forecast, aggregated exactly as in training."""
-    if today in _outdoor_cache:
-        return _outdoor_cache[today]
+    key = (current_tenant(), today)
+    if key in _outdoor_cache:
+        return _outdoor_cache[key]
     try:
         lat, lon = farm_location()
         url = ("https://api.open-meteo.com/v1/forecast"
@@ -116,8 +126,10 @@ def _fetch_outdoor(today: str) -> Optional[dict]:
             "out_radmax": float(max(rad)),
             "out_clearness": round(radsum / float(peak_ref), 3),
         }
-        _outdoor_cache.clear()                 # only ever keep today
-        _outdoor_cache[today] = feats
+        # Drop only THIS farm's stale days, not every farm's entry.
+        for k in [k for k in _outdoor_cache if k[0] == key[0]]:
+            del _outdoor_cache[k]
+        _outdoor_cache[key] = feats
         return feats
     except Exception as e:
         # No internet, or the service is down. The farm must keep running, so we

@@ -44,8 +44,6 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-import requests as _req
-
 from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
@@ -54,7 +52,9 @@ from app.api.routes.smart_care_v2 import (
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
-from app.services.tenant_context import current_tenant, tenant_scope
+from app.services.tenant_context import (
+    NoTenantInContext, current_tenant, tenant_scope,
+)
 
 router = APIRouter()
 
@@ -279,6 +279,14 @@ def _drop_push_token(token: str) -> None:
             try:
                 _fb_delete(f"/farm/pushTokens/{k}.json")
                 print(f"[AUTO] dropped dead push token {k}")
+            except NoTenantInContext:
+                # Never swallowed. The chokepoint raising is the design working,
+                # and a bare `except Exception` here would turn the one loud
+                # signal we have back into the silent shared-tree write this
+                # whole stage exists to remove. Unreachable today - the _fb_get
+                # above would have raised first - but /mode-all proved that
+                # "we swept the boundaries" is a claim, not a guarantee.
+                raise
             except Exception:
                 pass
             return
@@ -702,8 +710,12 @@ def run_plan_cycle(now: Optional[datetime] = None, houses: Optional[dict] = None
 
 # ═══════════════════════ The clock ═══════════════════════════════════════════
 
+# Process-wide facts only: is the clock ticking, and how many passes and
+# failures has it seen. NOT lastError - that is a fact about ONE farm, it was
+# built as f"{tenant_id}: {e}", and GET /engine handed it to every signed-in
+# viewer of every other tenant. It lives in _state_by_tenant now.
 _state: Dict[str, object] = {
-    "running": False, "ticks": 0, "errors": 0, "lastError": None,
+    "running": False, "ticks": 0, "errors": 0,
 }
 
 # Per farm, because these are facts about a farm and not about the process.
@@ -716,27 +728,47 @@ _state_by_tenant: Dict[str, Dict[str, object]] = {}
 def _state_for(tenant_id: Optional[str]) -> dict:
     return _state_by_tenant.setdefault(tenant_id or "-", {
         "lastTick": None, "lastTray": None, "lastSpatial": None,
-        "lastPlanDay": None, "autoMode": None,
+        "lastPlanDay": None, "autoMode": None, "lastError": None,
     })
 
 
-def run_all_tenants(at: Optional[str] = None) -> dict:
-    """One engine pass per tenant, each on its OWN clock.
-
-    The engine has no request to inherit a tenant from, so it sets one per
-    iteration. EVERY tenant is attempted even when an earlier one raises: a farm
-    whose data is broken must not stop every other farm being watered, and an
-    engine that gives up on the first bad row stops watering everybody the first
-    time one customer's record is malformed.
+def run_one_tenant(tenant_id: str, at=None) -> dict:
+    """One engine pass for ONE farm, on that farm's own clock.
 
     THE CLOCK IS READ INSIDE THE SCOPE, and that is not a detail. farm_now()
-    reads /farm/meta.json, so computing it once outside the loop raised before
-    the loop ever started - which is precisely how the scheduled engine came to
-    be silently dead, one caught exception per tick with nothing watered. And
-    even where it worked, a single shared `now` would let one farm's local hour
-    decide another farm's dawn check and plan-day rollover. `at` is carried down
-    as the string it arrived as and parsed per tenant, so "06:30" means 06:30 for
-    each farm's own plants.
+    reads /farm/meta.json, so computing it outside raised before the pass ever
+    started - which is precisely how the scheduled engine came to be silently
+    dead, one caught exception per tick with nothing watered. `at` is carried
+    down as the string it arrived as and parsed here, so "06:30" means 06:30 for
+    this farm's own plants.
+
+    Raises rather than swallowing. The scheduled loop catches per tenant, because
+    one broken farm must not stop the others; run-now does not, because an admin
+    who asked for a pass deserves to be told it failed.
+    """
+    with tenant_scope(tenant_id):
+        if at:
+            now = datetime.strptime(
+                at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
+        else:
+            now = farm_now()
+        return _engine_pass(now)
+
+
+def run_all_tenants(at=None) -> dict:
+    """One engine pass per tenant, each on its OWN clock.
+
+    THE SCHEDULED LOOP WALKS EVERY TENANT; AN ENDPOINT MUST NOT. This exists for
+    `_engine_loop`, which has no request and therefore no tenant to inherit, so
+    it supplies one per iteration. `run_now` used to call this too, which meant
+    one customer's admin pressing "run now" opened every OTHER customer's pumps,
+    marked their day watered and regenerated their plan from a pretend hour. An
+    endpoint calls `run_one_tenant` instead.
+
+    EVERY tenant is attempted even when an earlier one raises: a farm whose data
+    is broken must not stop every other farm being watered, and an engine that
+    gives up on the first bad row stops watering everybody the first time one
+    customer's record is malformed.
     """
     # shallow: the ids are all this needs, and the full subtree carries every
     # tenant's meta and users. This file already learned that lesson once - see
@@ -745,16 +777,12 @@ def run_all_tenants(at: Optional[str] = None) -> dict:
     out = {}
     for tenant_id in tenants:
         try:
-            with tenant_scope(tenant_id):
-                if at:
-                    now = datetime.strptime(
-                        at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
-                else:
-                    now = farm_now()
-                out[tenant_id] = _engine_pass(now)
+            out[tenant_id] = run_one_tenant(tenant_id, at)
         except Exception as e:
             _state["errors"] = int(_state["errors"]) + 1
-            _state["lastError"] = f"{tenant_id}: {e}"
+            # PER TENANT. An engine-wide copy was handed to every signed-in
+            # viewer by GET /engine, and it carried another customer's id.
+            _state_for(tenant_id)["lastError"] = str(e)
             print(f"[AUTO] tenant {tenant_id} pass failed: {e}\n{traceback.format_exc()}")
             out[tenant_id] = {"error": str(e)}
     return out
@@ -823,7 +851,11 @@ async def _engine_loop():
                 await asyncio.to_thread(run_all_tenants)
         except Exception as e:                      # never let one bad pass kill the clock
             _state["errors"] = int(_state["errors"]) + 1
-            _state["lastError"] = str(e)
+            # Logged, not stored. A failure here is whole-engine (the tenant
+            # list itself would not read), so it belongs to no one farm, and
+            # there is no longer an engine-wide field to put it in: GET /engine
+            # handed that string - built as f"{tenant_id}: {e}" - to every
+            # signed-in viewer of every other tenant.
             print(f"[AUTO] pass failed: {e}\n{traceback.format_exc()}")
         await asyncio.sleep(TICK_SECONDS)
 
@@ -836,6 +868,12 @@ def start_engine():
 @router.get("/engine")
 async def engine_status(ctx: AuthContext = Depends(require_auth)):
     """Proof the clock is alive — useful in the demo and in the report."""
+    # THE CALLER'S FARM ONLY. This used to return the whole _state_by_tenant
+    # map, so any signed-in viewer of any tenant learned every other tenant's
+    # id - and until Stage 3 closes the RTDB rules a tenant id is enough to read
+    # that customer's whole tree over REST directly. The engine-wide lastError
+    # went with it for the same reason: it was built as f"{tenant_id}: {e}".
+    mine = _state_for(ctx.tenant_id)
     return {
         "status": "success",
         "running": _state["running"],
@@ -843,16 +881,15 @@ async def engine_status(ctx: AuthContext = Depends(require_auth)):
         "trayCheckMinutes": TRAY_CHECK_MINUTES,
         "ticks": _state["ticks"],
         "errors": _state["errors"],
-        "lastError": _state["lastError"],
-        # Per farm now. lastPlanDay above all cannot be engine-wide, and
-        # autoMode is recorded during each pass rather than read here: this
-        # endpoint is polled, and reading it live would need a tenant in
-        # context that a status call does not have.
-        "tenants": {t: {"lastTick": str(s["lastTick"]),
-                        "lastTrayCheck": str(s["lastTray"]),
-                        "lastPlanDay": s["lastPlanDay"],
-                        "autoMode": s["autoMode"]}
-                    for t, s in _state_by_tenant.items()},
+        # Per farm. lastPlanDay above all cannot be engine-wide, and autoMode is
+        # recorded during each pass rather than read here: this endpoint is
+        # polled, and reading it live would need a tenant in context that a
+        # status call does not have.
+        "tenants": {ctx.tenant_id: {"lastTick": str(mine["lastTick"]),
+                                    "lastTrayCheck": str(mine["lastTray"]),
+                                    "lastPlanDay": mine["lastPlanDay"],
+                                    "autoMode": mine["autoMode"],
+                                    "lastError": mine["lastError"]}},
     }
 
 
@@ -878,9 +915,16 @@ async def run_now(at: Optional[str] = None, ctx: AuthContext = Depends(require_r
             from fastapi import HTTPException
             raise HTTPException(400, "at must look like '2026-08-21 06:01'")
 
-    # The string goes down, not a parsed instant: each farm interprets "06:30"
-    # in its own timezone. Every tenant runs, exactly like the scheduled loop -
-    # calling _engine_pass directly here left this endpoint with no tenant in
-    # context, so every call raised and both simulators were dead.
-    did = await asyncio.to_thread(run_all_tenants, at)
+    # THE CALLER'S FARM, AND ONLY THE CALLER'S. require_role establishes that
+    # this caller is SOME tenant's admin, never that they may act on another's.
+    # Running every tenant from here opened other customers' pumps for 45 s
+    # outside their window, marked their day watered so the real schedule
+    # skipped it, and regenerated their plan from this caller's pretend hour.
+    #
+    # The string goes down, not a parsed instant: the farm interprets "06:30" in
+    # its own timezone. run_one_tenant sets the scope itself, which it must - a
+    # ContextVar does not cross the to_thread boundary, and calling _engine_pass
+    # directly from here once left this endpoint with no tenant in context at
+    # all, so every call raised and both simulators were dead.
+    did = await asyncio.to_thread(run_one_tenant, ctx.tenant_id, at)
     return {"status": "success", "at": at or "now", "did": did}

@@ -113,7 +113,13 @@ class AssignBody(BaseModel):
 
 
 def _all_devices() -> Dict[str, dict]:
-    """Every device record, unfiltered. Callers must narrow it - see `_mine`."""
+    """Every device record on the platform, UNFILTERED.
+
+    There is no legitimate caller of this on its own. Every use in the codebase
+    is `mine_only(_all_devices())`; it is left as a separate function only
+    because the raw read and the narrowing are two different ideas and the
+    narrowing is the one worth naming.
+    """
     return _fb_get("/devices.json") or {}
 
 
@@ -128,6 +134,26 @@ def _is_mine(rec: dict) -> bool:
     """
     owner = (rec or {}).get("tenantId")
     return not owner or owner == current_tenant()
+
+
+def mine_only(devices: dict) -> dict:
+    """Only the boards the caller may see.
+
+    THE registry is global by design - a board belongs to nobody until it is
+    flashed with a tenant - so every reader has to narrow it, not just the routes
+    in this module. The chokepoint in `scoped()` cannot help here: /devices is
+    deliberately outside /farm/, so nothing rewrites these paths and nothing
+    fails loudly when a reader forgets.
+
+    WHAT IT COSTS TO FORGET, measured: house and section ids are unique only
+    WITHIN a tenant - every farm's first house is H1 - so matching
+    `assignedTo == "H1/S1"` across the whole registry hits another customer's
+    board deterministically. One tenant deleting their own house unassigned every
+    board in every identically-named house on the platform. Silent for them;
+    "No sensor node" and offline alarms for the others.
+    """
+    return {mac: rec for mac, rec in (devices or {}).items()
+            if _is_mine(rec or {})}
 
 
 def _mine(mac: str) -> dict:
@@ -193,12 +219,11 @@ def list_devices(only_unassigned: bool = False, ctx: AuthContext = Depends(requi
     `only_unassigned=true` is what the Add Section flow shows: boards that are
     powered on and waiting to be claimed.
     """
-    devices = _all_devices()
     # Another farm's boards are not merely uninteresting here, they are a leak:
     # the decorated record carries the MAC, the IP and the house and section the
     # board is installed in.
-    out: List[dict] = [_decorate(m, r or {}) for m, r in devices.items()
-                       if _is_mine(r or {})]
+    devices = mine_only(_all_devices())
+    out: List[dict] = [_decorate(m, r or {}) for m, r in devices.items()]
     if only_unassigned:
         out = [d for d in out if not d["assignedTo"]]
     # Online first, then most recently seen: a farmer standing next to a board
@@ -211,7 +236,13 @@ def list_devices(only_unassigned: bool = False, ctx: AuthContext = Depends(requi
 def assign_device(mac: str, body: AssignBody, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Bind one node to one section, both directions, refusing to break the 1:1 rule."""
     _mine(mac)          # 404 unless this board is the caller's
-    devices = _all_devices()
+    # MINE_ONLY, and this one is not cosmetic. `_mine(mac)` proves the board
+    # being assigned is the caller's; the holder lookup below is keyed by
+    # house/section, and those ids are unique only WITHIN a tenant - every farm's
+    # first house is H1. Against the raw registry, assigning my own board to my
+    # own H1/S1 finds ANOTHER farm's board sitting on their H1/S1, refuses with a
+    # 409 naming it, and with force=true deletes their assignment outright.
+    devices = mine_only(_all_devices())
     if mac not in devices:
         raise HTTPException(404, f"No device {mac} has announced itself yet. "
                                  "Power the node on and wait about 30 seconds.")
@@ -256,7 +287,7 @@ def unassign_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN
     """Release a node. It keeps reporting to its fallback section rather than
     going silent, so an unclaimed board is still visibly alive."""
     _mine(mac)          # 404 unless this board is the caller's
-    devices = _all_devices()
+    devices = mine_only(_all_devices())
     if mac not in devices:
         raise HTTPException(404, f"No device {mac}.")
     current = (devices[mac] or {}).get("assignedTo")
@@ -276,7 +307,7 @@ def set_read_interval(mac: str, body: IntervalBody, ctx: AuthContext = Depends(r
     cycle, so it costs no extra request and takes effect within one interval.
     """
     _mine(mac)          # 404 unless this board is the caller's
-    if mac not in _all_devices():
+    if mac not in mine_only(_all_devices()):
         raise HTTPException(404, f"No device {mac}.")
 
     ms = int(body.readIntervalMs)
@@ -307,7 +338,7 @@ def identify_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN
     clears the flag itself once it has blinked.
     """
     _mine(mac)          # 404 unless this board is the caller's
-    if mac not in _all_devices():
+    if mac not in mine_only(_all_devices()):
         raise HTTPException(404, f"No device {mac}.")
     if not _fb_put(f"/devices/{mac}/identify.json", True):
         raise HTTPException(502, "Could not send the identify request.")
@@ -334,7 +365,7 @@ def ping_device(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, RO
     alive - the exact false confidence this endpoint exists to remove.
     """
     _mine(mac)          # 404 unless this board is the caller's
-    if mac not in _all_devices():
+    if mac not in mine_only(_all_devices()):
         raise HTTPException(404, f"No device {mac}.")
     token = int(time.time())
     _fb_delete(f"/devices/{mac}/pingAck.json")
@@ -394,7 +425,7 @@ def request_scan(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, R
     node's own connection.
     """
     _mine(mac)          # 404 unless this board is the caller's
-    if mac not in _all_devices():
+    if mac not in mine_only(_all_devices()):
         raise HTTPException(404, f"No device {mac}.")
     # DELETE, not PUT-null: a PUT of None does NOT clear a Firebase key (it is a
     # documented trap on this project). A stale list left in place would be
@@ -410,7 +441,7 @@ def request_scan(mac: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, R
 def get_scan(mac: str, ctx: AuthContext = Depends(require_auth)) -> dict:
     """The last scan result, and whether one is still running."""
     _mine(mac)          # 404 unless this board is the caller's
-    rec = _all_devices().get(mac)
+    rec = mine_only(_all_devices()).get(mac)
     if rec is None:
         raise HTTPException(404, f"No device {mac}.")
 
@@ -435,18 +466,20 @@ def device_for_section(house: str, section: str, ctx: AuthContext = Depends(requ
     Answers the 'No device - not reporting' state the app shows for a section
     created before its hardware was available.
     """
-    devices = _all_devices()
-    mac = _device_for_section(devices, house, section)
     # The one route here that is keyed by house/section rather than by MAC, and
     # the one the first pass missed for exactly that reason: an insertion that
     # matched on `mac` skipped it, and so did the cross-tenant test loop. Left
     # open it maps another farm's house and section - both trivially guessable,
     # they are H1/S1 and so on - to that board's MAC, IP and firmware.
     #
+    # Narrowed BEFORE the lookup rather than after it, which is the same thing
+    # here and the same code as every other reader - a check that runs after the
+    # match is one an edit can step past without noticing.
+    #
     # Answered as "no device here" rather than 404: to this caller that section
     # genuinely has no board, and saying anything else would confirm one exists.
-    if mac and not _is_mine(devices.get(mac) or {}):
-        mac = None
+    devices = mine_only(_all_devices())
+    mac = _device_for_section(devices, house, section)
     if not mac:
         return {"status": "success", "house": house, "section": section,
                 "device": None, "message": "No device assigned to this section."}

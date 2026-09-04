@@ -107,12 +107,18 @@ def test_the_context_does_not_leak_between_tenants(monkeypatch):
     assert current_tenant() is None, "the last tenant was left in context"
 
 
-def test_run_now_covers_every_tenant(monkeypatch):
+def test_run_now_touches_the_callers_tenant_and_no_other(monkeypatch):
     """The endpoint both simulators drive their accelerated clock through.
 
-    It called _engine_pass directly, outside any tenant scope, so every call
-    raised on the first farm read and both simulators were dead. Nothing in the
-    suite touched it, which is why CI stayed green through the breakage.
+    THIS TEST USED TO ASSERT THE OPPOSITE, and that is the point of writing it
+    down. It was called test_run_now_covers_every_tenant and it pinned the bug:
+    fixing "run-now reaches no tenant" made it reach ALL of them, so one
+    customer's admin pressing the button opened every other customer's pump for
+    45 s outside their window, marked their day watered so the real schedule
+    skipped it, and regenerated their plan from this caller's pretend hour.
+
+    require_role(ROLE_ADMIN) establishes that the caller is SOME tenant's admin.
+    It never says which farm they may act on - only the token does.
     """
     from app.api.routes import automation
 
@@ -120,19 +126,29 @@ def test_run_now_covers_every_tenant(monkeypatch):
                         lambda path: {"t_a": True, "t_b": True}
                         if path.startswith("/tenants.json") else {})
     seen = []
-    monkeypatch.setattr(automation, "_engine_pass",
-                        lambda now: seen.append(current_tenant()))
+
+    def _pass(now):
+        seen.append(current_tenant())
+        return {"water": {"watered": [f"{current_tenant()}-H1-S1"]}}
+
+    monkeypatch.setattr(automation, "_engine_pass", _pass)
     # A real datetime: run_now formats it into the response.
     from datetime import datetime, timedelta, timezone as _tz
     monkeypatch.setattr(automation, "farm_now",
                         lambda: datetime(2026, 9, 3, 6, 30,
                                          tzinfo=_tz(timedelta(minutes=330))))
 
-    import asyncio
-    out = asyncio.get_event_loop().run_until_complete(automation.run_now())
+    caller = AuthContext(uid="ua", tenant_id="t_a", role=ROLE_ADMIN)
 
-    assert sorted(seen) == ["t_a", "t_b"]
-    assert set(out["did"]) == {"t_a", "t_b"}
+    import asyncio
+    out = asyncio.get_event_loop().run_until_complete(
+        automation.run_now(ctx=caller))
+
+    assert seen == ["t_a"], "run-now reached a farm that is not the caller's"
+    # Flat again, not keyed by tenant: one farm ran, so there is nothing to key
+    # by, and the simulators read `did.water` directly.
+    assert out["did"] == {"water": {"watered": ["t_a-H1-S1"]}}
+    assert "t_b" not in str(out), out
 
 
 def test_the_auto_switch_is_not_shared_between_farms(monkeypatch):
@@ -229,3 +245,69 @@ def test_each_farm_is_passed_its_own_clock(monkeypatch):
 
     automation.run_all_tenants()
     assert got == {"t_a": "A-clock", "t_b": "B-clock"}
+
+
+def test_the_outdoor_forecast_is_not_shared_between_farms(monkeypatch):
+    """The THIRD cross-tenant cache, found two rounds after the other two.
+
+    Keyed by date alone it held exactly one farm's weather - the clear() on
+    write guaranteed that - and run_all_tenants walks every tenant inside one
+    tick, so the first farm's coordinates decided every other farm's forecast
+    for the rest of the day. Milder than the auto-switch, because the forecast
+    is an accelerator and never a gate: a wrong one costs an early or missed
+    tray top-up rather than a pour onto dry roots.
+
+    The fetch has to SUCCEED for this to test anything. A first attempt made
+    urlopen raise, so _fetch_outdoor never reached the cache write, nothing was
+    ever stored, and both tenants fetched no matter how the key was built - the
+    test passed against the very bug it was named for.
+    """
+    import io as _io
+    import json as _json
+
+    from app.api.routes import forecast as fx
+
+    coords = {"t_lk": (7.0, 80.0), "t_uk": (51.5, -0.1)}
+    monkeypatch.setattr(fx, "farm_location", lambda: coords[current_tenant()])
+
+    fetched = []
+
+    class _Body:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._payload
+
+    def _urlopen(url, timeout=None):
+        fetched.append(url)
+        return _Body(_json.dumps({"hourly": {
+            "temperature_2m": [30.0] * 24,
+            "relative_humidity_2m": [70.0] * 24,
+            "shortwave_radiation": [500.0] * 24,
+        }}).encode())
+
+    monkeypatch.setattr(fx.urllib.request, "urlopen", _urlopen)
+    fx._outdoor_cache.clear()
+
+    with tenant_scope("t_lk"):
+        first = fx._fetch_outdoor("2026-09-04")
+    with tenant_scope("t_uk"):
+        second = fx._fetch_outdoor("2026-09-04")
+
+    assert first and second, "the fetch failed, so this test proves nothing"
+    assert len(fetched) == 2, (
+        "the second farm was served the first farm's cached weather")
+    assert "latitude=7.0" in fetched[0]
+    assert "latitude=51.5" in fetched[1]
+
+    # And the first farm's entry survived the second farm's fetch.
+    with tenant_scope("t_lk"):
+        fx._fetch_outdoor("2026-09-04")
+    assert len(fetched) == 2, "one farm's fetch evicted another farm's entry"
