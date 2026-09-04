@@ -18,26 +18,34 @@ import { API_KEY } from '../config/backend';
    file had already deleted. */
 import { COLORS } from '../config/theme';
 
-/* Content-Type plus the write key. Spread FIRST so an explicit
-   headers option could still override it. */
-const H = { 'Content-Type': 'application/json', 'X-API-Key': API_KEY };
+import { getToken, signOutNow } from './auth';
+import { makeRequest } from './request';
 import BASE_URL_VALUE from '../config/backend';
 const BASE_URL = BASE_URL_VALUE;
 
 const API = `${BASE_URL}/api/v2/care`;
 
-async function req(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
-    headers: H,
-    ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
+/**
+ * The credential is attached per call, never once at import.
+ *
+ * This used to be `const H = {...}`, evaluated when the module loaded. An ID
+ * token lives one hour, so a constant header would have worked for an hour and
+ * then failed for as long as the app stayed open - the worst shape a bug can
+ * take, because it works for the whole time you are testing it.
+ *
+ * X-API-Key is still sent. app/main.py has a middleware demanding it on every
+ * /api/v2 write, and it is an ADDITIONAL gate, not an alternative to the token:
+ * dropping it here would 401 every write. It stops being useful the moment the
+ * cutover deploys - by then every v2 write is behind require_role, and a shared
+ * secret compiled into every copy of the app identifies nobody - so removing it
+ * and the middleware together is ledgered for 2D.
+ *
+ * The decisions (refresh once on 401, never on 403) live in request.js, which
+ * imports nothing and so can be tested without a device.
+ */
+const request = makeRequest({ getToken, signOutNow, apiKey: API_KEY });
+
+const req     = (path, options) => request(API,  path, options);
 
 /* ── read ── */
 export const getOverview = () => req('/overview');
@@ -231,18 +239,7 @@ export const fertilizeSection = (h, s, durationSec = 45) =>
 
 /* ── automation engine (one switch for the whole farm) ── */
 const AUTO = `${BASE_URL}/api/v2/auto`;
-
-async function autoReq(path, options = {}) {
-  const res = await fetch(`${AUTO}${path}`, {
-    headers: H, ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
+const autoReq = (path, options) => request(AUTO, path, options);
 
 export const getAutoMode = ()  => autoReq('/auto-mode');
 export const setAutoMode = (on) =>
@@ -269,20 +266,10 @@ export const registerPushToken = (token, platform) =>
  * is that rule firing, and its detail message is written to be shown as-is.
  */
 const DEV = `${BASE_URL}/api/v2/devices`;
-
-async function devReq(path, options = {}) {
-  const res = await fetch(`${DEV}${path}`, {
-    headers: H, ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    const err = new Error(detail);
-    err.status = res.status;          // 409 means the 1:1 rule refused the change
-    throw err;
-  }
-  return res.json();
-}
+/* err.status used to be set only here, for the 409 the one-to-one rule raises.
+   request() now sets it on every path, so that 409 still arrives and a 403 can
+   be told apart from a 401 everywhere else too. */
+const devReq = (path, options) => request(DEV, path, options);
 
 /** Every node that has ever announced itself, online ones first. */
 export const getDevices = () => devReq('/');
