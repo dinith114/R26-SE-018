@@ -188,3 +188,23 @@ def test_the_accounts_router_is_mounted_where_the_middleware_can_see_it(wired):
     assert "/api/v2/accounts/tenants" in paths
     assert main._GUARDED_PREFIX == "/api/v2/"
     assert {"POST", "PUT", "DELETE"} <= main._GUARDED_METHODS
+
+
+def test_the_deprecated_v1_houses_api_is_not_mounted():
+    """It had no authentication at all and it wrote /houses/... paths, which
+    the tenant chokepoint does not rewrite - only /farm/... is scoped - and one
+    of them is a waterCommand. On one farm that was dead code with a door left
+    open; on a multi-tenant system it is an unauthenticated route onto unscoped
+    data reaching real hardware.
+
+    Pinned by an assertion rather than by a comment beside a commented-out
+    include_router, because a commented line invites uncommenting and an
+    assertion does not. The module itself stays in the tree: CLAUDE.md keeps it
+    so older report results remain reproducible, and that needs the code, not a
+    live route.
+    """
+    from app.main import app
+
+    mounted = [r.path for r in app.routes if hasattr(r, "path")]
+    assert not [p for p in mounted if p.startswith("/api/v1/houses")], (
+        "the deprecated v1 houses API is mounted again")

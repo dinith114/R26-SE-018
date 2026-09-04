@@ -112,20 +112,37 @@ def test_nothing_in_the_backend_talks_to_firebase_outside_the_helpers():
     written anywhere would bypass it silently - the request would succeed, read
     the old shared tree, and no behavioural test would notice.
 
-    So this counts the exits. Four helper definitions may reference the base URL
-    with a request call; anything else is a new door.
+    So this counts the exits: any line naming the database - by constant or by
+    host - is a door, and only the four helper definitions may have one, because
+    only they pass the path through `scoped()`.
+
+    WHAT IT DOES NOT COVER, said plainly rather than left to be discovered. It
+    is a line scanner. A caller that stashes the URL first (`u = FIREBASE_BASE_URL`
+    on one line, `_req.get(u + path)` on the next) shows up here as a bare
+    mention with no request on it, which this WILL flag - but a caller that
+    builds the host from pieces, or reaches Firebase through a library that
+    never names it, will not. It is a tripwire for the accidental next one, not
+    a proof.
     """
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent / "app"
+    names = ("FIREBASE_BASE_URL", "firebaseio.com")
     offenders = []
     for path in root.rglob("*.py"):
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "FIREBASE_BASE_URL" not in line or "_req." not in line:
+            if not any(name in line for name in names):
                 continue
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue                      # a comment explaining the rule
             if "scoped(" in line:
                 continue                      # a helper, going through the gate
-            offenders.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+            if stripped.startswith(("import ", "from ")) or "import" in stripped:
+                continue                      # importing the constant is not a call
+            if stripped.startswith("FIREBASE_BASE_URL ="):
+                continue                      # its one definition
+            offenders.append(f"{path.relative_to(root)}:{n}: {stripped}")
 
     assert offenders == [], (
         "these talk to Firebase without going through scoped(): "
