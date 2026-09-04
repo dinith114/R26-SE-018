@@ -102,3 +102,31 @@ def test_tpath_is_gone():
     """Stage 1 added it inert as a seam. The chokepoint supersedes it, and a
     second way to build a farm path is a second thing to forget."""
     assert not hasattr(smart_care_v2, "_tpath")
+
+
+def test_nothing_in_the_backend_talks_to_firebase_outside_the_helpers():
+    """The property the whole design rests on, asserted rather than assumed.
+
+    Every farm path is scoped in one place, which is only true while that place
+    is the ONLY way out. A single `_req.get(f"{FIREBASE_BASE_URL}/farm/...")`
+    written anywhere would bypass it silently - the request would succeed, read
+    the old shared tree, and no behavioural test would notice.
+
+    So this counts the exits. Four helper definitions may reference the base URL
+    with a request call; anything else is a new door.
+    """
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "app"
+    offenders = []
+    for path in root.rglob("*.py"):
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "FIREBASE_BASE_URL" not in line or "_req." not in line:
+                continue
+            if "scoped(" in line:
+                continue                      # a helper, going through the gate
+            offenders.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
+
+    assert offenders == [], (
+        "these talk to Firebase without going through scoped(): "
+        + "; ".join(offenders))
