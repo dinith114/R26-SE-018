@@ -29,8 +29,9 @@
   master_queue.ino          6   acks, queue delete, running x2, stop, poll
   sensor_node_validate.ino  4   BASE and HIST, and their runtime rebuild
 
-/devices/... paths, all of which must NOT change           8
-  announce, heartbeat, ping ack, poll flags, scan x2, identify x2
+/devices/... paths, all of which must NOT change           9
+  announce, heartbeat, ping ack, poll flags, fetchAssignment,
+  scan x2, identify x2
 ```
 
 The four in `sensor_node_validate.ino` are two pairs: the compile-time
@@ -127,10 +128,18 @@ anybody can tell a reflashed board from one still writing to the old tree.
 Run, and expect NOTHING:
 
 ```bash
-grep -n 'FB_HOST' firmware/sensor_node_validate/*.ino | grep '/farm'
+grep -n 'FB_HOST' firmware/sensor_node_validate/*.ino   | grep '/farm' | grep -v 'const String FARM'
 ```
 
-Then confirm the devices paths did NOT change — expect eight:
+The `grep -v` matters. `FARM`'s own definition is the one line that builds
+`/farm` from `FB_HOST` by construction, so a naive version of this check always
+returns it and every reader has to reason past it. Excluding that one line keeps
+the check meaningful: anything else combining the two still matches.
+
+Then confirm the devices paths did NOT change — expect NINE. An earlier
+draft of this plan said eight and was wrong: `fetchAssignment()` reads the
+registry too and was missed. The count is nine before the change and nine after,
+which is the point of checking it.
 
 ```bash
 grep -c 'FB_HOST) + "/devices/' firmware/sensor_node_validate/sensor_node_validate.ino

@@ -331,6 +331,10 @@ const char* FB_HOST = "https://orchid-smart-care-default-rtdb.firebaseio.com";
    /devices/... deliberately does NOT hang off this. That registry is global: a
    board belongs to no tenant until it is flashed with one, and the app's
    Link-a-node list has to see boards before they are anybody's. */
+// KEEP THIS IN THE MAIN SKETCH. Arduino concatenates the .ino files into one
+// translation unit with the main sketch first and the other tabs after it, in
+// alphabetical order - which is the only reason master_queue.ino can see FARM
+// at all. Moved into a tab that sorts after it, this stops compiling.
 const String FARM = String(FB_HOST) + "/tenants/" TENANT_ID "/farm";
 
 String BASE = FARM + "/houses/" HOUSE_ID "/sections/" SECTION_ID;
