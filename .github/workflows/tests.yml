@@ -41,7 +41,39 @@ jobs:
             tests/test_freshness.py \
             tests/test_farm_clock.py \
             tests/test_auto_switch.py \
-            tests/test_alarm_repeat.py
+            tests/test_alarm_repeat.py \
+            tests/test_firebase_auth.py \
+            tests/test_auth_deps.py \
+            tests/test_tenant_store.py \
+            tests/test_accounts_api.py \
+            tests/test_scoping_chokepoint.py \
+            tests/test_tenant_context.py \
+            tests/test_tenant_propagation.py \
+            tests/test_main_wiring.py \
+            tests/test_farm_isolation.py \
+            tests/test_device_tenancy.py \
+            tests/test_no_unwrapped_thread_pools.py \
+            tests/test_mobile_perms_match_server.py \
+            tests/test_mobile_controls_are_gated.py \
+            tests/test_forecast_without_model.py \
+            tests/test_ci_workflow_is_runnable.py
+
+  mobile:
+    name: mobile logic
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No npm install. request.js imports nothing and the tests use only
+      # node:test, so there is nothing to fetch and nothing to cache.
+      - name: Run the pure-logic tests
+        working-directory: mobile
+        run: node --test src/services/__tests__/
 
   deps:
     name: dependencies resolve

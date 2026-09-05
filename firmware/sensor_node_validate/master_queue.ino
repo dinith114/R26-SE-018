@@ -89,14 +89,14 @@ void masterAck(const String& id, const String& section, int channel,
 
   HTTPClient a;
   a.setTimeout(6000);
-  a.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/acks/" + id + ".json");
+  a.begin(FARM + "/masters/" + macKey() + "/acks/" + id + ".json");
   a.addHeader("Content-Type", "application/json");
   a.PUT(body);
   a.end();
 
   HTTPClient d;
   d.setTimeout(6000);
-  d.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/queue/" + id + ".json");
+  d.begin(FARM + "/masters/" + macKey() + "/queue/" + id + ".json");
   d.sendRequest("DELETE");
   d.end();
 }
@@ -112,7 +112,7 @@ void masterRunning(const String& id, const String& section, int channel, int sec
   body += "}";
   HTTPClient h;
   h.setTimeout(6000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.begin(FARM + "/masters/" + macKey() + "/running.json");
   h.addHeader("Content-Type", "application/json");
   h.PUT(body);
   h.end();
@@ -122,7 +122,7 @@ void masterClearRunning() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient h;
   h.setTimeout(6000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.begin(FARM + "/masters/" + macKey() + "/running.json");
   h.sendRequest("DELETE");
   h.end();
 }
@@ -137,7 +137,7 @@ bool masterStopRequested(const String& id) {
   if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient h;
   h.setTimeout(4000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/stop.json");
+  h.begin(FARM + "/masters/" + macKey() + "/stop.json");
   int code = h.GET();
   String body = (code == 200) ? h.getString() : "";
   h.end();
@@ -252,7 +252,7 @@ void masterPollQueue() {
 
   HTTPClient http;
   http.setTimeout(6000);
-  http.begin(String(FB_HOST) + "/farm/masters/" + macKey() +
+  http.begin(FARM + "/masters/" + macKey() +
              "/queue.json?orderBy=%22$key%22&limitToFirst=1");
   int code = http.GET();
   String body = (code == 200) ? http.getString() : "";

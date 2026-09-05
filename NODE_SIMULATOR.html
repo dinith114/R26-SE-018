@@ -170,6 +170,9 @@
   <label class="kv">house
     <select id="house"></select>
   </label>
+  <label class="kv">tenant
+    <input type="text" id="tenant" placeholder="required - no default" style="width:130px">
+  </label>
   <button id="claim" class="warn">Mark simulated</button>
   <span class="sp"></span>
   <label class="kv">cycle
@@ -236,12 +239,41 @@
    this same public repository. Putting it here exposes nothing new. */
 const FB = 'https://orchid-smart-care-default-rtdb.firebaseio.com';
 
-const FW = 'validation-1.9';   // must stay >= 1.6 or the backend treats these
-                               // nodes as legacy and widens the online window
+const FW = 'validation-2.0';   // must match the firmware, or the backend's
+                               // legacy-window logic treats these differently
+
+/* ══════════════════════════════════════ Tenant ═════════════════════════════
+   Every farm path now hangs off a tenant, matching the firmware's
+   `FARM = FB_HOST + "/tenants/" TENANT_ID "/farm"`. There is no compile-time
+   constant here - the operator types it into the header field - so it is read
+   fresh from the DOM on every call rather than cached, and NEVER defaulted.
+   /devices/{MAC} is untouched: that registry is global on purpose. */
+function tenantId() {
+  const el = $('tenant');
+  return el ? el.value.trim() : '';
+}
+function farmPath(suffix) {
+  return '/tenants/' + tenantId() + '/farm' + suffix;
+}
 
 /* ══════════════════════════════════════ Firebase REST ═════════════════════ */
 
 async function fb(method, path, body) {
+  // No tenant, no farm request - READS included. An empty tenantId() makes
+  // farmPath() produce '/tenants//farm/...', which this refuses rather than
+  // letting it reach Firebase. Same rule the backend enforces, same reason: a
+  // silent fallback to the old shared '/farm/...' tree is the bug this bench
+  // exists to catch, so there is no fallback, only a refusal.
+  //
+  // Refusing GETs matters as much as refusing writes. Allowed through, a read
+  // with no tenant just comes back empty, and the operator sees an empty house
+  // list with nothing saying why - which reads as "the farm is gone", not as
+  // "you have not told me whose farm".
+  if (path.indexOf('/tenants//farm') === 0) {
+    log('t-err', 'no tenant set - refusing to ' + method + ' ' + path
+        + '. Type the tenant id in the header first.');
+    return null;
+  }
   const opt = { method: method };
   if (body !== undefined) {
     opt.headers = { 'Content-Type': 'application/json' };
@@ -475,6 +507,7 @@ async function announce(n) {
   // unpair every node in the house.
   await fbPatch('/devices/' + n.mac + '.json', {
     mac: n.mac, ip: n.ip, rssi: n.rssi, fw: FW, ssid: n.ssid,
+    tenantId: tenantId(),
     lastSeen: Math.floor(Date.now() / 1000)
   });
 }
@@ -497,14 +530,14 @@ async function fetchAssignment(n) {
    section's stored coordinates. */
 async function geomFor(hid) {
   if (fieldCache[hid]) return fieldCache[hid];
-  const meta = await fbGet('/farm/houses/' + hid + '/meta.json');
+  const meta = await fbGet(farmPath('/houses/' + hid + '/meta.json'));
   if (!meta) return null;
   if (!meta.simulated) {
     log('t-err', 'REFUSED: ' + hid + ' is not marked simulated. Nothing written.');
     fieldCache[hid] = null;
     return null;
   }
-  const secs = await fbGet('/farm/houses/' + hid + '/sections.json') || {};
+  const secs = await fbGet(farmPath('/houses/' + hid + '/sections.json')) || {};
   const pos = {};
 
   /* A SECTION WITH NO COORDINATES USED TO BE DROPPED SILENTLY, and that is the
@@ -632,8 +665,8 @@ async function postReading(n) {
   if (!rd) return;
   rd = applyForce(n, rd);
   n.last = rd;
-  await fbPut('/farm/houses/' + hid + '/sections/' + sid + '/latest.json', rd);
-  await fbPost('/farm/history/' + hid + '/' + sid + '.json', rd);
+  await fbPut(farmPath('/houses/' + hid + '/sections/' + sid + '/latest.json'), rd);
+  await fbPost(farmPath('/history/' + hid + '/' + sid + '.json'), rd);
   log('t-dim', n.mac.slice(-4) + ' ' + sid + '  ' + rd.temperature + 'C  '
       + rd.humidity + '%  ' + Math.round(rd.light) + ' lx');
 }
@@ -656,7 +689,7 @@ function pourSeconds(secs) {
 async function pollSectionCommand(n) {
   if (!n.assignedTo || n.busy) return;
   const parts = n.assignedTo.split('/');
-  const base = '/farm/houses/' + parts[0] + '/sections/' + parts[1];
+  const base = farmPath('/houses/' + parts[0] + '/sections/' + parts[1]);
   const c = await fbGet(base + '/command.json');
   if (!c || !c.id || c.id === n.lastCmdId) return;
 
@@ -677,7 +710,7 @@ async function pollSectionCommand(n) {
 
 async function pollMasterQueue(n) {
   if (n.busy) return;
-  const q = await fbGet('/farm/masters/' + n.mac + '/queue.json');
+  const q = await fbGet(farmPath('/masters/' + n.mac + '/queue.json'));
   if (!q) return;
   const ids = Object.keys(q);
   if (!ids.length) return;
@@ -710,7 +743,7 @@ async function pollMasterQueue(n) {
      simulator that skipped it would let the app look correct here and fail
      against the real board, which is the one thing this bench must never do. */
   const startedAt = Math.floor(Date.now() / 1000);
-  await fbPut('/farm/masters/' + n.mac + '/running.json', {
+  await fbPut(farmPath('/masters/' + n.mac + '/running.json'), {
     id: id, targetSection: target, channel: ch,
     durationSec: secs, startedAt: startedAt
   });
@@ -722,7 +755,7 @@ async function pollMasterQueue(n) {
      finding bugs. */
   const stopped = await pourWatchingForStop(n, id, secs);
 
-  await fbDelete('/farm/masters/' + n.mac + '/running.json');
+  await fbDelete(farmPath('/masters/' + n.mac + '/running.json'));
   const ran = Math.min(secs, Math.floor(Date.now() / 1000) - startedAt);
   n.busy = false; renderPool();
 
@@ -740,9 +773,9 @@ async function pourWatchingForStop(n, id, secs) {
   const until = Date.now() + secs * 1000;
   while (Date.now() < until) {
     await new Promise(function (r) { setTimeout(r, 300); });
-    const want = await fbGet('/farm/masters/' + n.mac + '/stop.json');
+    const want = await fbGet(farmPath('/masters/' + n.mac + '/stop.json'));
     if (want && String(want).indexOf(id) >= 0) {
-      await fbDelete('/farm/masters/' + n.mac + '/stop.json');
+      await fbDelete(farmPath('/masters/' + n.mac + '/stop.json'));
       return true;
     }
   }
@@ -752,11 +785,11 @@ async function pourWatchingForStop(n, id, secs) {
 async function ackMaster(n, id, section, channel, ranSec, outcome) {
   // Ack FIRST, then delete: a crash between the two leaves evidence the pour
   // happened rather than a silently empty queue.
-  await fbPut('/farm/masters/' + n.mac + '/acks/' + id + '.json', {
+  await fbPut(farmPath('/masters/' + n.mac + '/acks/' + id + '.json'), {
     id: id, targetSection: section, channel: channel, ranSec: ranSec,
     outcome: outcome, by: n.mac, at: Math.floor(Date.now() / 1000)
   });
-  await fbDelete('/farm/masters/' + n.mac + '/queue/' + id + '.json');
+  await fbDelete(farmPath('/masters/' + n.mac + '/queue/' + id + '.json'));
 }
 
 async function cycleOne(n) {
@@ -847,14 +880,14 @@ async function skipToReady() {
       last = rd;
     }
     // A successful PATCH echoes the object back; fb() returns null on failure.
-    const echo = await fbPatch('/farm/history/' + houseId + '/' + sid + '.json', batch);
+    const echo = await fbPatch(farmPath('/history/' + houseId + '/' + sid + '.json'), batch);
     if (echo === null) { log('t-err', sid + ' backfill FAILED - not counted'); continue; }
     written += Object.keys(batch).length;
-    if (last) await fbPut('/farm/houses/' + houseId + '/sections/' + sid + '/latest.json', last);
+    if (last) await fbPut(farmPath('/houses/' + houseId + '/sections/' + sid + '/latest.json'), last);
     log('t-ok', 'backfilled ' + sid + ': ' + Object.keys(batch).length + ' readings');
   }
 
-  await fbPatch('/farm/houses/' + houseId + '/meta/calibration.json', {
+  await fbPatch(farmPath('/houses/' + houseId + '/meta/calibration.json'), {
     startedAt: t0 - BACKFILL_DAYS * 86400000,
     targetDays: CAL_DAYS,
     minReadings: CAL_MIN_READINGS
@@ -874,7 +907,7 @@ async function refreshCal() {
   if (!sids.length) { $('cal').textContent = 'no sections'; return; }
   let ready = 0;
   for (const sid of sids) {
-    const keys = await fbGet('/farm/history/' + houseId + '/' + sid + '.json?shallow=true');
+    const keys = await fbGet(farmPath('/history/' + houseId + '/' + sid + '.json?shallow=true'));
     const c = keys ? Object.keys(keys).length : 0;
     sections[sid].readings = c;
     if (c >= CAL_MIN_READINGS) ready++;
@@ -906,7 +939,7 @@ async function assign(mac, sid) {
     log('t-sys', holder.mac.slice(-4) + ' displaced from ' + sid);
   }
   await fbPut('/devices/' + mac + '/assignedTo.json', target);
-  await fbPut('/farm/houses/' + houseId + '/sections/' + sid + '/deviceMac.json', mac);
+  await fbPut(farmPath('/houses/' + houseId + '/sections/' + sid + '/deviceMac.json'), mac);
 
   const n = nodes.find(function (x) { return x.mac === mac; });
   if (n) { n.assignedTo = target; n.on = true; }
@@ -921,7 +954,7 @@ async function unassign(mac) {
   if (!n || !n.assignedTo) return;
   const parts = n.assignedTo.split('/');
   await fbDelete('/devices/' + mac + '/assignedTo.json');
-  await fbDelete('/farm/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json');
+  await fbDelete(farmPath('/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json'));
   log('t-sys', mac.slice(-4) + ' taken out of ' + parts[1]);
   n.assignedTo = null;
   renderPool(); renderMap();
@@ -1061,12 +1094,12 @@ function renderMap() {
 /* ══════════════════════════════════════ Houses ════════════════════════════ */
 
 async function loadHouses() {
-  const hs = await fbGet('/farm/houses.json?shallow=true') || {};
+  const hs = await fbGet(farmPath('/houses.json?shallow=true')) || {};
   const ids = Object.keys(hs).sort();
   const sel = $('house');
   sel.innerHTML = '<option value="">— pick —</option>';
   for (const id of ids) {
-    const m = await fbGet('/farm/houses/' + id + '/meta.json') || {};
+    const m = await fbGet(farmPath('/houses/' + id + '/meta.json')) || {};
     const o = document.createElement('option');
     o.value = id;
     o.textContent = id + '  ' + (m.name || '') + (m.simulated ? '  [sim]' : '  [REAL]');
@@ -1081,8 +1114,8 @@ async function loadHouse(id) {
   delete fieldCache[id];
   if (!houseId) { houseMeta = null; sections = {}; renderMap(); return; }
 
-  houseMeta = await fbGet('/farm/houses/' + houseId + '/meta.json') || {};
-  const secs = await fbGet('/farm/houses/' + houseId + '/sections.json') || {};
+  houseMeta = await fbGet(farmPath('/houses/' + houseId + '/meta.json')) || {};
+  const secs = await fbGet(farmPath('/houses/' + houseId + '/sections.json')) || {};
   sections = {};
   Object.keys(secs).forEach(function (sid) {
     const m = (secs[sid] || {}).meta || {};
@@ -1111,7 +1144,7 @@ async function claimHouse() {
   if (!confirm('Mark ' + houseId + ' as simulated?\n\n'
       + 'Everything written to it from then on is invented, and it should never '
       + 'be used as evidence of anything the hardware did.')) return;
-  await fbPatch('/farm/houses/' + houseId + '/meta.json', { simulated: true });
+  await fbPatch(farmPath('/houses/' + houseId + '/meta.json'), { simulated: true });
   log('t-sys', houseId + ' marked simulated');
   await loadHouses();
 }
@@ -1156,10 +1189,10 @@ $('wipe').onclick = async function () {
       if (n.assignedTo) {
         const parts = n.assignedTo.split('/');
         await fbDelete('/devices/' + n.mac + '/assignedTo.json');
-        await fbDelete('/farm/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json');
+        await fbDelete(farmPath('/houses/' + parts[0] + '/sections/' + parts[1] + '/deviceMac.json'));
       }
       await fbDelete('/devices/' + n.mac + '.json');
-      await fbDelete('/farm/masters/' + n.mac + '.json');
+      await fbDelete(farmPath('/masters/' + n.mac + '.json'));
       gone++;
     } catch (e) {
       log('t-err', 'could not remove ' + n.mac.slice(-4) + ': ' + e.message);
@@ -1233,8 +1266,36 @@ async function runEngine(at, why) {
   log('t-cmd', 'engine pass' + (at ? ' as if it were ' + at : ' now')
       + (why ? '  (' + why + ')' : '') + '...');
   const j = await api('POST', '/auto/engine/run-now' + (at ? '?at=' + encodeURIComponent(at) : ''));
-  const d = j.did || {};
   log('t-ok', 'engine ran at ' + j.at);
+
+  /* The engine is multi-tenant now, so `did` arrives keyed by tenant:
+       { t_abc: { plan: {...}, tray: {...}, water: {...} } }
+     rather than the flat { plan, tray, water } it used to be. The callers below
+     read `did.water` and `did.tray`, and against the nested shape those are
+     simply undefined - so every scenario would report "nothing fired" while the
+     backend had in fact watered. A false negative in the one tool whose whole
+     job is telling you whether the farm reacted.
+
+     Flattened here rather than at each call site, and tolerant of both shapes so
+     this page still works against a backend from before the cutover. */
+  const raw = j.did || {};
+  const d = {};
+  const nested = Object.keys(raw).filter(function (k) {
+    return k.indexOf('t_') === 0 && raw[k] && typeof raw[k] === 'object';
+  });
+  if (!nested.length) {
+    Object.assign(d, raw);                       // pre-cutover: already flat
+  } else {
+    nested.forEach(function (tid) {
+      log('t-dim', '   tenant ' + tid + ':');
+      Object.keys(raw[tid] || {}).forEach(function (step) {
+        // One bench drives one farm, so merging is safe and keeps the callers
+        // below unchanged. If two tenants ever both act in one pass, the log
+        // above still shows each separately.
+        d[step] = raw[tid][step];
+      });
+    });
+  }
   Object.keys(d).forEach(function (step) {
     log('t-dim', '   ' + step + ': ' + JSON.stringify(d[step]).slice(0, 200));
   });
@@ -1293,8 +1354,8 @@ async function showMode() {
   const el = $('scMode');
   const sid = $('scSec').value;
   if (!houseId || !sid) { el.textContent = '—'; return; }
-  const ov = await fbGet('/farm/houses/' + houseId + '/sections/' + sid + '/control/override.json');
-  const farm = await fbGet('/farm/meta/autoMode.json');
+  const ov = await fbGet(farmPath('/houses/' + houseId + '/sections/' + sid + '/control/override.json'));
+  const farm = await fbGet(farmPath('/meta/autoMode.json'));
   const alone = ov === 'auto' ? true : ov === 'manual' ? false : !!farm;
   el.textContent = (ov ? 'override ' + ov : 'farm ' + (farm ? 'auto' : 'off'))
                  + (alone ? '  -> POURS' : '  -> ALARMS');
@@ -1316,8 +1377,8 @@ async function showMode() {
 const WATER_WINDOW_MIN = 20;      // _due_sessions in automation.py
 
 async function realRisk(at, kind) {
-  const houses = await fbGet('/farm/houses.json') || {};
-  const farmAuto = !!(await fbGet('/farm/meta/autoMode.json'));
+  const houses = await fbGet(farmPath('/houses.json')) || {};
+  const farmAuto = !!(await fbGet(farmPath('/meta/autoMode.json')));
   const day = at.getFullYear() + '-' + String(at.getMonth() + 1).padStart(2, '0')
             + '-' + String(at.getDate()).padStart(2, '0');
   const mins = at.getHours() * 60 + at.getMinutes();
@@ -1473,6 +1534,18 @@ async function scTray() {
 $('scSec').onchange = showMode;
 $('scWater').onclick = scWater;
 $('scTray').onclick = scTray;
+
+/* Persisted exactly the way the API key is (see apiKey() below): kept only in
+   this browser's localStorage, read once at load, saved back on change.
+   Default empty - see the guard in fb(), which refuses to write without it. */
+try { $('tenant').value = localStorage.getItem('orchidTenant') || ''; }
+catch (e) { /* private window; the bench still works, it just forgets */ }
+$('tenant').onchange = function () {
+  const v = this.value.trim();
+  this.value = v;
+  try { localStorage.setItem('orchidTenant', v); } catch (e) { /* ignore */ }
+  log('t-sys', v ? ('tenant set to ' + v) : 'tenant cleared - farm writes will be refused');
+};
 
 $('house').onchange = function () { loadHouse(this.value); };
 $('claim').onclick = claimHouse;

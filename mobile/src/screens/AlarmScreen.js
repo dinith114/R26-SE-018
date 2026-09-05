@@ -21,6 +21,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { LIVE_MS } from '../hooks/useLiveData';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -44,6 +45,10 @@ const ACTION = {
 };
 
 export default function AlarmScreen({ route, navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
   const focusIds = route?.params?.alarmIds || null;
 
   const [alarms, setAlarms]   = useState([]);
@@ -216,7 +221,8 @@ export default function AlarmScreen({ route, navigation }) {
       <View style={s.footer}>
         <TouchableOpacity
           style={[s.btn, s.ackBtn]}
-          onPress={() => setSheet('ack')}
+          disabled={!can('ackAlarm')}
+          onPress={can('ackAlarm') ? () => setSheet('ack') : undefined}
           disabled={!!busy}
           activeOpacity={0.85}
           accessibilityRole="button"
@@ -227,7 +233,8 @@ export default function AlarmScreen({ route, navigation }) {
 
         <TouchableOpacity
           style={[s.btn, { backgroundColor: cfg.tint }]}
-          onPress={() => setSheet('act')}
+          disabled={!can('waterSection')}
+          onPress={can('waterSection') ? () => setSheet('act') : undefined}
           disabled={!!busy}
           activeOpacity={0.85}
           accessibilityRole="button"

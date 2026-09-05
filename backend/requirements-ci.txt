@@ -35,3 +35,17 @@ PyKrige==1.7.2
 # collides with the numpy==1.26.4 this project pins for its saved models.
 # 0.4.1 leaves numpy unpinned and carries the same SSPOR / SVD API.
 python-sensors==0.4.1
+# fastapi.testclient needs httpx. The accounts and guard tests drive real
+# routing through TestClient rather than calling the dependencies directly.
+httpx==0.27.0
+# test_ci_workflow_is_runnable.py parses .github/workflows/tests.yml to check
+# that the shell block is the command somebody meant to write. Its absence here
+# is what a red build looks like when a test file imports something the runner
+# does not have: pytest aborts COLLECTION, which is exit code 2, and no test
+# result appears at all - so the log says nothing about which import failed.
+PyYAML==6.0.2
+# app/main.py imports uvicorn at module load, and test_main_wiring.py has to
+# import app.main - the thing it tests is main.py's static-key middleware
+# sitting in front of the accounts routes, which every other test misses
+# because they all build a bare FastAPI() and mount the router themselves.
+uvicorn==0.30.6

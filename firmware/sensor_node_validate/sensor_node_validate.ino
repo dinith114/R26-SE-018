@@ -59,6 +59,7 @@
 #include <time.h>
 
 // ═══════════ 1. SET THESE ═══════════
+#define TENANT_ID  "t_REPLACE_ME"   // the farm this board belongs to
 #define HOUSE_ID   "H1"
 #define SECTION_ID "S1"          // must match a section that exists in the app
 
@@ -320,16 +321,32 @@ const char* FB_HOST = "https://orchid-smart-care-default-rtdb.firebaseio.com";
    HOUSE_ID/SECTION_ID above survive as the fallback for an unassigned board, so
    a node that has never been claimed still reports somewhere sensible instead of
    going silent. */
-String BASE = String(FB_HOST) + "/farm/houses/" HOUSE_ID "/sections/" SECTION_ID;
-String HIST = String(FB_HOST) + "/farm/history/" HOUSE_ID "/" SECTION_ID;
+
+/* Every farm path this board writes hangs off ONE base, the firmware's version
+   of the chokepoint the backend uses. Built once here so a path cannot be
+   assembled from FB_HOST by hand and quietly miss the tenant - which is exactly
+   how a board would end up writing to the old shared tree with nothing to show
+   for it but readings nobody reads.
+
+   /devices/... deliberately does NOT hang off this. That registry is global: a
+   board belongs to no tenant until it is flashed with one, and the app's
+   Link-a-node list has to see boards before they are anybody's. */
+// KEEP THIS IN THE MAIN SKETCH. Arduino concatenates the .ino files into one
+// translation unit with the main sketch first and the other tabs after it, in
+// alphabetical order - which is the only reason master_queue.ino can see FARM
+// at all. Moved into a tab that sorts after it, this stops compiling.
+const String FARM = String(FB_HOST) + "/tenants/" TENANT_ID "/farm";
+
+String BASE = FARM + "/houses/" HOUSE_ID "/sections/" SECTION_ID;
+String HIST = FARM + "/history/" HOUSE_ID "/" SECTION_ID;
 
 String assignedHouse   = HOUSE_ID;
 String assignedSection = SECTION_ID;
 bool   isClaimed       = false;      // false = no farmer has assigned this board
 
 static void rebuildPaths() {
-  BASE = String(FB_HOST) + "/farm/houses/" + assignedHouse + "/sections/" + assignedSection;
-  HIST = String(FB_HOST) + "/farm/history/" + assignedHouse + "/" + assignedSection;
+  BASE = FARM + "/houses/" + assignedHouse + "/sections/" + assignedSection;
+  HIST = FARM + "/history/" + assignedHouse + "/" + assignedSection;
 }
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -732,7 +749,12 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.9\"" +
+                ",\"fw\":\"validation-2.0\"" +
+                // Which farm this board was flashed for. The backend filters
+                // the global registry on it, so an unflashed board carries no
+                // tenant and stays claimable by anyone - which is right: it
+                // belongs to nobody yet.
+                ",\"tenantId\":\"" TENANT_ID "\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node

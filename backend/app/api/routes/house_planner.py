@@ -41,10 +41,12 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.routes.spatial_service import _krige_field
+from app.api.deps import require_role
+from app.services.firebase_auth import ROLE_ADMIN, AuthContext
 
 router = APIRouter()
 
@@ -481,7 +483,7 @@ class AnalyseIn(BaseModel):
 
 
 @router.post("/{house_id}/analyze-placement")
-async def analyze_placement(house_id: str, body: AnalyseIn) -> dict:
+async def analyze_placement(house_id: str, body: AnalyseIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Which sections should keep a sensor, decided from the calibration data.
 
     This is the phase the whole design exists for. Phase 1 places sensors from a
@@ -606,7 +608,7 @@ class PlanIn(BaseModel):
 # regular grid and against random placement, and that comparison is what makes
 # the accuracy figure defensible. Called by the thesis, not by the app.
 @router.post("/plan")
-async def plan_house(body: PlanIn) -> dict:
+async def plan_house(body: PlanIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Best sensor positions for a house, with the evidence for the choice.
 
     Returns a curve rather than a single number because the farmer is the one
