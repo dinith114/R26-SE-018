@@ -124,6 +124,69 @@ def test_the_pure_logic_job_runs_one_pytest_command():
     pytest.fail("the pure-logic step is not in the workflow any more")
 
 
+def test_every_import_the_ci_tests_need_is_declared():
+    """The runner's environment, not just its command line.
+
+    The command being right is half of it. The other half is that everything the
+    listed files import is in requirements-ci.txt - a deliberately trimmed file,
+    because the full one pulls TensorFlow and Torch and would make every pull
+    request take ten minutes.
+
+    When it is not, pytest aborts COLLECTION rather than failing a test. That is
+    exit code 2, no test results are printed, and the log does not say which
+    import failed. It is a genuinely hard failure to read, and the way it got
+    here was adding a test that imports yaml without adding PyYAML.
+
+    Checked by parsing the imports rather than by running anything, so this
+    works on a machine that happens to have the package installed - which is
+    exactly the machine the mistake gets made on.
+    """
+    import ast
+    import re
+    import sys
+
+    tests_dir = Path(__file__).resolve().parent
+    req = (tests_dir.parent / "requirements-ci.txt").read_text(encoding="utf-8")
+    declared = {m.lower() for m in re.findall(r"^([A-Za-z0-9_.\-]+)==", req, re.M)}
+
+    # import name -> distribution name, where they differ.
+    DISTRIBUTION = {"yaml": "pyyaml", "sklearn": "scikit-learn", "PIL": "pillow",
+                    "dateutil": "python-dateutil", "multipart": "python-multipart",
+                    "pysensors": "python-sensors", "pykrige": "pykrige",
+                    "firebase_admin": "firebase-admin"}
+    LOCAL = {"app", "tests", "conftest"}
+
+    listed = []
+    for job, name, _wd, run in _steps():
+        if job == "tests" and "pure-logic" in name:
+            listed = [t for t in _commands(run)[0].split() if t.startswith("tests/")]
+
+    undeclared = []
+    for rel in listed:
+        path = tests_dir.parent / rel
+        if not path.exists():
+            continue                      # another test owns that failure
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module.split(".")[0]]
+            else:
+                continue
+            for mod in names:
+                if mod in sys.stdlib_module_names or mod in LOCAL:
+                    continue
+                dist = DISTRIBUTION.get(mod, mod).lower()
+                if dist not in declared:
+                    undeclared.append(f"{Path(rel).name} imports {mod!r} "
+                                      f"({dist} is not in requirements-ci.txt)")
+
+    assert sorted(set(undeclared)) == [], (
+        "CI installs a trimmed dependency set, and these imports are not in it. "
+        "pytest will abort collection with exit 2 and print no test results:\n  "
+        + "\n  ".join(sorted(set(undeclared))))
+
+
 def test_every_pure_logic_test_file_is_listed():
     """A test file added to the suite but never added to CI runs nowhere.
 
