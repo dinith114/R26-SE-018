@@ -118,7 +118,19 @@ def _fetch_outdoor(today: str) -> Optional[dict]:
             return None
         month = int(today[5:7])
         radsum = float(sum(rad))
-        peak_ref = (_fc.get("monthly_peak_radsum") or {}).get(month)             or (_fc.get("monthly_peak_radsum") or {}).get(str(month)) or radsum or 1.0
+        # `_fc or {}` because the model may not be loaded at all. This used to be
+        # `_fc.get(...)`, which raises AttributeError when the pickle is absent -
+        # and the blanket except below then reported it as "outdoor forecast
+        # unavailable", which reads as a network problem and sends whoever is
+        # debugging it after the wrong fault. In production predict_day guards
+        # this behind ready(), so _fc is never None there; CI has no model file
+        # and calls this helper directly, which is where it surfaced.
+        #
+        # A missing model only costs the clearness CALIBRATION. Falling through
+        # to radsum makes clearness 1.0, which is the honest answer when there
+        # is no reference to compare today against.
+        monthly = (_fc or {}).get("monthly_peak_radsum") or {}
+        peak_ref = monthly.get(month) or monthly.get(str(month)) or radsum or 1.0
         feats = {
             "out_tmax": float(max(temps)),
             "out_rhmin": float(min(rhs)),
@@ -132,9 +144,16 @@ def _fetch_outdoor(today: str) -> Optional[dict]:
         _outdoor_cache[key] = feats
         return feats
     except Exception as e:
-        # No internet, or the service is down. The farm must keep running, so we
-        # fall back to the dawn-only path rather than failing the whole plan.
-        print(f"[WARN] outdoor forecast unavailable ({e}); using dawn readings only")
+        # Usually no internet, or the service is down. The farm must keep running,
+        # so we fall back to the dawn-only path rather than failing the whole plan.
+        #
+        # The exception TYPE is in the message on purpose. This catch is broad by
+        # design, which means it also swallows programming errors, and for a
+        # while it was doing exactly that - an AttributeError from a missing
+        # model was being reported as the forecast service being unavailable.
+        # URLError means look at the network; anything else means look at the code.
+        print(f"[WARN] outdoor forecast unavailable ({type(e).__name__}: {e}); "
+              f"using dawn readings only")
         return None
 
 

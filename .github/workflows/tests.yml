@@ -55,6 +55,7 @@ jobs:
             tests/test_no_unwrapped_thread_pools.py
             tests/test_mobile_perms_match_server.py
             tests/test_mobile_controls_are_gated.py
+            tests/test_forecast_without_model.py
 
   mobile:
     name: mobile logic
