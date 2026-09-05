@@ -52,10 +52,11 @@ jobs:
             tests/test_main_wiring.py \
             tests/test_farm_isolation.py \
             tests/test_device_tenancy.py \
-            tests/test_no_unwrapped_thread_pools.py
-            tests/test_mobile_perms_match_server.py
-            tests/test_mobile_controls_are_gated.py
-            tests/test_forecast_without_model.py
+            tests/test_no_unwrapped_thread_pools.py \
+            tests/test_mobile_perms_match_server.py \
+            tests/test_mobile_controls_are_gated.py \
+            tests/test_forecast_without_model.py \
+            tests/test_ci_workflow_is_runnable.py
 
   mobile:
     name: mobile logic
