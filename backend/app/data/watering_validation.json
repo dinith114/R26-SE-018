@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-10-06T18:54:02Z",
+  "script": "ml_pipeline/validate_out_of_time.py",
+  "dataset": {
+    "rows": 58436,
+    "sites": [
+      "anuradhapura",
+      "battaramulla",
+      "galle",
+      "jaffna",
+      "peradeniya"
+    ],
+    "excluded": [
+      "nuwara-eliya"
+    ],
+    "years": "2017-2024",
+    "unit": "one row per site, section microclimate and day"
+  },
+  "labelSource": "The labels are an expert watering rule applied to real ERA5 hourly weather after the assumed shade-house conversion, not decisions observed on a farm.",
+  "unseenWeather": {
+    "sites": [
+      "peradeniya"
+    ],
+    "from": "2025-01-01",
+    "to": "2026-08-15",
+    "rows": 2364,
+    "note": "The UNSEEN test set is Peradeniya only - the one site ensure_recent() downloads - for the dates above."
+  },
+  "labelNoiseFloor": {
+    "hourMaeMin": 8.62,
+    "durMaeSec": 2.39,
+    "note": "Expected, not measured: the error a predictor that knew the rule exactly would still score, from the noise targets() adds to the labels (sd 0.18 h and 3 s), before clipping."
+  },
+  "splits": [
+    {
+      "name": "RANDOM",
+      "label": "RANDOM 80/20 (2017-2024)",
+      "trainYears": "2017-2024 (random 80 %)",
+      "testYears": "2017-2024 (random 20 %)",
+      "trainRows": 46748,
+      "testRows": 11688,
+      "hourMaeMin": 8.45,
+      "hourR2": 0.951,
+      "durMaeSec": 2.53,
+      "durR2": 0.962
+    },
+    {
+      "name": "OUT-OF-TIME",
+      "label": "OUT-OF-TIME (train 17-22, test 23-24)",
+      "trainYears": "2017-2022",
+      "testYears": "2023-2024",
+      "trainRows": 43816,
+      "testRows": 14620,
+      "hourMaeMin": 8.42,
+      "hourR2": 0.954,
+      "durMaeSec": 2.54,
+      "durR2": 0.964
+    },
+    {
+      "name": "UNSEEN",
+      "label": "UNSEEN (train 17-24, test 25-26)",
+      "trainYears": "2017-2024",
+      "testYears": "2025-2026",
+      "trainRows": 58436,
+      "testRows": 2364,
+      "hourMaeMin": 8.41,
+      "hourR2": 0.952,
+      "durMaeSec": 2.51,
+      "durR2": 0.964
+    }
+  ]
+}

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import random
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -610,6 +611,109 @@ async def get_placement_analysis(house_id: str,
     if not out:
         raise HTTPException(404, "No placement analysis has been run for this house yet.")
     return {"status": "success", **out}
+
+
+# ── Shade-house check: is the house what the model was trained on? ──────────
+# The watering model's labels came from real ERA5 weather moved INDOORS by three
+# constants nobody had measured. This puts what the sensors recorded beside the
+# real outdoor weather for the same hours. The reasoning, and every rule about
+# what counts as a reading, lives in app/services/shadehouse_check.py.
+
+@router.get("/{house_id}/shadehouse-check")
+async def shadehouse_check(house_id: str, section: Optional[str] = None,
+                           sinceMs: Optional[float] = None,
+                           ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Measured indoor conditions against the assumed indoor conversion.
+
+    `section` restricts the check to one section; by default every section of
+    the house with history is pooled and each is also reported on its own.
+    `sinceMs` drops readings before that moment - a node that sat on a bench
+    before it went into the house recorded a ROOM, and a room compared with the
+    outdoor weather says nothing about shade cloth.
+
+    409, in words, when there is not enough to judge. Never a number computed
+    from nothing, and never a substitute: there is no fallback to generated
+    readings or to a default outdoor table.
+    """
+    import asyncio
+    from app.api.routes.forecast import DEFAULT_LAT, DEFAULT_LON
+    from app.api.routes.smart_care_v2 import (
+        _fb_get, _natural_key, _server_now_ms, farm_tz,
+    )
+    from app.services import shadehouse_check as shc
+
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+    # The node bench writes INVENTED weather into a house marked simulated.
+    # Compared with the real outdoor weather it would yield a confident, entirely
+    # fabricated "measurement" of the shade cloth - so it is refused, not run.
+    if meta.get("simulated") is True:
+        raise HTTPException(
+            409, "This house is marked simulated: its readings come from the node "
+                 "bench, not from sensors in a shade house, so they cannot check "
+                 "the indoor conversion.")
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    ids = sorted((sid for sid, s in sections.items() if isinstance(s, dict)), key=_natural_key)
+    if section is not None:
+        if section not in ids:
+            raise HTTPException(404, f"Section {section} not found in this house")
+        ids = [section]
+
+    histories = {}
+    for sid in ids:
+        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
+        if hist:
+            histories[sid] = hist
+    if not histories:
+        raise HTTPException(
+            409, "Not enough data: no section of this house has recorded any readings yet."
+            if section is None else
+            f"Not enough data: section {section} has not recorded any readings yet.")
+
+    # The days the outdoor weather is needed for, from the readings that will
+    # actually be compared. A walk over every record, so off the event loop.
+    now_ms = float(_server_now_ms())
+    window = await asyncio.to_thread(shc.reading_window, histories, sinceMs, now_ms)
+    if window is None:
+        raise HTTPException(
+            409, "Not enough data: every stored reading was seeded, unsynced, or "
+                 "before the requested start, so nothing measured is left to compare.")
+    start, end = window
+
+    farm = _fb_get("/farm/meta.json") or {}
+    try:
+        lat, lon = float(farm["latitude"]), float(farm["longitude"])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError
+        located = "farm settings"
+    except (KeyError, TypeError, ValueError):
+        # Same default as forecast.farm_location(), but SAID: the weather for
+        # Peradeniya compared with a house somewhere else would look like a
+        # wrong constant when it is a wrong place.
+        lat, lon = DEFAULT_LAT, DEFAULT_LON
+        located = "default (Peradeniya) - the farm location has not been set"
+
+    try:
+        outdoor = await asyncio.to_thread(shc.fetch_outdoor, lat, lon, start, end)
+    except Exception as e:
+        raise HTTPException(
+            503, f"Could not fetch the outdoor weather to compare against "
+                 f"({type(e).__name__}). Nothing was computed; try again later.")
+
+    try:
+        offset = int(farm_tz().utcoffset(datetime.now(timezone.utc)).total_seconds() // 60)
+    except Exception:
+        offset = 330          # Sri Lanka, no DST - farm_tz's own default
+
+    out = await asyncio.to_thread(shc.compare, histories, outdoor,
+                                  since_ms=sinceMs, now_ms=now_ms, local_offset_min=offset)
+    if not out.get("enough"):
+        raise HTTPException(409, out.get("reason") or "Not enough data.")
+    return {"status": "success", "houseId": house_id,
+            "location": {"latitude": lat, "longitude": lon, "source": located},
+            "sinceMs": sinceMs, **out}
 
 
 class AnalyseIn(BaseModel):

@@ -3920,6 +3920,41 @@ async def alerts(ctx: AuthContext = Depends(require_auth)):
             "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
 
 
+# Written ONLY by ml_pipeline/validate_out_of_time.py --json, from the table that
+# run printed. Read on every request rather than at import, so re-running the
+# script updates the app without a restart.
+WATERING_VALIDATION_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "data", "watering_validation.json"))
+
+
+@router.get("/watering-validation")
+async def watering_validation(ctx: AuthContext = Depends(require_auth)):
+    """How well the watering model reproduces its labels on years it never saw.
+
+    Half of the answer to "how do we know the watering times are correct". It
+    shows the model is faithful to the expert rule it learned - on a random
+    split, on held-out years, and on weather downloaded after training. It does
+    NOT show the rule fits this shade house: that is the other half,
+    /houses/{h}/shadehouse-check, which compares real sensors with the indoor
+    conversion the labels were computed on.
+
+    404 when the file is missing. No numbers are kept in code to fall back on:
+    a validation figure that did not come from a run is not a validation.
+    """
+    import json as _json
+    try:
+        with open(WATERING_VALIDATION_PATH, encoding="utf-8") as f:
+            doc = _json.load(f)
+    except FileNotFoundError:
+        raise HTTPException(
+            404, "No watering validation has been generated on this server. Run "
+                 "ml_pipeline/validate_out_of_time.py --json "
+                 "backend/app/data/watering_validation.json")
+    except ValueError as e:
+        raise HTTPException(500, f"watering_validation.json is not valid JSON: {e}")
+    return {"status": "success", **doc}
+
+
 @router.get("/model-info")
 async def model_info(ctx: AuthContext = Depends(require_auth)):
     """Model metrics — used by the app's About screen and for the viva."""

@@ -83,7 +83,9 @@ export const PERMS = {
   getPlacementAnalysis: ['admin', 'operator', 'viewer'],
   getSectionDevice:     ['admin', 'operator', 'viewer'],
   getSectionEvents:     ['admin', 'operator', 'viewer'],
+  getShadehouseCheck:   ['admin', 'operator', 'viewer'],
   getUnassignedDevices: ['admin', 'operator', 'viewer'],
+  getWateringValidation: ['admin', 'operator', 'viewer'],
   registerPushToken:    ['admin', 'operator', 'viewer'],
 };
 

@@ -58,6 +58,7 @@ jobs:
             tests/test_forecast_without_model.py \
             tests/test_placement_analysis.py \
             tests/test_placement_routes.py \
+            tests/test_shadehouse_check.py \
             tests/test_ci_workflow_is_runnable.py
 
   mobile:
