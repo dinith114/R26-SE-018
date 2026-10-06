@@ -3042,6 +3042,12 @@ CALIBRATION_DAYS = 3
 # it is the elapsed-days rule that normally binds - this exists to catch a
 # section that was offline for most of the window.
 CALIBRATION_MIN_READINGS = 400
+# The analysis may be run before the full window once every section has its
+# readings and at least one whole day-night cycle is in. Three days is the
+# target, not a hard floor: it is what makes the result stable, and the app
+# labels an early run with the days it actually used, so nobody mistakes a
+# 1.5-day answer for a 3-day one.
+EARLY_ANALYSIS_DAYS = 1.0
 
 
 def _house_lifecycle(meta: dict) -> str:
@@ -3346,7 +3352,15 @@ async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_a
         "targetDays": target_days,
         "sections": rows,
         "ready": bool(time_done and data_done),
+        # Allowed now, but on fewer days than the target - see EARLY_ANALYSIS_DAYS.
+        "canAnalyse": bool(data_done and days >= EARLY_ANALYSIS_DAYS),
+        "early": bool(data_done and EARLY_ANALYSIS_DAYS <= days < target_days),
+        "earlyAfterDays": EARLY_ANALYSIS_DAYS,
         "blockers": blockers,
+        # The co-location window and the server's clock, so the app can say how
+        # long the nodes have been together without trusting the phone's time.
+        "colocation": cal.get("colocation"),
+        "serverNowMs": now_ms,
     }
 
 

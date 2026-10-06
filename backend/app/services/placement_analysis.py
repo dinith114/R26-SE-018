@@ -209,6 +209,22 @@ def aligned(means: Dict[str, Dict[int, dict]], ids: Sequence[str],
     return order, mats
 
 
+def hourly_series(order: List[int], mats: Dict[str, np.ndarray], ids: Sequence[str]) -> dict:
+    """The aligned, bias-corrected readings as hourly means - what the analysis
+    actually ran on, small enough for a phone to draw. An hour with no bucket is
+    absent, not interpolated."""
+    per_hour = 60 // BUCKET_MIN
+    groups: Dict[int, List[int]] = {}
+    for i, b in enumerate(order):
+        groups.setdefault(b // per_hour, []).append(i)
+    hours = sorted(groups)
+    nodes = {}
+    for j, sid in enumerate(ids):
+        nodes[sid] = {f: [round(float(mats[f][groups[h], j].mean()), 3) for h in hours]
+                      for f in FIELDS}
+    return {"hourMs": [h * per_hour * BUCKET_MIN * 60000 for h in hours], "nodes": nodes}
+
+
 # ── 6. variation ────────────────────────────────────────────────────────────
 
 def variation(order: List[int], mats: Dict[str, np.ndarray], ids: Sequence[str],
@@ -295,22 +311,47 @@ def coverage(mats: Dict[str, np.ndarray], ids: Sequence[str], coords: Dict[str, 
             out.update(status="below-spacing", radius=None,
                        note=f"Nodes differ by more than ±{tol} {UNITS[f]} even at the closest spacing.")
         elif slope <= 1e-9:
-            out.update(status="no-growth", radius=None, atLeast=round(dmax, 2),
-                       note="The difference does not grow with distance across this house.")
+            over = [p["distance"] for p in pairs if p[f] > tol]
+            if over:
+                # Flat on average but NOT uniform: some close pairs already
+                # differ by more than the tolerance while farther ones agree.
+                # The house changes along one direction (sun edge to back, say)
+                # rather than with distance, so no single radius describes it.
+                # What can be said is an upper bound: one node does not reach as
+                # far as the closest pair that already disagrees. Reporting
+                # "covers at least the whole house" here was a real bug, found
+                # on a 2x2 layout with a one-way gradient.
+                out.update(status="direction-dependent", radius=None,
+                           atMost=round(min(over), 2),
+                           note=(f"Nodes only {min(over):.1f} m apart already differ by more than "
+                                 f"±{tol} {UNITS[f]}, while others farther apart agree: the house "
+                                 f"changes more in one direction than another."))
+            else:
+                out.update(status="no-growth", radius=None, atLeast=round(dmax, 2),
+                           note="The difference does not grow with distance across this house.")
         else:
             r = (tol - intercept) / slope
             out.update(radius=round(float(r), 2),
                        status="measured" if r <= dmax else "extrapolated")
         fields[f] = out
 
-    radii = [(f, v["radius"]) for f, v in fields.items() if v.get("radius") is not None]
-    limiting = min(radii, key=lambda kv: kv[1]) if radii else None
+    # A fitted radius, or an upper bound where the house is direction-dependent.
+    # The smallest wins either way: a node covers a spot only if it covers every
+    # quantity there. `bound` says which kind the combined figure is, so the app
+    # can write "under 5 m" rather than "5 m".
+    cands = []
+    for f, v in fields.items():
+        if v.get("radius") is not None:
+            cands.append((v["radius"], f, None))
+        elif v.get("atMost") is not None:
+            cands.append((v["atMost"], f, "atMost"))
     lower_bounds = [v["atLeast"] for v in fields.values() if v.get("atLeast") is not None]
     combined = None
-    if limiting:
-        combined = {"radius": limiting[1], "limitedBy": limiting[0],
-                    "areaM2": round(math.pi * limiting[1] ** 2, 1),
-                    "status": fields[limiting[0]]["status"]}
+    if cands:
+        r, f, bound = min(cands, key=lambda c: c[0])
+        combined = {"radius": r, "limitedBy": f, "bound": bound,
+                    "areaM2": round(math.pi * r ** 2, 1),
+                    "status": fields[f]["status"]}
     elif lower_bounds and all(v["status"] == "no-growth" for v in fields.values()):
         combined = {"radius": None, "atLeast": min(lower_bounds), "status": "no-growth",
                     "limitedBy": None}
@@ -644,6 +685,7 @@ def analyse(histories: Dict[str, dict], coords: Dict[str, Tuple[float, float]],
             "toMs": (order[-1] + 1) * bucket_ms if order else None,
             "splitAtMs": order[fit_rows[-1] + 1] * bucket_ms if fit_rows else None,
         },
+        "series": hourly_series(order, mats, ids),
         "variation": variation(order, mats, ids, raw_buckets, tz_offset_min),
         "coverage": coverage(mats, ids, coords),
         "leaveOneOut": leave_one_out(mats, ids, xy, all_rows),

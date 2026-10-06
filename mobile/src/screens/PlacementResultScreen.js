@@ -24,6 +24,7 @@ import Toast from '../components/Toast';
 import {
   applyPlacement, getHouse, getDevices, setHouseMaster,
 } from '../services/careV2';
+import { reachText } from '../services/placementFlow';
 
 export default function PlacementResultScreen({ route, navigation }) {
   const houseId = route.params?.houseId;
@@ -47,15 +48,25 @@ export default function PlacementResultScreen({ route, navigation }) {
     if (!house) getHouse(houseId).then((r) => setHouse(r?.house || null)).catch(() => {});
   }, [houseId, house]);
 
+  /* No table means no sensor can come out: with four or fewer sections every
+     one is needed, because kriging needs four to estimate anything. The house
+     still activates - keeping all of them - rather than the screen offering a
+     button that the server would refuse with an empty list. */
+  const keepAll = table.length === 0;
   const keep = result.positions?.[String(picked)] || [];
-  const keepIds = new Set(keep.map((p) => p.sectionId));
-  const row = table.find((r) => r.sensors === picked);
+  const analysis = result.analysis || null;
+  const reachNode = analysis?.coverage?.node;
+  const reach = reachNode?.radius;
+  const reachWords = reachText(reachNode);
 
   /* Every instrumented section, drawn as kept or removed. Showing only the
      survivors would hide the actual decision - which sensors come out - and
      that is the part the farmer has to physically act on. */
-  const allSections = Object.entries(house?.sections || {})
-    .filter(([, sec]) => sec?.meta?.x != null && sec?.meta?.y != null)
+  const placedSections = Object.entries(house?.sections || {})
+    .filter(([, sec]) => sec?.meta?.x != null && sec?.meta?.y != null);
+  const keepIds = new Set(keepAll ? placedSections.map(([id]) => id)
+                                  : keep.map((p) => p.sectionId));
+  const allSections = placedSections
     .map(([id, sec]) => ({
       id,
       short: String(id).replace(/^S/, ''),
@@ -214,6 +225,31 @@ export default function PlacementResultScreen({ route, navigation }) {
           </Text>
         </View>
 
+        {/* The PP2 question - what data decided this, and how good is it - is
+            answered on its own screen, step by step, with these numbers. */}
+        {!!analysis && (
+          <TouchableOpacity style={[styles.card, styles.howCard, SHADOW.sm]} activeOpacity={0.8}
+            onPress={() => navigation.navigate('PlacementFlow', { houseId, analysis })}
+            accessibilityRole="button">
+            <Ionicons name="git-branch-outline" size={18} color={COLORS.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.howHead}>How was this decided?</Text>
+              <Text style={styles.howTxt}>
+                The readings, cleaning, sensor bias, variation, one node's reach
+                {reachWords ? ` (${reachWords.short})` : ''} and the error scores.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
+          </TouchableOpacity>
+        )}
+
+        {keepAll ? (
+          <View style={[styles.card, SHADOW.sm, { marginTop: SPACE.lg }]}>
+            <Text style={styles.tnote}>
+              {result.note || 'Every section must keep its sensor.'}
+            </Text>
+          </View>
+        ) : (<>
         <Text style={styles.h}>How many sensors to keep</Text>
         <View style={[styles.card, SHADOW.sm]}>
           <View style={styles.thead}>
@@ -251,6 +287,7 @@ export default function PlacementResultScreen({ route, navigation }) {
             Tap a row to see where those sensors go.
           </Text>
         </View>
+        </>)}
 
         <Text style={styles.h}>Where they go</Text>
         <View style={[styles.card, SHADOW.sm, { alignItems: 'center' }]}>
@@ -259,7 +296,9 @@ export default function PlacementResultScreen({ route, navigation }) {
             length={house?.meta?.length || 14}
             nodes={allSections}
             plantRows={4}
-            showPipes={false} />
+            showPipes={false}
+            coverage={reach != null
+              ? { radius: reach, label: `One node's reach, ${reachWords.short}` } : null} />
         </View>
 
         {/* The action the farmer actually has to take. "Keep 5" is abstract;
@@ -284,10 +323,13 @@ export default function PlacementResultScreen({ route, navigation }) {
           </View>
         )}
 
-        <TouchableOpacity style={[styles.primary, busy && { opacity: 0.6 }]}
-          onPress={confirm} disabled={busy} activeOpacity={0.85}>
+        <TouchableOpacity style={[styles.primary, (busy || !keepIds.size) && { opacity: 0.6 }]}
+          onPress={confirm} disabled={busy || !keepIds.size} activeOpacity={0.85}>
           {busy ? <ActivityIndicator color="#FFF" />
-                : <Text style={styles.primaryTxt}>Confirm {picked} sensors and activate</Text>}
+                : <Text style={styles.primaryTxt}>
+                    {keepAll ? `Keep all ${keepIds.size} sensors and activate`
+                             : `Confirm ${picked} sensors and activate`}
+                  </Text>}
         </TouchableOpacity>
         <Text style={styles.foot}>
           Activating starts normal watering and begins estimating the sections
@@ -334,6 +376,10 @@ const styles = StyleSheet.create({
 
   tnote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
            marginTop: SPACE.md },
+
+  howCard: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md, marginTop: SPACE.lg },
+  howHead: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
+  howTxt:  { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 16, marginTop: 2 },
 
   masterRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
                paddingVertical: SPACE.md, borderTopWidth: 1,

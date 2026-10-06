@@ -25,8 +25,17 @@ import DigitalTwin from '../components/DigitalTwin';
 import Toast from '../components/Toast';
 import NodePicker from '../components/NodePicker';
 import {
-  getCalibration, getHouse, analyzePlacement, assignDevice,
+  getCalibration, getHouse, analyzePlacement, assignDevice, setColocation,
 } from '../services/careV2';
+import { farmTime } from '../services/placementFlow';
+
+/* The server refuses an 'end' sooner than this (house_planner.py), because
+   under 40 minutes there are not three whole ten-minute periods with every
+   node side by side, and the offsets cannot be measured. */
+const MIN_COLOCATION_MINUTES = 40;
+/* Readings this soon after 'end' are skipped by the analysis - the nodes are
+   in somebody's hands, on the way to their sections. Matches SETTLE_MINUTES. */
+const SETTLE_MINUTES = 15;
 
 /* Long enough that a node which has genuinely stopped is obvious, short enough
    that ordinary Wi-Fi hiccups do not raise an alarm. Matches the backend. */
@@ -51,6 +60,11 @@ export default function CalibrationScreen({ route, navigation }) {
   const [picking, setPicking] = useState(null);
   // { sectionId, short } while a link is in flight, else null
   const [linking, setLinking] = useState(null);
+  // The phone's clock when the server's was read, so elapsed time between
+  // refreshes is the server's plus how long the phone has waited since.
+  const [loadedAt, setLoadedAt] = useState(Date.now());
+  const [coBusy, setCoBusy] = useState(false);
+  const [confirmRedo, setConfirmRedo] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -59,6 +73,7 @@ export default function CalibrationScreen({ route, navigation }) {
         getHouse(houseId).catch(() => null),
       ]);
       setCal(c);
+      setLoadedAt(Date.now());
       setHouse(h?.house || null);
       setError(null);
     } catch (e) {
@@ -97,6 +112,28 @@ export default function CalibrationScreen({ route, navigation }) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
       setBusy(false);
+    }
+  };
+
+  /* Co-location: every node in the same air, so each sensor's own offset can
+     be measured and removed before the nodes are spread out. The times are the
+     server's - the button only says "now". */
+  const colocate = async (action) => {
+    setCoBusy(true);
+    try {
+      await setColocation(houseId, action);
+      setConfirmRedo(false);
+      await load();
+      setToast({
+        text: action === 'start' ? 'Started. Leave every node together for at least 40 minutes.'
+          : action === 'end' ? 'Offsets can now be measured. Carry each node to its section.'
+          : 'Co-location cleared.',
+        kind: 'success',
+      });
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setCoBusy(false);
     }
   };
 
@@ -150,6 +187,13 @@ export default function CalibrationScreen({ route, navigation }) {
   const placed = nodes.length;
   const total = (cal?.sections || []).length;
   const ready = !!cal?.ready;
+  // Allowed before the full window once every section has its readings and a
+  // whole day is in - labelled as early everywhere it shows.
+  const canRun = ready || !!cal?.canAnalyse;
+  const early = !ready && !!cal?.early;
+  const co = cal?.colocation || null;
+  const serverNow = (cal?.serverNowMs || Date.now()) + (Date.now() - loadedAt);
+  const coMinutes = co?.startMs && !co?.endMs ? (serverNow - co.startMs) / 60000 : null;
   const pct = cal ? Math.min(100, Math.round((cal.daysElapsed / cal.targetDays) * 100)) : 0;
 
   if (loading) {
@@ -235,6 +279,81 @@ export default function CalibrationScreen({ route, navigation }) {
             <View style={[styles.barFill, { width: `${pct}%` }]} />
           </View>
           <Text style={styles.barNote}>Time elapsed. Readiness depends on the readings below.</Text>
+        </View>
+
+        {/* co-location - before the nodes are spread out */}
+        <Text style={styles.h}>First: each sensor's own offset</Text>
+        <View style={[styles.card, SHADOW.sm]}>
+          {!co?.startMs ? (
+            <>
+              <Text style={styles.coTxt}>
+                Put every node side by side — same table, same shade — and press Start.
+                Leave them at least {MIN_COLOCATION_MINUTES} minutes, press Done, then carry
+                each one to its section. Two sensors in the same air rarely read the same;
+                this measures by how much, so it is not mistaken for a warm spot.
+              </Text>
+              {missing > 0 && (
+                <Text style={styles.coWarn}>
+                  Link every node first. An unlinked node uploads nothing, so it would
+                  miss this.
+                </Text>
+              )}
+              <TouchableOpacity style={[styles.coBtn, coBusy && styles.primaryOff]}
+                onPress={() => colocate('start')} disabled={coBusy} activeOpacity={0.85}>
+                {coBusy ? <ActivityIndicator color="#FFF" size="small" />
+                        : <Text style={styles.coBtnTxt}>Start — the nodes are together</Text>}
+              </TouchableOpacity>
+            </>
+          ) : !co.endMs ? (
+            <>
+              <View style={styles.coRow}>
+                <Ionicons name="people-outline" size={16} color={COLORS.info} />
+                <Text style={styles.coState}>
+                  Together since {farmTime(co.startMs, false)} · {Math.floor(coMinutes)} min
+                </Text>
+              </View>
+              <Text style={styles.coTxt}>
+                {coMinutes >= MIN_COLOCATION_MINUTES
+                  ? 'Long enough. Press Done, then carry each node to its own section.'
+                  : `${Math.ceil(MIN_COLOCATION_MINUTES - coMinutes)} more minutes before Done. `
+                    + 'Keep them out of direct sun and do not move them.'}
+              </Text>
+              <View style={styles.coBtns}>
+                <TouchableOpacity
+                  style={[styles.coBtn, { flex: 1 },
+                          (coBusy || coMinutes < MIN_COLOCATION_MINUTES) && styles.primaryOff]}
+                  onPress={() => colocate('end')}
+                  disabled={coBusy || coMinutes < MIN_COLOCATION_MINUTES} activeOpacity={0.85}>
+                  {coBusy ? <ActivityIndicator color="#FFF" size="small" />
+                          : <Text style={styles.coBtnTxt}>Done — spreading them out</Text>}
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.coGhost} onPress={() => colocate('clear')}
+                  disabled={coBusy} activeOpacity={0.7}>
+                  <Text style={styles.coGhostTxt}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.coRow}>
+                <Ionicons name="checkmark-circle" size={16} color={COLORS.primary} />
+                <Text style={styles.coState}>
+                  Together {farmTime(co.startMs, false)}–{farmTime(co.endMs, false)}
+                  {' '}({Math.round((co.endMs - co.startMs) / 60000)} min)
+                </Text>
+              </View>
+              <Text style={styles.coTxt}>
+                Readings from the {SETTLE_MINUTES} minutes after are skipped while the nodes
+                are carried. Everything after that is the house.
+              </Text>
+              <TouchableOpacity style={styles.coLink} disabled={coBusy} activeOpacity={0.7}
+                onPress={() => (confirmRedo ? colocate('clear') : setConfirmRedo(true))}>
+                <Text style={[styles.coGhostTxt, confirmRedo && { color: COLORS.danger }]}>
+                  {confirmRedo ? 'Tap again to clear it and start over' : 'Redo'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* the house */}
@@ -359,17 +478,29 @@ export default function CalibrationScreen({ route, navigation }) {
         )}
 
         <TouchableOpacity
-          style={[styles.primary, (!ready || busy || !placed) && styles.primaryOff]}
-          onPress={analyse} disabled={!ready || busy || !placed} activeOpacity={0.85}>
+          style={[styles.primary, (!canRun || busy || !placed) && styles.primaryOff]}
+          onPress={analyse} disabled={!canRun || busy || !placed} activeOpacity={0.85}>
           {busy ? <ActivityIndicator color="#FFF" />
-                : <Text style={styles.primaryTxt}>Analyse placement</Text>}
+                : <Text style={styles.primaryTxt}>
+                    {early ? `Analyse now · ${cal.daysElapsed.toFixed(1)} of ${cal.targetDays} days`
+                           : 'Analyse placement'}
+                  </Text>}
         </TouchableOpacity>
         <Text style={styles.foot}>
           {ready
-            ? 'PySensors will run on the readings these sections recorded.'
-            : 'Available once every section has enough data. Leave the sensors '
-              + 'where they are until then.'}
+            ? 'Temperature, humidity and VPD from these sections. Three placement '
+              + 'methods are compared, and scored on later readings none of them saw.'
+            : early
+              ? `An early run, on ${cal.daysElapsed.toFixed(1)} days instead of `
+                + `${cal.targetDays}. The full result is steadier; the dates used are shown `
+                + 'with it. Takes ten to twenty seconds.'
+              : 'Available once every section has enough data and a full day has '
+                + 'passed. Leave the sensors where they are until then.'}
         </Text>
+        <TouchableOpacity style={styles.coLink} activeOpacity={0.7}
+          onPress={() => navigation.navigate('PlacementFlow', { houseId })}>
+          <Text style={styles.coGhostTxt}>Open the last analysis</Text>
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -446,4 +577,18 @@ const styles = StyleSheet.create({
   primaryTxt: { color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
   foot: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
           marginTop: SPACE.sm, textAlign: 'center' },
+
+  coTxt:   { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17 },
+  coWarn:  { color: COLORS.warning, fontSize: FONT.xs, lineHeight: 17, marginTop: SPACE.sm,
+             fontWeight: '700' },
+  coRow:   { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
+  coState: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '800',
+             fontVariant: ['tabular-nums'] },
+  coBtns:  { flexDirection: 'row', gap: SPACE.sm, alignItems: 'center' },
+  coBtn:   { backgroundColor: COLORS.info, borderRadius: RADIUS.sm, paddingVertical: SPACE.md,
+             alignItems: 'center', marginTop: SPACE.md, paddingHorizontal: SPACE.md },
+  coBtnTxt:{ color: '#FFF', fontSize: FONT.sm, fontWeight: '800' },
+  coGhost: { paddingVertical: SPACE.md, paddingHorizontal: SPACE.md, marginTop: SPACE.md },
+  coGhostTxt: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700' },
+  coLink:  { alignSelf: 'center', paddingVertical: SPACE.sm, marginTop: SPACE.sm },
 });

@@ -91,6 +91,9 @@ def test_colocation_needs_forty_minutes_and_uses_the_server_clock(farm):
     assert r.status_code == 200
     stored = db[f"{BASE}/houses/H1/meta.json"]["calibration"]["colocation"]
     assert stored == {"startMs": T0, "endMs": T0 + 60 * STEP}
+    # The calibration screen reads it back, with the server's clock beside it.
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["colocation"] == stored and c["serverNowMs"] == T0 + 60 * STEP
 
 
 def test_a_viewer_cannot_mark_colocation_or_run_the_analysis(farm):
@@ -143,3 +146,16 @@ def test_too_little_data_is_a_409_in_words(farm):
         db[f"{BASE}/history/H1/{sid}.json"] = dict(list(recs.items())[:100])
     r = client.post(f"{H}/placement-analysis", headers=_tok())
     assert r.status_code == 409 and "ten-minute periods" in r.json()["detail"]
+
+
+def test_analysis_can_run_early_and_says_so(farm):
+    client, _db, clock = farm
+    clock["now"] = T0 + 0.5 * 1440 * STEP           # half a day: not yet
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["canAnalyse"] is False and c["ready"] is False
+    clock["now"] = T0 + 1.5 * 1440 * STEP           # a day and a half: early
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["canAnalyse"] is True and c["early"] is True and c["ready"] is False
+    clock["now"] = T0 + 3.1 * 1440 * STEP           # past the target: not early
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["ready"] is True and c["early"] is False

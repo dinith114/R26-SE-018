@@ -152,6 +152,24 @@ export const analyzePlacement = (h, maxSensors = 8) =>
     method: 'POST', body: JSON.stringify({ maxSensors }),
   });
 
+/**
+ * Mark the period when every node sat side by side: action 'start', 'end' or
+ * 'clear'. The server stamps its own clock, never the phone's, and refuses an
+ * 'end' under 40 minutes - too short to measure each sensor's offset.
+ */
+export const setColocation = (h, action) =>
+  req(`/houses/${h}/colocation`, { method: 'POST', body: JSON.stringify({ action }) });
+
+/**
+ * Every step of the placement analysis - raw counts, cleaning, sensor bias,
+ * variation, coverage, leave-one-out and the method comparison - for the
+ * screen that explains how the placement was decided. POST runs it (ten to
+ * twenty seconds of kriging); GET returns the last run.
+ */
+export const runPlacementAnalysis = (h) =>
+  req(`/houses/${h}/placement-analysis`, { method: 'POST' });
+export const getPlacementAnalysis = (h) => req(`/houses/${h}/placement-analysis`);
+
 /** Name the ESP32 that carries the relay board for this house. */
 export const setHouseMaster = (h, masterMac) =>
   req(`/houses/${h}/master`, { method: 'PUT', body: JSON.stringify({ masterMac }) });

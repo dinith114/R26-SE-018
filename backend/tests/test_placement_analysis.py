@@ -152,3 +152,29 @@ def test_a_node_without_light_still_anchors_temperature(monkeypatch):
     assert res["anchors"] == 5                          # S5 counted despite no light sensor
     assert est["temperature"] is not None
     assert "light" in est                               # kriged from the four that have it
+
+
+def test_hourly_series_is_what_the_analysis_ran_on():
+    hist = _house(LINE, 600, grad_c_per_m=0.2)       # ten hours
+    s = pa.analyse(hist, LINE)["series"]
+    assert 9 <= len(s["hourMs"]) <= 11
+    assert all(b - a == 3_600_000 for a, b in zip(s["hourMs"], s["hourMs"][1:]))
+    for sid in LINE:
+        assert len(s["nodes"][sid]["temperature"]) == len(s["hourMs"])
+    # The gradient survives: the far end of the line is warmer on average.
+    first, last = list(LINE)[0], list(LINE)[-1]
+    assert np.mean(s["nodes"][last]["temperature"]) > np.mean(s["nodes"][first]["temperature"])
+
+
+def test_a_one_way_gradient_gives_an_upper_bound_not_a_whole_house_claim():
+    # 2x2 layout, warming only along x. The 5 m pairs across x differ by
+    # 0.6 C; the 7 m pairs along y agree. The average line is flat, and this
+    # once reported "one node covers at least 8.6 m" - false for the 5 m pairs.
+    square = {"S1": (2.5, 3.5), "S2": (7.5, 3.5), "S3": (2.5, 10.5), "S4": (7.5, 10.5)}
+    hist = _house(square, 900, grad_c_per_m=0.12, noise=0.02)
+    cov = pa.analyse(hist, square)["coverage"]
+    t = cov["fields"]["temperature"]
+    assert t["status"] == "direction-dependent"
+    assert t["atMost"] == 5.0
+    node = cov["node"]
+    assert node["bound"] == "atMost" and node["radius"] <= 5.0
