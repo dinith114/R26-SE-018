@@ -45,7 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.routes.spatial_service import _krige_field
-from app.api.deps import require_role
+from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, AuthContext
 
 router = APIRouter()
@@ -202,7 +202,8 @@ def _snapshots_measured(house_id: str, section_ids: List[str], field: str = "tem
     tomorrow? A random split lets a method be scored on the hour either side of
     an hour it was fitted on, which is much easier and much less useful.
     """
-    from app.api.routes.smart_care_v2 import _fb_get, _clean
+    from app.api.routes.smart_care_v2 import _fb_get
+    from app.services.readings import value as _measured_value
 
     bucket_ms = BUCKET_MINUTES * 60000.0
     per_section: dict = {}
@@ -216,9 +217,11 @@ def _snapshots_measured(house_id: str, section_ids: List[str], field: str = "tem
             ts = rec.get("timestamp")
             if not ts:
                 continue
-            # _clean() rather than the raw record, so a failed sensor's -999 is
-            # excluded instead of being decomposed as if it were a temperature.
-            v = _clean(rec).get(field)
+            # readings.value(), NOT _clean(). This comment used to say _clean()
+            # excludes a failed sensor's -999; it does not - it substitutes 28 C,
+            # so a DHT22 glitch entered the matrix as a real temperature at that
+            # section and moment. value() returns None and the reading is skipped.
+            v = _measured_value(rec, field)
             if v is None:
                 continue
             b = int(float(ts) // bucket_ms)
@@ -477,113 +480,194 @@ def _methods_for(coords, fit, test, n, width, length) -> Dict[str, dict]:
 
 # ── API ─────────────────────────────────────────────────────────────────────
 
-class AnalyseIn(BaseModel):
-    """Nothing to configure: the data decides. maxSensors caps the table only."""
-    maxSensors: int = Field(MAX_SENSORS_CAP, ge=MIN_SENSORS, le=MAX_SENSORS_CAP)
+# ── Calibration: co-location, the analysis, and the placement decision ───────
+# After co-location ends the nodes are carried to their positions, and readings
+# taken while a node is in someone's hand describe neither place. They are
+# skipped for this long before the spread-out period counts.
+SETTLE_MINUTES = 15
+# 40 minutes gives the analysis at least three WHOLE ten-minute buckets with
+# every node side by side, which is what colocation_offsets() needs.
+MIN_COLOCATION_MINUTES = 40
 
 
-@router.post("/{house_id}/analyze-placement")
-async def analyze_placement(house_id: str, body: AnalyseIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
-    """Which sections should keep a sensor, decided from the calibration data.
+class ColocationIn(BaseModel):
+    """'start' when every node sits together, 'end' when they are spread out,
+    'clear' to forget a co-location that went wrong."""
+    action: str
 
-    This is the phase the whole design exists for. Phase 1 places sensors from a
-    field GENERATED out of house geometry, because a house with no hardware has
-    nothing else to go on. This runs once those sensors have been in the ground
-    for the calibration window, and it uses what they actually recorded.
 
-    What it can and cannot answer, stated plainly:
+@router.post("/{house_id}/colocation")
+async def colocation(house_id: str, body: ColocationIn,
+                     ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
+    """Mark the period when every node read the same air.
 
-      * It CAN say which k of the instrumented sections carry the information -
-        the classic over-instrument-then-prune workflow, and what the flow asks
-        for.
-      * It CANNOT propose a position with no sensor in it. There is no data
-        there. Kriging could invent some, but then SSPOR would be selecting
-        sensors to reconstruct kriging's own guess, which is circular.
-
-    Scored by ordinary kriging on held-out LATER buckets, so a placement is
-    asked to describe the house tomorrow rather than to re-describe the hours it
-    was fitted on.
+    Two sensors of the same model disagree by a few tenths of a degree out of the
+    box. Spread across a house, that disagreement looks exactly like a warm
+    corner. Running them side by side first measures it, and the analysis then
+    removes it - so a difference between two sections is the house, not the
+    sensors. Times are the SERVER's clock, never the phone's.
     """
-    from app.api.routes.smart_care_v2 import _fb_get, _natural_key, _ml_per_sec
+    from app.api.routes.smart_care_v2 import _fb_get, _fb_put, _server_now_ms
 
     meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
     if not meta:
         raise HTTPException(404, "House not found")
+    cal = meta.get("calibration") or {}
+    co = dict(cal.get("colocation") or {})
+    now = float(_server_now_ms())
+    action = (body.action or "").strip().lower()
 
+    if action == "start":
+        co = {"startMs": now}
+    elif action == "end":
+        if not co.get("startMs"):
+            raise HTTPException(400, "Co-location was never started.")
+        minutes = (now - float(co["startMs"])) / 60000.0
+        if minutes < MIN_COLOCATION_MINUTES:
+            raise HTTPException(
+                400, f"The nodes have been together {minutes:.0f} minutes; leave them at least "
+                     f"{MIN_COLOCATION_MINUTES} so every sensor's offset can be measured.")
+        co["endMs"] = now
+    elif action == "clear":
+        co = {}
+    else:
+        raise HTTPException(400, "action must be start, end or clear")
+
+    cal["colocation"] = co or None
+    meta["calibration"] = cal
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id, "colocation": co or None,
+            "serverNowMs": now}
+
+
+def _load_for_analysis(house_id: str):
+    """Everything the analysis reads, fetched in the request (tenant) context."""
+    from app.api.routes.smart_care_v2 import _fb_get, _natural_key
+
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
     sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
-    placed = {sid: sec for sid, sec in sections.items()
-              if isinstance(sec, dict) and _has_xy(sec)}
-    if len(placed) < MIN_SENSORS:
-        raise HTTPException(
-            400, f"{len(placed)} sections have a position. At least {MIN_SENSORS} "
-                 f"are needed - set them in each section's Setup tab.")
-
+    placed = {sid: sec for sid, sec in sections.items() if isinstance(sec, dict) and _has_xy(sec)}
     ids = sorted(placed, key=_natural_key)
-    coords = np.array([[float(placed[s]["meta"]["x"]), float(placed[s]["meta"]["y"])]
-                       for s in ids], dtype=float)
+    coords = {sid: (float(placed[sid]["meta"]["x"]), float(placed[sid]["meta"]["y"])) for sid in ids}
 
-    got = _snapshots_measured(house_id, ids)
-    if got is None:
-        raise HTTPException(
-            409, "Not enough overlapping readings yet. Every section needs data "
-                 f"covering at least {MIN_BUCKETS} common {BUCKET_MINUTES}-minute "
-                 "periods. Check the calibration screen for which section is behind.")
-    fit, test = got
+    cal = meta.get("calibration") or {}
+    since = float(cal.get("startedAt") or 0)
+    histories = {}
+    for sid in ids:
+        hist = _fb_get(f"/farm/history/{house_id}/{sid}.json") or {}
+        # Only what was recorded during THIS calibration. A board used in another
+        # house before would otherwise bring that house's readings with it.
+        histories[sid] = {k: r for k, r in hist.items()
+                          if isinstance(r, dict) and float(r.get("timestamp") or 0) >= since}
+    co = cal.get("colocation") or None
+    return meta, ids, coords, histories, co
 
-    top = int(min(body.maxSensors, len(ids) - 1))
-    if top < MIN_SENSORS:
-        raise HTTPException(
-            400, f"With {len(ids)} sections there is nothing to choose - "
-                 f"pruning needs more sections than sensors.")
 
+def _run_analysis(histories, coords, co):
+    """Pure CPU work - no Firebase - so it can run off the event loop."""
+    from app.services import placement_analysis as pa
+    colocation = None
+    if co and co.get("startMs") and co.get("endMs"):
+        colocation = {"startMs": float(co["startMs"]), "endMs": float(co["endMs"]),
+                      "spreadFromMs": float(co["endMs"]) + SETTLE_MINUTES * 60000.0}
+    return pa.analyse(histories, coords, colocation=colocation)
+
+
+@router.post("/{house_id}/placement-analysis")
+async def run_placement_analysis(house_id: str,
+                                 ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
+    """Run the full analysis on this house's calibration readings and keep it.
+
+    Kept in /farm/houses/{h}/placementAnalysis so the app can show it again
+    without recomputing - a run takes ten to twenty seconds of kriging.
+    """
+    import asyncio
+    from app.api.routes.smart_care_v2 import _fb_put, _server_now_ms
+
+    meta, ids, coords, histories, co = _load_for_analysis(house_id)
+    if len(ids) < 3:
+        raise HTTPException(400, f"{len(ids)} sections have a position; at least 3 are needed.")
+    try:
+        out = await asyncio.to_thread(_run_analysis, histories, coords, co)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    out["computedAtMs"] = _server_now_ms()
+    out["houseId"] = house_id
+    out["colocation"] = co
+    out["nodeCostLkr"] = NODE_COST_LKR
+    _fb_put(f"/farm/houses/{house_id}/placementAnalysis.json", out)
+    return {"status": "success", **out}
+
+
+@router.get("/{house_id}/placement-analysis")
+async def get_placement_analysis(house_id: str,
+                                 ctx: AuthContext = Depends(require_auth)) -> dict:
+    """The last analysis run for this house, or 404 if there has been none."""
+    from app.api.routes.smart_care_v2 import _fb_get
+    out = _fb_get(f"/farm/houses/{house_id}/placementAnalysis.json")
+    if not out:
+        raise HTTPException(404, "No placement analysis has been run for this house yet.")
+    return {"status": "success", **out}
+
+
+class AnalyseIn(BaseModel):
+    """Kept for the app's existing call. maxSensors no longer limits anything:
+    the analysis covers every count the house allows."""
+    maxSensors: int = Field(MAX_SENSORS_CAP, ge=2, le=MAX_SENSORS_CAP)
+
+
+@router.post("/{house_id}/analyze-placement")
+async def analyze_placement(house_id: str, body: AnalyseIn,
+                            ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
+    """Which sections should keep a sensor, decided from the calibration data.
+
+    Now a view onto the full analysis (placement_analysis.py): temperature,
+    humidity and VPD instead of temperature alone, sensor bias removed when the
+    nodes were co-located, three placement methods compared on a validation
+    period and the winner scored on later readings nobody fitted on.
+
+    The response keeps the shape PlacementResultScreen reads - table, positions
+    keyed by sensor count, recommendedSensors - with `analysis` carrying every
+    step for the screen that explains the flow.
+    """
+    res = await run_placement_analysis(house_id, ctx)
+    p = res["placement"]
     table, positions, baselines = [], {}, {}
-    for n in range(MIN_SENSORS, top + 1):
-        chosen = _place_pysensors(fit, n)
-        used = "pysensors"
-        if chosen is None:
-            chosen = _place_kriging_greedy(coords, n)
-            used = "kriging_greedy"
-
-        err = _score(coords, chosen, test)
+    for row in p["rows"]:
+        if not row["runtimeUsable"] or not row.get("selected"):
+            continue                     # a layout production cannot run is not offered
+        sel = row["methods"][row["selected"]]
+        k = row["sensors"]
         table.append({
-            "sensors": n,
-            "error": None if err is None else round(err, 3),
-            "costLkr": n * NODE_COST_LKR,
-            "method": used,
+            "sensors": k,
+            "error": sel["temperature"]["mae"],
+            "errors": {f: sel[f]["mae"] for f in ("temperature", "humidity", "vpd")},
+            "costLkr": k * NODE_COST_LKR,
+            "method": row["selected"],
+            "recommended": k == p.get("recommended"),
         })
-        positions[str(n)] = [
-            {"sectionId": ids[i],
-             "x": round(float(coords[i, 0]), 2),
-             "y": round(float(coords[i, 1]), 2)}
-            for i in chosen
-        ]
-        # Kept for the report, not for the screen. The flow asks for a simple
-        # table; these are what make the simple number defensible.
-        baselines[str(n)] = {
-            "grid": _round(_score(coords, _place_grid_idx(coords, n), test)),
-            "random": _round(_score(coords, _place_random(coords, n, SEED + n), test)),
-            "krigingGreedy": _round(_score(coords, _place_kriging_greedy(coords, n), test)),
-        }
-
-    rec = _elbow(table)
-    for row in table:
-        row["recommended"] = (row["sensors"] == rec)
-
+        positions[str(k)] = [{"sectionId": sid, "x": res["positions"][sid]["x"],
+                              "y": res["positions"][sid]["y"]} for sid in sel["sections"]]
+        baselines[str(k)] = {name: (m.get("temperature") or {}).get("mae")
+                             for name, m in row["methods"].items() if "temperature" in m}
     return {
         "status": "success",
         "houseId": house_id,
         "source": "measured",
-        "sectionsInstrumented": len(ids),
-        "buckets": {"fit": int(fit.shape[0]), "test": int(test.shape[0]),
-                    "minutes": BUCKET_MINUTES},
-        "recommendedSensors": rec,
+        "sectionsInstrumented": len(res["sections"]),
+        "buckets": {"fit": res["buckets"]["fit"], "test": res["buckets"]["test"],
+                    "minutes": res["buckets"]["minutes"]},
+        "recommendedSensors": p.get("recommended"),
         "table": table,
         "positions": positions,
         "baselines": baselines,
-        "note": ("Chosen from the readings these sections recorded during "
-                 "calibration, and scored on later readings none of them was "
-                 "fitted on. Only sections that already hold a sensor can be "
-                 "chosen - there is no data anywhere else."),
+        "note": p.get("note") or (
+            "Chosen from temperature, humidity and VPD recorded during calibration. "
+            "Three placement methods were compared on a validation period; the "
+            "error shown is on later readings none of them was fitted on."),
+        "analysis": res,
     }
 
 
