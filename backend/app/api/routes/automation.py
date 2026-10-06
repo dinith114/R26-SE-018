@@ -48,7 +48,7 @@ from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
-    _record_fertilized, _log_event,
+    _record_fertilized, _log_event, _house_lifecycle,
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
@@ -57,6 +57,27 @@ from app.services.tenant_context import (
 )
 
 router = APIRouter()
+
+
+def _acting_houses(houses: Optional[dict]) -> dict:
+    """The houses the engine may plan, water, fill or alarm for.
+
+    A house that is CALIBRATING is left out. Its nodes are spread out to record
+    the data that will decide where sensors go - usually bare DHT22 boards on
+    power banks, wired to no pump and no tray. Treated like any other house, it
+    got a watering plan and hourly tray decisions, and with Auto off every one
+    of those became a pushed "Fill the humidity tray now" alarm repeating every
+    five minutes, per section, for three days - for trays nobody can fill from
+    that board. Found by walking the calibration procedure through this file on
+    7 Oct 2026, before the first real calibration house went in.
+
+    The house rejoins the moment apply-placement sets it active. Spatial
+    estimation still sees every house (it only fills sections with no sensor,
+    and raises nothing).
+    """
+    return {hid: h for hid, h in (houses or {}).items()
+            if isinstance(h, dict)
+            and _house_lifecycle(h.get("meta") or {}) != "calibrating"}
 
 
 # ─────────────────────────── Tunables ────────────────────────────────────────
@@ -588,6 +609,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
     Firebase free tier. One fetch per pass now serves all three.
     """
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     master = get_auto_mode()
     day = _today(now)
     watered, alarmed = [], []
@@ -670,6 +692,7 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
     """Assess every tray. _tray_decision issues the command itself when the
     section is automatic; when it is not, we alarm instead."""
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     # pass the pass's clock down, so a simulated run stays self-consistent
     results = _run_per_section(houses, partial(_tray_decision, now=now))
     master = get_auto_mode()
@@ -704,6 +727,7 @@ def run_plan_cycle(now: Optional[datetime] = None, houses: Optional[dict] = None
     while the pass is running on a simulated one, the two never match and the
     day's watering is silently skipped."""
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     results = _run_per_section(houses, partial(_plan_section, now=now))
     return {"planned": len(results)}
 
