@@ -215,6 +215,16 @@ ALARM_CHANNEL = "farm-alarm-v3"
 ALARM_REPEAT_MINUTES = 5
 ALARM_REPEAT_MAX = 6          # ~25 minutes of reminders, then it stays in-app only
 
+# Hardware faults (device_health.py) are told ONCE, as an ordinary notification
+# - not the full-screen alarm that wakes a locked phone, and not repeated. A
+# loose sensor wire at 3 am is not a plant going dry, and on the native alarm
+# path every alarm shares one notification slot, so a sensor-fault push would
+# REPLACE a pending "Water the plants now" on the phone. Found in review.
+QUIET_ACTIONS = ("check-device",)
+
+# How often the engine looks in each master's queue for a pour never run.
+MASTER_QUEUE_MINUTES = 5
+
 FIREBASE_KEY_DEFAULT = os.path.join(
     os.path.expanduser("~"), ".orchid-secrets", "firebase-admin.json")
 
@@ -407,7 +417,8 @@ def alarm_due_for_push(v: dict, now: datetime) -> bool:
         return False
 
     count = int(v.get("pushCount") or 0)
-    if count >= ALARM_REPEAT_MAX:
+    limit = 1 if v.get("action") in QUIET_ACTIONS else ALARM_REPEAT_MAX
+    if count >= limit:
         return False                      # said enough; it stays in the app
 
     last = v.get("lastPushedAt")
@@ -465,7 +476,7 @@ def _flush_pending_pushes():
 
         _send_push(head, body, {"action": action,
                                 "alarmIds": [k for k, _ in items]},
-                   alarm=True)                        # result logged inside
+                   alarm=action not in QUIET_ACTIONS)  # result logged inside
         for k, v in items:
             v["pushed"] = True                       # kept for older readers
             v["pushCount"] = int(v.get("pushCount") or 0) + 1
@@ -842,8 +853,20 @@ def _engine_pass(now: datetime) -> dict:
     #    alarm only when a fault STARTS. Advisory: it must never stop the clock.
     try:
         from app.services import device_health as _dh
+        # The masters' queues, every MASTER_QUEUE_MINUTES: every pour goes there,
+        # and one still waiting past its time was never carried out. Usually an
+        # empty document - a few bytes - per master per check.
+        queues = None
+        last_q = st.get("lastMasterQueue")
+        if last_q is None or (now - last_q) >= timedelta(minutes=MASTER_QUEUE_MINUTES):
+            queues = {}
+            for h in _acting_houses(houses).values():
+                mac = ((h.get("meta") or {}).get("masterMac") or "").strip()
+                if mac and mac not in queues:
+                    queues[mac] = _fb_get(f"/farm/masters/{mac}/queue.json") or {}
+            st["lastMasterQueue"] = now
         for issue in _dh.check_farm(current_tenant(), houses, now.timestamp() * 1000.0,
-                                    set(_acting_houses(houses))):
+                                    set(_acting_houses(houses)), master_queues=queues):
             _raise_alarm("action", issue["key"], issue["title"], issue["message"],
                          issue["houseId"], issue["sectionId"], action="check-device")
     except Exception as e:

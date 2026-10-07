@@ -94,3 +94,19 @@ def test_a_missing_timestamp_with_a_count_still_pushes():
 def test_every_count_below_the_max_is_still_allowed(count):
     a = alarm(pushCount=count, lastPushedAt=stamp(NOW - timedelta(hours=1)))
     assert alarm_due_for_push(a, NOW) is True
+
+
+def test_a_hardware_fault_is_pushed_once_not_repeated():
+    """device_health alarms (action check-device) are told once, as an ordinary
+    notification: a loose sensor wire is not a plant going dry, and repeating
+    full-screen alarms would bury - and on the phone replace - a real one."""
+    from datetime import datetime, timedelta, timezone
+    from app.api.routes.automation import alarm_due_for_push
+    now = datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc)
+    fresh = {"kind": "action", "action": "check-device", "acknowledged": False}
+    assert alarm_due_for_push(fresh, now) is True
+    once = {**fresh, "pushCount": 1,
+            "lastPushedAt": (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S UTC")}
+    assert alarm_due_for_push(once, now) is False
+    water = {**once, "action": "water"}
+    assert alarm_due_for_push(water, now) is True        # watering still repeats
