@@ -24,6 +24,8 @@ import HousePlannerScreen from '../screens/HousePlannerScreen';
 import CalibrationScreen from '../screens/CalibrationScreen';
 import HouseMapScreen from '../screens/HouseMapScreen';
 import PlacementResultScreen from '../screens/PlacementResultScreen';
+import PlacementFlowScreen from '../screens/PlacementFlowScreen';
+import WateringCheckScreen from '../screens/WateringCheckScreen';
 import AddSensorScreen from '../screens/AddSensorScreen';
 import AdminOnly from '../components/AdminOnly';
 import TeamScreen from '../screens/TeamScreen';
@@ -170,6 +172,12 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="Calibration" component={CalibrationGuarded} />
         <Stack.Screen name="HouseMap" component={HouseMapScreen} />
         <Stack.Screen name="PlacementResult" component={PlacementResultGuarded} />
+        {/* Not admin-only: anyone on the farm may see how the placement was
+            decided. Re-running it is gated at the button. */}
+        <Stack.Screen name="PlacementFlow" component={PlacementFlowScreen} />
+        {/* Not admin-only: how the watering times were checked. It only reads
+            (two GETs open to every signed-in role) and has no controls. */}
+        <Stack.Screen name="WateringCheck" component={WateringCheckScreen} />
         <Stack.Screen name="AddSensor" component={AddSensorGuarded} />
 
         {/* Component 1 - disease detection */}

@@ -1536,7 +1536,7 @@ def _run_per_section(houses: dict, fn) -> dict:
     that to roughly the time of one section.
     """
     jobs = [(hid, sid, s)
-            for hid, h in (houses or {}).items() if isinstance(h, dict)
+            for hid, h in _acting_houses(houses).items() if isinstance(h, dict)
             for sid, s in ((h.get("sections") or {}).items())
             if isinstance(s, dict) and s.get("latest")]
     if not jobs:
@@ -3042,12 +3042,58 @@ CALIBRATION_DAYS = 3
 # it is the elapsed-days rule that normally binds - this exists to catch a
 # section that was offline for most of the window.
 CALIBRATION_MIN_READINGS = 400
+# The analysis may be run before the full window once every section has its
+# readings and at least one whole day-night cycle is in. Three days is the
+# target, not a hard floor: it is what makes the result stable, and the app
+# labels an early run with the days it actually used, so nobody mistakes a
+# 1.5-day answer for a 3-day one.
+EARLY_ANALYSIS_DAYS = 1.0
+# Same threshold the screen uses to call a node silent.
+CALIBRATION_SILENT_MINUTES = 120
+
+_PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+
+
+def _push_id_ms(key: str) -> Optional[float]:
+    """The write time encoded in a Firebase push id, or None if `key` is not one.
+
+    A push id is 20 characters; the first 8 are the server's millisecond clock
+    in a 64-character alphabet, which is why push keys sort by time.
+    """
+    if not isinstance(key, str) or len(key) != 20:
+        return None
+    ms = 0
+    for ch in key[:8]:
+        i = _PUSH_CHARS.find(ch)
+        if i < 0:
+            return None
+        ms = ms * 64 + i
+    return float(ms)
 
 
 def _house_lifecycle(meta: dict) -> str:
     """The house's state. Absent means active, so old houses are unaffected."""
     v = ((meta or {}).get("lifecycle") or "").strip().lower()
     return v if v in LIFECYCLE_STATES else "active"
+
+
+def _acting_houses(houses: Optional[dict]) -> dict:
+    """The houses that may be planned, watered, filled or alarmed for.
+
+    A CALIBRATING house is left out. Its nodes are bare DHT22 boards spread out
+    to record where the house differs, wired to no pump and no tray. Treated
+    like any other house it got watering plans and hourly tray decisions, and
+    with Auto off every one became a pushed "Fill the humidity tray now" alarm
+    repeating every five minutes, per section, for three days; with Auto on it
+    recorded fills on a tray that does not exist. The house rejoins when
+    apply-placement makes it active. Found walking the calibration procedure
+    through the code on 7 Oct 2026; the review then found the manual Check now
+    path still let it through, which is why this sits in _run_per_section and
+    not only in the engine.
+    """
+    return {hid: h for hid, h in (houses or {}).items()
+            if isinstance(h, dict)
+            and _house_lifecycle(h.get("meta") or {}) != "calibrating"}
 
 
 class FlowIn(BaseModel):
@@ -3193,7 +3239,12 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn, ctx: AuthContex
     # for good. Refused here rather than left to the caller, because this is the
     # call that makes it irreversible - the readings are deleted.
     from app.api.routes.spatial_service import MIN_ANCHORS
-    if len(keep) < MIN_ANCHORS:
+    # Only when something is FREED. Keeping every sensor leaves no zone to
+    # estimate, so the "zones would stay blank" reason does not apply - and
+    # refusing it meant a three-section house could never leave calibrating,
+    # which since calibrating houses are left out of automation means it would
+    # never be watered or alarmed for again. Found in review, 7 Oct 2026.
+    if (set(sections) - keep) and len(keep) < MIN_ANCHORS:
         raise HTTPException(
             400,
             f"Keeping {len(keep)} sensor(s) would leave nothing to estimate from. "
@@ -3272,7 +3323,20 @@ async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_a
     min_readings = int(cal.get("minReadings") or CALIBRATION_MIN_READINGS)
 
     now_ms = _server_now_ms()
-    days = (now_ms - started) / 86400000.0 if started else 0.0
+    # COUNT FROM WHAT THE ANALYSIS WILL USE. Once co-location has ended, the
+    # analysis keeps only readings from SETTLE_MINUTES after it - so days and
+    # readings counted from house creation promised data that would be thrown
+    # away. A co-location done on day 2 reset the useful window to zero while
+    # this still said "2.9 of 3 days" and the analysis then failed blaming a
+    # node. While co-location is still running, nothing spread out exists yet.
+    from app.api.routes.house_planner import SETTLE_MINUTES
+    co = cal.get("colocation") or {}
+    co_open = bool(co.get("startMs")) and not co.get("endMs")
+    count_from = started
+    if co.get("endMs"):
+        count_from = max(started, float(co["endMs"]) + SETTLE_MINUTES * 60000.0)
+    days = (now_ms - count_from) / 86400000.0 if count_from and not co_open else 0.0
+    days = max(0.0, days)
 
     sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
     rows, blockers = [], []
@@ -3305,13 +3369,22 @@ async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_a
         # Measured on this house: 772 KB -> 103 KB per call.
         base = f"/farm/history/{house_id}/{sid}.json"
         keys = _fb_get(f"{base}?shallow=true") or {}
-        count = len(keys)
+        # Only readings the analysis will keep. A push id carries the moment
+        # Firebase wrote it, so this needs no values downloaded; a key that is
+        # not a push id (seeded or imported data) is counted, as before.
+        count = sum(1 for k in keys
+                    if (_push_id_ms(k) is None or _push_id_ms(k) >= count_from))
         newest = _fb_get(f'{base}?orderBy="$key"&limitToLast=1') or {}
         stamps = [r.get("timestamp") for r in newest.values()
                   if isinstance(r, dict) and r.get("timestamp")]
         last = max(stamps) if stamps else None
         age_min = (now_ms - float(last)) / 60000.0 if last else None
-        ok = count >= min_readings
+        # A node that has stopped is not ready however many readings it left
+        # behind: at a 15 s interval 400 readings take 100 minutes, so a power
+        # bank that died an hour after co-location passed as ready forever, and
+        # the screen painted its dot green.
+        ok = (count >= min_readings and age_min is not None
+              and age_min <= CALIBRATION_SILENT_MINUTES)
         rows.append({
             "id": sid,
             "name": ((sections[sid] or {}).get("meta") or {}).get("name") or sid,
@@ -3322,14 +3395,17 @@ async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_a
         })
         if not count:
             blockers.append(f"{sid} has never reported.")
-        elif age_min is not None and age_min > 120:
+        elif age_min is not None and age_min > CALIBRATION_SILENT_MINUTES:
             blockers.append(f"{sid} stopped reporting {age_min / 60:.0f} hours ago.")
         elif not ok:
             blockers.append(f"{sid} has {count} of {min_readings} readings.")
 
-    time_done = days >= target_days
-    data_done = bool(rows) and all(r["ok"] for r in rows)
-    if not time_done:
+    time_done = days >= target_days and not co_open
+    data_done = bool(rows) and all(r["ok"] for r in rows) and not co_open
+    if co_open:
+        blockers.insert(0, "Co-location is still running. Press Done once the nodes "
+                           "have been together 40 minutes, then spread them out.")
+    elif not time_done:
         blockers.insert(0, f"{target_days - days:.1f} more days of data needed.")
 
     return {
@@ -3346,7 +3422,18 @@ async def calibration_status(house_id: str, ctx: AuthContext = Depends(require_a
         "targetDays": target_days,
         "sections": rows,
         "ready": bool(time_done and data_done),
+        # Allowed now, but on fewer days than the target - see EARLY_ANALYSIS_DAYS.
+        "canAnalyse": bool(data_done and days >= EARLY_ANALYSIS_DAYS),
+        "early": bool(data_done and EARLY_ANALYSIS_DAYS <= days < target_days),
+        "earlyAfterDays": EARLY_ANALYSIS_DAYS,
+        # When the days above are counted from: house creation, or the end of
+        # co-location plus the settle time.
+        "countingFromMs": count_from or None,
         "blockers": blockers,
+        # The co-location window and the server's clock, so the app can say how
+        # long the nodes have been together without trusting the phone's time.
+        "colocation": cal.get("colocation"),
+        "serverNowMs": now_ms,
     }
 
 
@@ -3703,6 +3790,7 @@ async def delete_house(house_id: str, ctx: AuthContext = Depends(require_role(RO
     # survives the line above and would otherwise be orphaned forever.
     _fb_delete(f"/farm/history/{house_id}.json")
     _fb_delete(f"/farm/events/{house_id}.json")
+    _fb_delete(f"/farm/placementAnalysis/{house_id}.json")
     _DEVICE_CACHE["devices"] = None
     return {"status": "success", "deleted": house_id, "nodesFreed": freed}
 
@@ -3840,6 +3928,13 @@ async def alerts(ctx: AuthContext = Depends(require_auth)):
                               "houseId": hid, "sectionId": sid})
                 continue
 
+            # A calibrating house is recording, not being cared for by this
+            # system: no tray, fertilizer, growth or watering items for boards
+            # wired to none of those. A node going quiet (above) is still said,
+            # because a silent node is exactly what ruins a calibration.
+            if _house_lifecycle(h.get("meta") or {}) == "calibrating":
+                continue
+
             c = _clean(latest)
             if tray.get("status") == "fill":
                 items.append({"id": f"{hid}-{sid}-tray", "level": "action",
@@ -3904,6 +3999,41 @@ async def alerts(ctx: AuthContext = Depends(require_auth)):
             "urgent": sum(1 for a in items if a["level"] in ("urgent", "action")),
             "alerts": items,
             "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+
+# Written ONLY by ml_pipeline/validate_out_of_time.py --json, from the table that
+# run printed. Read on every request rather than at import, so re-running the
+# script updates the app without a restart.
+WATERING_VALIDATION_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "data", "watering_validation.json"))
+
+
+@router.get("/watering-validation")
+async def watering_validation(ctx: AuthContext = Depends(require_auth)):
+    """How well the watering model reproduces its labels on years it never saw.
+
+    Half of the answer to "how do we know the watering times are correct". It
+    shows the model is faithful to the expert rule it learned - on a random
+    split, on held-out years, and on weather downloaded after training. It does
+    NOT show the rule fits this shade house: that is the other half,
+    /houses/{h}/shadehouse-check, which compares real sensors with the indoor
+    conversion the labels were computed on.
+
+    404 when the file is missing. No numbers are kept in code to fall back on:
+    a validation figure that did not come from a run is not a validation.
+    """
+    import json as _json
+    try:
+        with open(WATERING_VALIDATION_PATH, encoding="utf-8") as f:
+            doc = _json.load(f)
+    except FileNotFoundError:
+        raise HTTPException(
+            404, "No watering validation has been generated on this server. Run "
+                 "ml_pipeline/validate_out_of_time.py --json "
+                 "backend/app/data/watering_validation.json")
+    except ValueError as e:
+        raise HTTPException(500, f"watering_validation.json is not valid JSON: {e}")
+    return {"status": "success", **doc}
 
 
 @router.get("/model-info")

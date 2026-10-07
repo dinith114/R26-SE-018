@@ -749,7 +749,7 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-2.0\"" +
+                ",\"fw\":\"validation-2.1\"" +
                 // Which farm this board was flashed for. The backend filters
                 // the global registry on it, so an unflashed board carries no
                 // tenant and stays claimable by anyone - which is right: it
@@ -1316,6 +1316,21 @@ void takeReading() {
     handleIdentify();
   }
 
+  /* An unlinked board uploads nothing.
+
+     It used to post to the compiled-in fallback, H1/S1, so it was never silent.
+     That was safe with one board. With four new boards switched on before they
+     are linked, every one of them wrote bench readings into the REAL S1's
+     history - the archive the placement analysis and the models read - and
+     polled S1's command document as if it were S1. The registry entry that
+     announceDevice() and the heartbeat keep fresh is all the app's Link-a-node
+     list needs, so nothing is lost by waiting. */
+  if (!isClaimed) {
+    Serial.println("[DEV] not linked to a section yet - reading NOT uploaded."
+                   " Link this board in the app.");
+    return;
+  }
+
   if (WiFi.status() == WL_CONNECTED) {
     bool a = postJson(BASE + "/latest.json", body, true);   // current state
     bool b = postJson(HIST + ".json",        body, false);  // archive
@@ -1431,7 +1446,9 @@ void loop() {
     lastReadAt = millis();
   }
 
-  if (!firstCycle && WiFi.status() == WL_CONNECTED
+  // Only a linked board has a command document of its own; an unlinked one
+  // would be reading the fallback section's (see takeReading).
+  if (!firstCycle && isClaimed && WiFi.status() == WL_CONNECTED
       && millis() - lastCmdAt >= COMMAND_POLL_MS) {
     lastCmdAt = millis();
     pollCommand();

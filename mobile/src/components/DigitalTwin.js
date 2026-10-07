@@ -68,6 +68,11 @@ export default function DigitalTwin({
   showPipes = true,
   onPressNode,
   maxHeight = 380,
+  /* { radius, label } - one node's measured reach, in metres, drawn as a circle
+     around every measuring node. From the placement analysis's coverage step:
+     the distance at which two nodes' readings differ by the sensor's own
+     accuracy. Absent, nothing is drawn - never a default radius. */
+  coverage = null,
 }) {
   const { width: screenW } = useWindowDimensions();
 
@@ -119,7 +124,8 @@ export default function DigitalTwin({
           ))}
         </View>
 
-        <View style={[styles.plot, { width: pw, height: ph }]}>
+        <View style={[styles.plot, { width: pw, height: ph },
+                      coverage && { overflow: 'hidden' }]}>
           {/* graph-paper grid, so a distance can be read off rather than guessed */}
           {xs.map((m) => (
             <View key={`vx${m}`} style={[styles.vline, { left: mx(m), height: ph }]} />
@@ -155,6 +161,19 @@ export default function DigitalTwin({
               <Ionicons name="water" size={13} color="#FFF" />
             </View>
           )}
+
+          {/* coverage: how far each measuring node reaches, to scale */}
+          {coverage && coverage.radius > 0 && nodes
+            .filter((n) => n.kind === 'real' || n.kind === 'master')
+            .map((n) => {
+              const r = mx(coverage.radius);
+              return (
+                <View key={`cov${n.id}`} style={[styles.cover, {
+                  left: mx(n.x) - r, top: mx(n.y) - r,
+                  width: r * 2, height: r * 2, borderRadius: r,
+                }]} />
+              );
+            })}
 
           {/* nodes */}
           {nodes.map((n) => {
@@ -226,6 +245,14 @@ export default function DigitalTwin({
               <Text style={styles.legendTxt}>{k.label}</Text>
             </View>
           ))}
+        {!!(coverage && coverage.radius > 0) && (
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, styles.coverDot]} />
+            <Text style={styles.legendTxt}>
+              {coverage.label || `One node's reach, ${coverage.radius} m`}
+            </Text>
+          </View>
+        )}
         {!!pump && (
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: COLORS.humidity,
@@ -273,6 +300,10 @@ const styles = StyleSheet.create({
   pump: { position: 'absolute', width: 22, height: 22, borderRadius: 5,
           backgroundColor: COLORS.humidity, alignItems: 'center',
           justifyContent: 'center' },
+
+  cover:    { position: 'absolute', backgroundColor: COLORS.primaryDim,
+              borderWidth: 1, borderColor: 'rgba(4, 120, 87, 0.35)' },
+  coverDot: { backgroundColor: COLORS.primaryDim, borderColor: 'rgba(4, 120, 87, 0.35)' },
 
   node:    { position: 'absolute', width: 30, height: 30, borderRadius: 15,
              borderWidth: 2, alignItems: 'center', justifyContent: 'center' },

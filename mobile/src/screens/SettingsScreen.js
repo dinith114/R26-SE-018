@@ -16,6 +16,7 @@ import {
   getDevices, getOverview, getModelInfo, setFarmLocation,
   intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
+import { pickHouseId } from '../services/wateringCheck';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
    /prediction and /history - which nothing else in the v2 app touches. They
@@ -91,6 +92,9 @@ export default function SettingsScreen({ navigation }) {
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
+  // The house "How watering times were checked" opens on: the one the node
+  // reports into, else the first real one (see wateringCheck.pickHouseId).
+  const [checkHouse, setCheckHouse] = useState(null);
 
   const [alerts, setAlerts] = useState({
     watering:      true,
@@ -153,6 +157,10 @@ export default function SettingsScreen({ navigation }) {
         });
         setSection(sec);
         setFarm(ov.farm || null);
+
+        const hid = pickHouseId(ov, dev);
+        const h = (ov.houses || []).find((x) => x && x.houseId === hid);
+        setCheckHouse(hid ? { houseId: hid, houseName: h?.meta?.name || null } : null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -307,8 +315,18 @@ export default function SettingsScreen({ navigation }) {
             <Divider />
             <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
             <Divider />
-            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"   value={waterStr}
-                 hint="Random Forest regressor · decides the hour from dawn conditions" />
+            {/* Tappable: "how do we know these times are right" is the first
+                question this number raises. Opens without a house when none is
+                known yet; that screen then says the indoor check needs one. */}
+            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"
+                 hint="Random Forest regressor · decides the hour from dawn conditions"
+                 onPress={() => navigation.navigate('WateringCheck', checkHouse || {})}
+                 right={(
+                   <View style={s.rowRight}>
+                     <Text style={s.rowValue}>{waterStr}</Text>
+                     <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
+                   </View>
+                 )} />
             <Divider />
             <Row icon="water-outline"     iconColor={COLORS.humidity} label="Tray Model"      value={trayStr}
                  hint="Random Forest regressor · valve seconds" />
@@ -458,6 +476,7 @@ const s = StyleSheet.create({
   rowLabel: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '600' },
   rowHint:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2 },
   rowValue: { color: COLORS.textTertiary, fontSize: FONT.sm, maxWidth: 160, textAlign: 'right' },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   // Badge
   badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },

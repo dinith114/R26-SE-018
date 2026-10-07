@@ -34,7 +34,9 @@ export const PERMS = {
   renameFarm:          ['admin'],
   renameHouse:         ['admin'],
   renameSection:       ['admin'],
+  runPlacementAnalysis: ['admin'],
   setAutoMode:         ['admin'],
+  setColocation:       ['admin'],
   setDeviceInterval:   ['admin'],
   setFarmLocation:     ['admin'],
   setHouseDimensions:  ['admin'],
@@ -78,9 +80,12 @@ export const PERMS = {
   getModelInfo:         ['admin', 'operator', 'viewer'],
   getOverview:          ['admin', 'operator', 'viewer'],
   getPingResult:        ['admin', 'operator', 'viewer'],
+  getPlacementAnalysis: ['admin', 'operator', 'viewer'],
   getSectionDevice:     ['admin', 'operator', 'viewer'],
   getSectionEvents:     ['admin', 'operator', 'viewer'],
+  getShadehouseCheck:   ['admin', 'operator', 'viewer'],
   getUnassignedDevices: ['admin', 'operator', 'viewer'],
+  getWateringValidation: ['admin', 'operator', 'viewer'],
   registerPushToken:    ['admin', 'operator', 'viewer'],
 };
 
