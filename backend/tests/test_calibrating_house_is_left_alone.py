@@ -62,3 +62,33 @@ def test_activating_the_house_brings_it_back():
     assert sorted(automation._acting_houses(farm)) == ["H1", "HC"]
     farm["HC"]["meta"].pop("lifecycle")                 # old houses: absent = active
     assert sorted(automation._acting_houses(farm)) == ["H1", "HC"]
+
+
+# ── the review found the manual Check now path and /alerts still let it in ──
+
+def test_check_now_skips_a_calibrating_house_too():
+    """/plan-all and /tray-check-all go through _run_per_section, like the engine."""
+    from app.api.routes import smart_care_v2 as sc
+    seen = []
+    sc._run_per_section(_farm(), lambda hid, sid, s: seen.append(hid) or {})
+    assert seen == ["H1"]
+
+
+def test_alerts_keep_a_silent_node_but_no_care_items(monkeypatch):
+    import asyncio
+    from app.api.routes import smart_care_v2 as sc
+    farm = _farm()
+    for h in farm.values():
+        for s in h["sections"].values():
+            s["tray"] = {"status": "fill", "fillSeconds": 12}
+    monkeypatch.setattr(sc, "_fb_get", lambda path: farm if path == "/farm/houses.json" else None)
+    monkeypatch.setattr(sc, "_devices_for_caller", lambda: {})
+    monkeypatch.setattr(sc, "second_session_due", lambda s, now: None)
+    # HC/S2 has gone quiet; everything else is fresh.
+    monkeypatch.setattr(sc, "_freshness", lambda s, now, iv=None: {
+        "trusted": s is not farm["HC"]["sections"]["S2"], "message": "silent 3 h"})
+    out = asyncio.run(sc.alerts(ctx=None))
+    ids = {i["id"] for i in out["alerts"]}
+    assert "H1-S1-tray" in ids                      # the working house is still cared for
+    assert "HC-S2-stale" in ids                     # a silent calibration node is still said
+    assert not any(i.startswith("HC-") and not i.endswith("-stale") for i in ids)

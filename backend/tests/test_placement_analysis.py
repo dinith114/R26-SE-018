@@ -178,3 +178,42 @@ def test_a_one_way_gradient_gives_an_upper_bound_not_a_whole_house_claim():
     assert t["atMost"] == 5.0
     node = cov["node"]
     assert node["bound"] == "atMost" and node["radius"] <= 5.0
+
+
+# ── coverage review fixes, 7 Oct 2026: the failure cases the reviewers built ──
+
+def _cov(coords, temps):
+    """coverage() on one snapshot row per field: temperature as given, humidity
+    and VPD identical everywhere (so they never limit the answer)."""
+    ids = list(coords)
+    mats = {"temperature": np.array([[temps[s] for s in ids]], dtype=float),
+            "humidity": np.full((1, len(ids)), 80.0),
+            "vpd": np.full((1, len(ids)), 0.8)}
+    return pa.coverage(mats, ids, coords)
+
+
+def test_a_noise_level_slope_is_not_a_kilometre_radius():
+    # 0.001 C per metre across a 10 m line: the fit reaches 0.5 C at 500 m.
+    out = _cov(LINE, {s: 0.001 * x for s, (x, _y) in LINE.items()})
+    t = out["fields"]["temperature"]
+    assert t["radius"] is None and t["status"] == "no-growth"
+    assert out["node"] is None or out["node"].get("radius") is None
+
+
+def test_the_worst_field_is_never_dropped_from_the_headline():
+    # Uncorrected sensor offsets of +/-0.35 C: neighbours 2 m apart differ by 0.7.
+    temps = {s: (0.35 if i % 2 else -0.35) for i, s in enumerate(LINE)}
+    out = _cov(LINE, temps)
+    assert out["fields"]["temperature"]["status"] == "below-spacing"
+    assert out["node"]["bound"] == "atMost" and out["node"]["limitedBy"] == "temperature"
+    assert out["node"]["radius"] <= 2.0
+
+
+def test_a_fitted_radius_is_never_beyond_a_closer_pair_that_disagrees():
+    # Warming across the 3 m side only: the 3 m pairs differ by 0.75 C.
+    rect = {"A": (0.0, 0.0), "B": (3.0, 0.0), "C": (0.0, 10.0), "D": (3.0, 10.0)}
+    out = _cov(rect, {s: 0.25 * x for s, (x, _y) in rect.items()})
+    t = out["fields"]["temperature"]
+    assert t["radius"] is None
+    assert t["status"] in ("direction-dependent", "below-spacing")
+    assert t["atMost"] <= 3.0

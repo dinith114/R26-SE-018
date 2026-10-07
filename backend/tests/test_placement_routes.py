@@ -117,7 +117,9 @@ def test_analysis_is_run_stored_and_read_back(farm):
     s2 = out["bias"]["offsets"]["S2"]
     assert abs(s2["temperature"] - 0.4) < 0.1 and abs(s2["humidity"] + 2.0) < 0.4
     assert out["coverage"]["node"]["radius"] is not None
-    assert f"{BASE}/houses/H1/placementAnalysis.json" in db
+    assert f"{BASE}/placementAnalysis/H1.json" in db
+    # Never inside the house document the engine downloads every minute.
+    assert not any("/houses/H1/placementAnalysis" in k for k in db)
 
     again = client.get(f"{H}/placement-analysis", headers=_tok(ROLE_VIEWER))
     assert again.status_code == 200
@@ -157,5 +159,67 @@ def test_analysis_can_run_early_and_says_so(farm):
     c = client.get(f"{H}/calibration", headers=_tok()).json()
     assert c["canAnalyse"] is True and c["early"] is True and c["ready"] is False
     clock["now"] = T0 + 3.1 * 1440 * STEP           # past the target: not early
+    for sid in COORDS:                              # ...and every node still reporting
+        _db[f"{BASE}/history/H1/{sid}.json"]["fresh"] = {
+            "timestamp": clock["now"] - STEP, "temperature": 27.0, "humidity": 75.0}
     c = client.get(f"{H}/calibration", headers=_tok()).json()
     assert c["ready"] is True and c["early"] is False
+
+
+
+# ── review fixes, 7 Oct 2026 ────────────────────────────────────────────────
+
+def test_a_silent_node_is_not_ready_however_many_readings_it_left(farm):
+    client, db, clock = farm
+    clock["now"] = T0 + 2 * 1440 * STEP + 3 * 60 * STEP     # data ended 3 h ago
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["canAnalyse"] is False
+    assert all(not r["ok"] for r in c["sections"])
+    assert any("stopped reporting" in b for b in c["blockers"])
+
+
+def test_days_count_from_the_end_of_colocation(farm):
+    client, db, clock = farm
+    meta = db[f"{BASE}/houses/H1/meta.json"]
+    end = T0 + 1440 * STEP                                   # co-location done on day 1
+    meta["calibration"]["colocation"] = {"startMs": end - 60 * STEP, "endMs": end}
+    clock["now"] = T0 + 2 * 1440 * STEP - STEP
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["countingFromMs"] == end + 15 * STEP            # plus the settle time
+    assert c["daysElapsed"] < 1.0                            # not 2.0 from creation
+    assert c["canAnalyse"] is False
+
+
+def test_nothing_can_be_analysed_while_colocation_is_running(farm):
+    client, db, clock = farm
+    db[f"{BASE}/houses/H1/meta.json"]["calibration"]["colocation"] = {"startMs": T0}
+    clock["now"] = T0 + 1.5 * 1440 * STEP
+    c = client.get(f"{H}/calibration", headers=_tok()).json()
+    assert c["canAnalyse"] is False and "Co-location is still running" in c["blockers"][0]
+    r = client.post(f"{H}/placement-analysis", headers=_tok())
+    assert r.status_code == 409 and "still running" in r.json()["detail"]
+
+
+def test_a_three_section_house_that_keeps_every_sensor_can_be_activated(farm):
+    client, db, clock = farm
+    secs = db[f"{BASE}/houses/H1/sections.json"]
+    for sid in ("S4", "S5", "S6"):
+        secs.pop(sid)
+    r = client.post(f"{H}/apply-placement", json={"keep": ["S1", "S2", "S3"]}, headers=_tok())
+    assert r.status_code == 200, r.text
+    assert db[f"{BASE}/houses/H1/meta.json"]["lifecycle"] == "active"
+    # Freeing a sensor below the kriging minimum is still refused.
+    secs["S4"] = {"meta": {"name": "S4", "x": 9, "y": 13}}
+    r = client.post(f"{H}/apply-placement", json={"keep": ["S1", "S2", "S3"]}, headers=_tok())
+    assert r.status_code == 400
+
+
+def test_push_ids_decode_to_their_write_time():
+    from app.api.routes.smart_care_v2 import _PUSH_CHARS, _push_id_ms
+    ms = 1_791_234_567_890
+    head, v = "", ms
+    for _ in range(8):
+        head = _PUSH_CHARS[v % 64] + head
+        v //= 64
+    assert _push_id_ms(head + "abcdefghijkl") == ms
+    assert _push_id_ms("k000123") is None and _push_id_ms("seed001") is None

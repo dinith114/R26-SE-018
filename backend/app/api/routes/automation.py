@@ -48,7 +48,7 @@ from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
-    _record_fertilized, _log_event, _house_lifecycle,
+    _record_fertilized, _log_event, _acting_houses,
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
@@ -59,25 +59,9 @@ from app.services.tenant_context import (
 router = APIRouter()
 
 
-def _acting_houses(houses: Optional[dict]) -> dict:
-    """The houses the engine may plan, water, fill or alarm for.
-
-    A house that is CALIBRATING is left out. Its nodes are spread out to record
-    the data that will decide where sensors go - usually bare DHT22 boards on
-    power banks, wired to no pump and no tray. Treated like any other house, it
-    got a watering plan and hourly tray decisions, and with Auto off every one
-    of those became a pushed "Fill the humidity tray now" alarm repeating every
-    five minutes, per section, for three days - for trays nobody can fill from
-    that board. Found by walking the calibration procedure through this file on
-    7 Oct 2026, before the first real calibration house went in.
-
-    The house rejoins the moment apply-placement sets it active. Spatial
-    estimation still sees every house (it only fills sections with no sensor,
-    and raises nothing).
-    """
-    return {hid: h for hid, h in (houses or {}).items()
-            if isinstance(h, dict)
-            and _house_lifecycle(h.get("meta") or {}) != "calibrating"}
+# _acting_houses lives in smart_care_v2 next to _house_lifecycle and is applied
+# inside _run_per_section, so the tray and plan cycles are covered there. The
+# watering link iterates houses itself, so it calls it directly below.
 
 
 # ─────────────────────────── Tunables ────────────────────────────────────────

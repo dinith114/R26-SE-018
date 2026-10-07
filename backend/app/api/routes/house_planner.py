@@ -581,13 +581,19 @@ async def run_placement_analysis(house_id: str,
                                  ctx: AuthContext = Depends(require_role(ROLE_ADMIN))) -> dict:
     """Run the full analysis on this house's calibration readings and keep it.
 
-    Kept in /farm/houses/{h}/placementAnalysis so the app can show it again
+    Kept in /farm/placementAnalysis/{h} so the app can show it again
     without recomputing - a run takes ten to twenty seconds of kriging.
     """
     import asyncio
     from app.api.routes.smart_care_v2 import _fb_put, _server_now_ms
 
     meta, ids, coords, histories, co = _load_for_analysis(house_id)
+    if co and co.get("startMs") and not co.get("endMs"):
+        # Run now, the side-by-side readings would be scored as if each node
+        # were already at its own position.
+        raise HTTPException(409, "Co-location is still running. Press Done once the "
+                                 "nodes have been together 40 minutes, then spread "
+                                 "them out before analysing.")
     if len(ids) < 3:
         raise HTTPException(400, f"{len(ids)} sections have a position; at least 3 are needed.")
     try:
@@ -598,7 +604,11 @@ async def run_placement_analysis(house_id: str,
     out["houseId"] = house_id
     out["colocation"] = co
     out["nodeCostLkr"] = NODE_COST_LKR
-    _fb_put(f"/farm/houses/{house_id}/placementAnalysis.json", out)
+    # NOT under /farm/houses/{h}: the engine downloads that whole document every
+    # 60 s, and a 20-35 KB analysis sitting in it cost 30-50 MB of Firebase
+    # egress a day for nothing - the same mistake history and events were
+    # moved out of.
+    _fb_put(f"/farm/placementAnalysis/{house_id}.json", out)
     return {"status": "success", **out}
 
 
@@ -607,7 +617,7 @@ async def get_placement_analysis(house_id: str,
                                  ctx: AuthContext = Depends(require_auth)) -> dict:
     """The last analysis run for this house, or 404 if there has been none."""
     from app.api.routes.smart_care_v2 import _fb_get
-    out = _fb_get(f"/farm/houses/{house_id}/placementAnalysis.json")
+    out = _fb_get(f"/farm/placementAnalysis/{house_id}.json")
     if not out:
         raise HTTPException(404, "No placement analysis has been run for this house yet.")
     return {"status": "success", **out}

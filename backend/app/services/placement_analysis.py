@@ -304,33 +304,52 @@ def coverage(mats: Dict[str, np.ndarray], ids: Sequence[str], coords: Dict[str, 
         dmin, dmax = float(ds.min()), float(ds.max())
         out.update(slope=round(float(slope), 5), intercept=round(float(intercept), 4),
                    r2=round(r2, 3), minDistance=round(dmin, 2), maxDistance=round(dmax, 2))
-        if intercept >= tol:
-            # Even two nodes side by side (distance -> 0) differ by more than the
-            # tolerance: either the bias was not removed or the house changes
-            # within less than the closest spacing.
-            out.update(status="below-spacing", radius=None,
-                       note=f"Nodes differ by more than ±{tol} {UNITS[f]} even at the closest spacing.")
-        elif slope <= 1e-9:
-            over = [p["distance"] for p in pairs if p[f] > tol]
+        # Every pair that already disagrees by more than the tolerance. The
+        # closest of them is a hard limit: one node cannot stand for a spot
+        # that far away, whatever the fitted line says on average.
+        over = sorted(p["distance"] for p in pairs if p[f] > tol)
+        r = (tol - intercept) / slope if slope > 1e-9 else None
+
+        if intercept >= tol or (r is not None and r < dmin):
+            # Even the closest nodes differ by more than the tolerance (on the
+            # fit, or because the reach falls short of the closest spacing):
+            # either the bias was not removed or the house changes faster than
+            # the nodes are spaced. Reported as an upper bound so the combined
+            # figure cannot quietly skip the worst field - it used to drop out,
+            # and the headline then quoted a 33 m reach from humidity alone.
+            bound = min(over) if over else dmin
+            out.update(status="below-spacing", radius=None, atMost=round(bound, 2),
+                       note=f"Nodes differ by more than ±{tol} {UNITS[f]} even at the "
+                            f"closest spacing ({dmin:.1f} m).")
+        elif r is None or r > 2 * dmax:
+            # Flat, or rising so slowly it would not reach the tolerance within
+            # twice the distances measured. A slope that small is noise: on a
+            # near-uniform house it turned into a "radius" of 528 m - and of
+            # 6707 m on another run - for nodes ten metres apart.
             if over:
-                # Flat on average but NOT uniform: some close pairs already
-                # differ by more than the tolerance while farther ones agree.
-                # The house changes along one direction (sun edge to back, say)
+                # Flat on average but NOT uniform: some pairs already differ by
+                # more than the tolerance while others farther apart agree. The
+                # house changes along one direction (sun edge to back, say)
                 # rather than with distance, so no single radius describes it.
-                # What can be said is an upper bound: one node does not reach as
-                # far as the closest pair that already disagrees. Reporting
-                # "covers at least the whole house" here was a real bug, found
-                # on a 2x2 layout with a one-way gradient.
+                # One node does not reach as far as the closest pair that
+                # already disagrees. Reporting "covers at least the whole house"
+                # here was a real bug, found on a 2x2 layout.
                 out.update(status="direction-dependent", radius=None,
-                           atMost=round(min(over), 2),
-                           note=(f"Nodes only {min(over):.1f} m apart already differ by more than "
+                           atMost=round(over[0], 2),
+                           note=(f"Nodes only {over[0]:.1f} m apart already differ by more than "
                                  f"±{tol} {UNITS[f]}, while others farther apart agree: the house "
                                  f"changes more in one direction than another."))
             else:
                 out.update(status="no-growth", radius=None, atLeast=round(dmax, 2),
                            note="The difference does not grow with distance across this house.")
+        elif over and over[0] < r:
+            # The line says r, but a closer pair already disagrees - the same
+            # false claim as above, reached with a slightly positive slope.
+            out.update(status="direction-dependent", radius=None,
+                       atMost=round(over[0], 2),
+                       note=(f"The fitted reach is {r:.1f} m, but nodes only {over[0]:.1f} m "
+                             f"apart already differ by more than ±{tol} {UNITS[f]}."))
         else:
-            r = (tol - intercept) / slope
             out.update(radius=round(float(r), 2),
                        status="measured" if r <= dmax else "extrapolated")
         fields[f] = out

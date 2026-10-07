@@ -39,9 +39,11 @@ def _sun(hour_utc: int) -> float:
 
 def outdoor_table(hours: int, start: int = T0, source: str = "era5-archive",
                   night_rh: float = 85.0) -> dict:
-    """TEST DATA outdoor weather, one row per UTC hour, shaped like fetch_outdoor()."""
+    """TEST DATA outdoor weather, shaped like fetch_outdoor(), covering `hours`
+    indoor hours: one row per UTC stamp PLUS the stamp that closes the last
+    hour, because Open-Meteo's radiation at stamp H is the mean of [H-1, H)."""
     rows = []
-    for i in range(hours):
+    for i in range(hours + 1):
         ms = start + i * HOUR
         s = _sun((ms // HOUR) % 24)
         rows.append({"hourMs": ms,
@@ -53,17 +55,20 @@ def outdoor_table(hours: int, start: int = T0, source: str = "era5-archive",
 
 def indoor_from(outdoor: dict, warming: float, lift: float, trans: float,
                 minutes=(5, 25, 45), mutate=None) -> dict:
-    """TEST DATA readings for one section: the outdoor hour moved indoors by the
-    given constants, in the same form as to_shadehouse(), several readings per
-    hour. `mutate(rec, i)` may break individual readings."""
+    """TEST DATA readings for one section: each indoor hour [H, H+1) is the
+    outdoor weather for those same sixty minutes - radiation from the stamp that
+    closes the hour, air as the mean of the two instants at its edges - moved
+    indoors by the given constants, in the same form as to_shadehouse(). Several
+    readings per hour. `mutate(rec, i)` may break individual readings."""
     hist, i = {}, 0
-    for o in outdoor["hours"]:
-        s = min(1.0, max(0.0, o["radiation"] / 1000.0))
-        t = o["temperature"] + warming * s
-        rh = o["humidity"] + lift * (1 - 0.45 * s)
-        lux = o["radiation"] * trans * 120.0
+    rows = outdoor["hours"]
+    for o_open, o_close in zip(rows, rows[1:]):
+        s = min(1.0, max(0.0, o_close["radiation"] / 1000.0))
+        t = (o_open["temperature"] + o_close["temperature"]) / 2 + warming * s
+        rh = (o_open["humidity"] + o_close["humidity"]) / 2 + lift * (1 - 0.45 * s)
+        lux = o_close["radiation"] * trans * 120.0
         for m in minutes:
-            ts = o["hourMs"] + m * MIN
+            ts = o_open["hourMs"] + m * MIN
             rec = {"timestamp": ts, "temperature": t, "humidity": rh, "light": lux}
             if mutate:
                 rec = mutate(rec, i)
@@ -140,6 +145,24 @@ def test_failed_and_absent_readings_are_missing_not_numbers():
     assert exc["light"] == 48 * 3 and exc["temperature"] == 48
 
 
+def test_an_hour_with_a_pinned_light_reading_gives_no_light_at_all():
+    """A partly cloudy hour: the clear minutes pin at the ceiling, the cloudy
+    ones read a third of the light. Dropping only the pinned minutes kept the
+    dim ones and divided them by the whole hour's radiation - transmission
+    biased low. The whole hour's light is censored, so it is left out."""
+    out = outdoor_table(48)
+
+    def partly_cloudy(rec, i):
+        if rec["light"] > 5000:
+            rec["light"] = 65535 / 1.2 if i % 3 == 0 else rec["light"] / 3
+        return rec
+
+    res = shc.compare({"S1": indoor_from(out, 3.5, 7.0, 0.45, mutate=partly_cloudy)}, out,
+                      now_ms=T0 + 3 * 24 * HOUR)
+    assert res["excluded"]["S1"]["lightHoursAtCeiling"] > 0
+    assert res["measured"]["transmission"] in (None, 0.45)    # never a biased low number
+
+
 def test_a_light_reading_pinned_at_the_bh1750_ceiling_is_not_used():
     out = outdoor_table(48)
 
@@ -166,8 +189,10 @@ def test_seeded_and_unsynced_readings_are_not_the_house():
     res = shc.compare({"S1": hist}, out, now_ms=T0 + 3 * 24 * HOUR)
     assert res["measured"]["warming"] == 3.5
     assert res["excluded"]["S1"]["seeded"] == 30 and res["excluded"]["S1"]["badClock"] == 1
+    # 7 Oct 00:00 to 8 Oct 24:00 - the last hour is closed by the 9 Oct 00:00
+    # stamp, so the request has to reach that day.
     assert shc.reading_window({"S1": hist}, now_ms=T0 + 3 * 24 * HOUR) == (
-        date(2026, 10, 7), date(2026, 10, 8))
+        date(2026, 10, 7), date(2026, 10, 9))
 
 
 def test_humid_nights_where_no_lift_can_show_are_left_out():
@@ -187,23 +212,39 @@ def test_humid_nights_where_no_lift_can_show_are_left_out():
 
 # ── UTC, not Colombo ─────────────────────────────────────────────────────────
 
-def test_an_indoor_reading_at_0830_utc_pairs_with_the_0800_utc_hour():
+def test_an_indoor_reading_at_0830_utc_pairs_with_the_same_sixty_minutes_outdoors():
     at = T0 + 8 * HOUR + 30 * MIN
     hours, _ = shc.indoor_by_hour({"k": {"timestamp": at, "temperature": 31.0,
                                          "humidity": 70.0, "light": 20000}})
     assert list(hours) == [T0 + 8 * HOUR]
 
     # Every hour's outdoor value is different, and ONE reading per hour sits at
-    # :30. Only a pairing with the same UTC hour recovers the constant exactly:
-    # the Colombo hour (14:00 for 08:30 UTC) or rounding to 09:00 would not.
+    # :30. Only pairing [08:00, 09:00) with the radiation stamped 09:00 and the
+    # mean of the 08:00 and 09:00 instants recovers the constant exactly: the
+    # Colombo hour (14:00 for 08:30 UTC), or the 08:00 row alone, would not.
     out = outdoor_table(24)
     res = shc.compare({"S1": indoor_from(out, 2.5, 7.0, 0.45, minutes=(30,))}, out,
                       now_ms=T0 + 2 * 24 * HOUR)
     assert res["measured"]["warming"] == 2.5
     row = next(r for r in res["byHour"] if r["hourUtc"] == 8)
-    eight = next(o for o in out["hours"] if o["hourMs"] == T0 + 8 * HOUR)
-    assert row["outdoorTemp"] == round(eight["temperature"], 1)
+    by = {o["hourMs"]: o for o in out["hours"]}
+    air = (by[T0 + 8 * HOUR]["temperature"] + by[T0 + 9 * HOUR]["temperature"]) / 2
+    assert row["outdoorTemp"] == round(air, 1)
     assert row["localTime"] == "13:30"
+
+
+def test_radiation_comes_from_the_stamp_that_closes_the_hour():
+    """Open-Meteo's radiation at stamp H is the mean of [H-1, H). A morning that
+    is clear and an afternoon that is cloudy makes pairing the wrong stamp
+    visible: the house below follows the assumed 3.5 C exactly."""
+    out = outdoor_table(24)
+    for o in out["hours"]:
+        h = (o["hourMs"] // HOUR) % 24
+        if h >= 7:
+            o["radiation"] *= 0.3                     # cloud from 07:00 UTC
+    res = shc.compare({"S1": indoor_from(out, 3.5, 7.0, 0.45)}, out, now_ms=T0 + 2 * 24 * HOUR)
+    assert res["measured"]["warming"] == 3.5
+    assert shc.out_for_window({T0: out["hours"][0]}, T0) is None    # no closing stamp
     # byHour reads midnight to midnight in FARM time, and keeps empty hours.
     assert len(res["byHour"]) == 24 and res["byHour"][0]["localTime"] == "00:30"
 
@@ -231,14 +272,14 @@ def test_fewer_than_twelve_hours_is_refused_in_words():
 
 def test_twelve_hours_of_night_is_refused_in_words():
     out = outdoor_table(12, start=T0 + 13 * HOUR)      # 18:30 to 06:30 farm time
-    assert all(h["radiation"] == 0 for h in out["hours"])
+    assert all(h["radiation"] < 300 for h in out["hours"])   # never sunny
     res = shc.compare({"S1": indoor_from(out, 3.5, 7.0, 0.45)}, out, now_ms=T0 + 2 * 24 * HOUR)
     assert res["enough"] is False and "sun" in res["reason"]
 
 
 def test_a_section_with_too_few_hours_says_so_beside_the_others():
     out = outdoor_table(48)
-    short = {"hours": out["hours"][:5]}
+    short = {"hours": out["hours"][:6]}              # five hours, plus the closing stamp
     res = shc.compare({"S1": indoor_from(out, 3.5, 7.0, 0.45),
                        "S2": indoor_from(short, 3.5, 7.0, 0.45)}, out,
                       now_ms=T0 + 3 * 24 * HOUR)
@@ -381,8 +422,9 @@ def test_route_pools_the_sections_that_have_history(farm):
     assert "NOT ERA5" in body["overall"]["text"] or "not ERA5" in body["overall"]["text"]
     assert len(body["byHour"]) == 24
     # The farm's own coordinates, and only the days the real readings span -
-    # the seeded record 40 days earlier did not stretch the request.
-    assert calls == [(6.914174, 79.972934, date(2026, 10, 7), date(2026, 10, 8))]
+    # the seeded record 40 days earlier did not stretch the request. It ends on
+    # 9 Oct because the last hour (8 Oct 23:00) is closed by the 9 Oct 00:00 stamp.
+    assert calls == [(6.914174, 79.972934, date(2026, 10, 7), date(2026, 10, 9))]
     assert body["location"]["source"] == "farm settings"
 
 

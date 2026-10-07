@@ -334,7 +334,8 @@ export default function PlacementFlowScreen({ route, navigation }) {
               <Table
                 head={['Node', 'Temp offset', 'RH offset']}
                 flex={[0.8, 1, 1]}
-                rows={Object.entries(bias.offsets || {}).map(([sid, o]) => [
+                rows={ids.map((sid) => [sid, (bias.offsets || {})[sid] || null])
+                  .map(([sid, o]) => [
                   sid,
                   o ? `${o.temperature >= 0 ? '+' : ''}${fmt(o.temperature, 2)} °C` : 'not there',
                   o ? `${o.humidity >= 0 ? '+' : ''}${fmt(o.humidity, 1)} %` : 'not there',
@@ -572,7 +573,7 @@ export default function PlacementFlowScreen({ route, navigation }) {
           </View>
         )}
 
-        {can('runPlacementAnalysis') && (
+        {can('runPlacementAnalysis') && !route.params?.analysis && (
           <TouchableOpacity style={[styles.secondary, running && { opacity: 0.6 }]}
             onPress={rerun} disabled={running} activeOpacity={0.85}>
             {running ? <ActivityIndicator color={COLORS.primary} />

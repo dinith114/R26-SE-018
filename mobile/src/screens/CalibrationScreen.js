@@ -298,6 +298,15 @@ export default function CalibrationScreen({ route, navigation }) {
                   miss this.
                 </Text>
               )}
+              {/* The analysis keeps only readings from after co-location, so
+                  doing it late throws the days already recorded away. Said
+                  before the button, not discovered after three days. */}
+              {cal.daysElapsed >= 0.25 && (
+                <Text style={styles.coWarn}>
+                  Calibration has been running {cal.daysElapsed.toFixed(1)} days. Starting
+                  this now restarts the count: only readings from after it are used.
+                </Text>
+              )}
               <TouchableOpacity style={[styles.coBtn, coBusy && styles.primaryOff]}
                 onPress={() => colocate('start')} disabled={coBusy} activeOpacity={0.85}>
                 {coBusy ? <ActivityIndicator color="#FFF" size="small" />

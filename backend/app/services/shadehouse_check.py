@@ -161,9 +161,9 @@ def indoor_by_hour(history: dict, since_ms: Optional[float] = None,
 
     `hours` maps a UTC hour start (epoch ms) to the mean of each field measured
     in that hour, or None for a field with no usable reading. An hour is the
-    FLOOR of the timestamp: a reading at 08:30 UTC belongs to the 08:00 hour,
-    which is the hour Open-Meteo stamps 08:00 - the same pairing training used,
-    where an hour's warming came from that same hour's radiation.
+    FLOOR of the timestamp: a reading at 08:30 UTC belongs to [08:00, 09:00).
+    compare() then pairs that window with the outdoor values describing the
+    same sixty minutes - see out_for_window().
 
     `excluded` counts what was left out and why, so the app can say "990 light
     readings were -999" instead of quietly computing from fewer.
@@ -171,6 +171,12 @@ def indoor_by_hour(history: dict, since_ms: Optional[float] = None,
     excluded = {"seeded": 0, "badClock": 0, "beforeSince": 0,
                 "temperature": 0, "humidity": 0, "light": 0, "lightAtCeiling": 0}
     acc: Dict[int, Dict[str, List[float]]] = {}
+    # Hours in which the BH1750 hit its ceiling. Dropping only the pinned
+    # minutes kept an hour's CLOUDY minutes and divided them by the whole hour's
+    # radiation, biasing transmission low - a true 0.60 read 0.516 "within
+    # tolerance" and a true 0.70 read 0.247. The light in such an hour is
+    # censored, so the whole hour's light is left out. Found in review.
+    pinned: set = set()
     for key, rec in (history or {}).items():
         if not isinstance(rec, dict):
             continue
@@ -200,9 +206,13 @@ def indoor_by_hour(history: dict, since_ms: Optional[float] = None,
                 continue
             if field == "light" and v >= BH1750_CEILING_LUX - 1.0:
                 excluded["lightAtCeiling"] += 1
+                pinned.add(hour)
                 continue
             slot[field].append(v)
-    hours = {h: {f: _mean(vals) for f, vals in slot.items()} for h, slot in acc.items()}
+    hours = {h: {f: (None if f == "light" and h in pinned else _mean(vals))
+                 for f, vals in slot.items()}
+             for h, slot in acc.items()}
+    excluded["lightHoursAtCeiling"] = len(pinned)
     return hours, excluded
 
 
@@ -221,7 +231,9 @@ def reading_window(histories: Dict[str, dict], since_ms: Optional[float] = None,
     if not stamps:
         return None
     day = lambda ms: datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).date()
-    return day(min(stamps)), day(max(stamps))
+    # + HOUR_MS: the last indoor hour is closed by the NEXT outdoor stamp (see
+    # out_for_window), which for a 23:00 hour falls on the following day.
+    return day(min(stamps)), day(max(stamps) + HOUR_MS)
 
 
 # ── The estimates ────────────────────────────────────────────────────────────
@@ -349,6 +361,35 @@ def _estimate_error(rows: List[dict]) -> dict:
     return out
 
 
+def out_for_window(out_by_hour: Dict[int, dict], hour: int) -> Optional[tuple]:
+    """(temperature, humidity, radiation) outdoors over [hour, hour + 1 h).
+
+    Open-Meteo's columns do not all describe the same moment:
+      shortwave_radiation    the mean of the PRECEDING hour
+      temperature_2m, RH     an instant, at the stamp
+    So the radiation for [08:00, 09:00) is the row stamped 09:00, and the air
+    over that window is best taken as the mean of the 08:00 and 09:00 instants.
+    Pairing the indoor 08:00 hour with the 08:00 row - as this did first -
+    used the sun from an hour EARLIER and the air from thirty minutes before the
+    middle of the window, which on a clear morning and cloudy afternoon moved a
+    house that follows the assumption exactly from 3.5 C to 4.19 C of warming.
+    Found in review, 7 Oct 2026.
+
+    None when the closing stamp is missing (no radiation for the window). The
+    opening instant may be missing at the edge of a fetch; then the closing one
+    is used alone.
+    """
+    close = out_by_hour.get(hour + HOUR_MS)
+    if close is None:
+        return None
+    open_ = out_by_hour.get(hour)
+    if open_ is None:
+        return float(close["temperature"]), float(close["humidity"]), float(close["radiation"])
+    return ((float(open_["temperature"]) + float(close["temperature"])) / 2.0,
+            (float(open_["humidity"]) + float(close["humidity"])) / 2.0,
+            float(close["radiation"]))
+
+
 def compare(histories: Dict[str, dict], outdoor: dict, *,
             since_ms: Optional[float] = None, now_ms: Optional[float] = None,
             local_offset_min: int = 330) -> dict:
@@ -374,11 +415,11 @@ def compare(histories: Dict[str, dict], outdoor: dict, *,
         excluded[sid] = exc
         unmatched[sid] = 0
         for hour, ind in sorted(hours.items()):
-            o = out_by_hour.get(hour)
+            o = out_for_window(out_by_hour, hour)
             if o is None:
                 unmatched[sid] += 1
                 continue
-            t_out, rh_out, rad = float(o["temperature"]), float(o["humidity"]), float(o["radiation"])
+            t_out, rh_out, rad = o
             mod = modelled_indoor(t_out, rh_out, rad)
             rows.append({
                 "section": sid, "hourMs": hour,
