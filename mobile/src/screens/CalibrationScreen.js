@@ -26,7 +26,9 @@ import Toast from '../components/Toast';
 import NodePicker from '../components/NodePicker';
 import {
   getCalibration, getHouse, analyzePlacement, assignDevice, setColocation,
+  getHouseHealth,
 } from '../services/careV2';
+import { sectionIssues, checksStarted, farmClock } from '../services/deviceHealth';
 import { farmTime } from '../services/placementFlow';
 
 /* The server refuses an 'end' sooner than this (house_planner.py), because
@@ -45,6 +47,9 @@ export default function CalibrationScreen({ route, navigation }) {
   const houseId = route.params?.houseId;
 
   const [cal,     setCal]     = useState(null);
+  // Hardware checks (a sensor not answering, a node gone quiet). Allowed to
+  // fail on its own: an older server without /health still shows the screen.
+  const [health,  setHealth]  = useState(null);
   const [house,   setHouse]   = useState(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
@@ -68,11 +73,13 @@ export default function CalibrationScreen({ route, navigation }) {
 
   const load = useCallback(async () => {
     try {
-      const [c, h] = await Promise.all([
+      const [c, h, hl] = await Promise.all([
         getCalibration(houseId),
         getHouse(houseId).catch(() => null),
+        getHouseHealth(houseId).catch(() => null),
       ]);
       setCal(c);
+      setHealth(hl);
       setLoadedAt(Date.now());
       setHouse(h?.house || null);
       setError(null);
@@ -394,6 +401,11 @@ export default function CalibrationScreen({ route, navigation }) {
 
         {/* per-section reality */}
         <Text style={styles.h}>What each section has recorded</Text>
+        {!!health && !checksStarted(health) && (
+          <Text style={styles.missingNote}>
+            Sensor checks start a few minutes after the server restarts.
+          </Text>
+        )}
         {missing > 0 && (
           <Text style={styles.missingNote}>
             {missing} of {total} section{total === 1 ? '' : 's'} still {missing === 1 ? 'has' : 'have'} no
@@ -419,6 +431,15 @@ export default function CalibrationScreen({ route, navigation }) {
                 }]} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.secName}>{row.name}</Text>
+                  {/* The first standing hardware problem, in the words the
+                      push used. A dead sensor during calibration is a hole in
+                      the data the analysis cannot fill, so it is said here,
+                      where the farmer is already looking. */}
+                  {sectionIssues(health, row.id).slice(0, 1).map((i) => (
+                    <Text key={i.kind} style={styles.secIssue} numberOfLines={2}>
+                      {i.title}{i.sinceMs ? ` · since ${farmClock(i.sinceMs)}` : ''}
+                    </Text>
+                  ))}
                   {wired ? (
                     <View style={styles.secBarTrack}>
                       <View style={[styles.secBarFill, {
@@ -563,6 +584,7 @@ const styles = StyleSheet.create({
               fontVariant: ['tabular-nums'] },
   secSeen:  { color: COLORS.textTertiary, fontSize: 9.5, marginTop: 2 },
   secNoNode:{ color: COLORS.textTertiary, fontSize: 11, marginTop: 3 },
+  secIssue: { color: COLORS.danger, fontSize: 11, fontWeight: '700', marginTop: 3 },
 
   linkBtn:   { flexDirection: 'row', alignItems: 'center', gap: 2,
                backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.full,

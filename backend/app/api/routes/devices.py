@@ -64,6 +64,16 @@ def device_liveness(rec: dict) -> dict:
     beats = sends_heartbeat(rec)
     if beats:
         window = ONLINE_WINDOW_SEC
+        # A board that says it beats more slowly gets the same three misses on
+        # ITS clock. validation-2.3 QUIET boards beat every 60 s to save their
+        # battery; against the fixed 90 s window one late beat showed them
+        # offline. Never shorter than the default.
+        try:
+            hb = float(rec.get("heartbeatSec") or 0)
+        except (TypeError, ValueError):
+            hb = 0.0
+        if hb > HEARTBEAT_SEC:
+            window = int(hb * HEARTBEAT_MISSES)
     else:
         ms = rec.get("readIntervalMs") or READ_INTERVAL_DEFAULT_MS
         window = int(ms / 1000.0 * LEGACY_CYCLE_MISSES + LEGACY_OVERHEAD_SEC)

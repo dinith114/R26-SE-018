@@ -77,6 +77,7 @@ export const PERMS = {
   getEngine:            ['admin', 'operator', 'viewer'],
   getHistory:           ['admin', 'operator', 'viewer'],
   getHouse:             ['admin', 'operator', 'viewer'],
+  getHouseHealth:       ['admin', 'operator', 'viewer'],
   getModelInfo:         ['admin', 'operator', 'viewer'],
   getOverview:          ['admin', 'operator', 'viewer'],
   getPingResult:        ['admin', 'operator', 'viewer'],

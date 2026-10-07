@@ -195,6 +195,14 @@ function shadehouseQuery(section, sinceMs) {
   return q.length ? `?${q.join('&')}` : '';
 }
 
+/**
+ * What is wrong with a house's hardware right now, per section: a sensor not
+ * answering, a frozen or jumping reading, a node gone silent. From the
+ * server's in-memory checks; checkedAtMs is null until they have run since
+ * the server last started.
+ */
+export const getHouseHealth = (h) => req(`/houses/${h}/health`);
+
 /** Name the ESP32 that carries the relay board for this house. */
 export const setHouseMaster = (h, masterMac) =>
   req(`/houses/${h}/master`, { method: 'PUT', body: JSON.stringify({ masterMac }) });

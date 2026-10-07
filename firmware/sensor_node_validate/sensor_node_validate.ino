@@ -44,6 +44,8 @@
  *    "Adafruit Unified Sensor"
  *    "BH1750" by Christopher Laws
  *    "ArduinoJson" by Benoit Blanchon
+ *    (LittleFS, used to keep readings through a Wi-Fi outage, ships with the
+ *     ESP32 core - nothing to install. See store_forward.ino.)
  *
  *  BOARD: Tools -> Board -> esp32 -> "ESP32 Dev Module"
  *         Tools -> Port  -> the COM port that appears when you plug it in
@@ -57,6 +59,60 @@
 #include <BH1750.h>
 #include <ArduinoJson.h>
 #include <time.h>
+// Here and not in store_forward.ino: Arduino puts the prototypes it generates
+// at the top of the merged sketch, and those for the buffer code name File and
+// BufRec - which must therefore be declared before them, not in a later tab.
+#include <LittleFS.h>
+#include "store_forward.h"
+
+/* Reported in the device record, and printed in the boot banner so the serial
+   monitor alone shows which build is on the board. */
+#define FW_VERSION "validation-2.3"
+
+/* ═══════════ QUIET_NODE: battery boards that only record ═══════════
+   0 (the default) changes nothing. Set it to 1 for a board that runs from a
+   small battery and only records - the placement-study nodes:
+       #define QUIET_NODE 1        here, or
+       --build-property "compiler.cpp.extra_flags=-DQUIET_NODE=1"
+
+   It exists to make a small battery last. It turns off the board's chatter,
+   not its readings:
+     - no command polling and no master queue. The normal build asks Firebase
+       for a command every 2 s, each a fresh HTTPS request with a TLS handshake
+       measured at seconds on this chip - the most radio time the board spends
+       on anything.
+     - the device record (Identify, Wi-Fi scan, ping) checked every 30 s, not
+       5 s. Identify still works; it can take half a minute to start blinking.
+     - heartbeat every 60 s, not 30 s.
+     - default reading every 60 s, not 15 s. An interval set in the app still
+       wins, as on any board - set 60 s there too, or this default never applies.
+     - Wi-Fi power save at its deepest (WIFI_PS_MAX_MODEM). The normal build
+       already uses the lighter modem sleep; this one sleeps through more
+       beacons, at the cost of slower replies.
+
+   THE SAVING HAS NOT BEEN MEASURED. Nobody has put a meter on a QUIET board.
+   That it draws less is an expectation from removing the 2-second poll, not a
+   number - measure both builds before sizing a battery on either.
+
+   NEVER USE A QUIET BOARD WHERE IT SHOULD RUN PUMPS. It does not refuse a
+   command, it never hears one: the app would send Water Now, wait, and report
+   the node silent while the plants go dry. The device record carries
+   "quiet": true so the backend can learn to tell; today nothing reads it.
+
+   The backend calls a heartbeating node offline after 90 s of silence
+   (devices.py ONLINE_WINDOW_SEC). At 60 s a QUIET board has room for one LATE
+   beat, not one missed beat, so expect an occasional brief "stopped answering"
+   in the app. */
+#ifndef QUIET_NODE
+#define QUIET_NODE 0
+#endif
+
+/* The store-and-forward buffer, in store_forward.ino. Declared here so the
+   calls below do not depend on the Arduino preprocessor finding them. */
+bool bufBegin();
+void bufStore(JsonDocument& d, const char* why);
+void bufNoteUpload(bool ok);
+void bufFlushStep();
 
 // ═══════════ 1. SET THESE ═══════════
 #define TENANT_ID  "t_REPLACE_ME"   // the farm this board belongs to
@@ -170,8 +226,9 @@ const uint32_t COMMAND_POLL_MS = 2000UL;
    the command poll: a human-initiated action was tied to the sensor clock.
 
    Slower than COMMAND_POLL_MS because nothing here moves water. The record is
-   ~250 bytes, so 5 s is roughly 8 MB of egress a day per node. */
-const uint32_t DEVICE_POLL_MS = 5000UL;
+   ~250 bytes, so 5 s is roughly 8 MB of egress a day per node.
+   A QUIET board checks every 30 s: Identify slower, battery spared. */
+const uint32_t DEVICE_POLL_MS = QUIET_NODE ? 30000UL : 5000UL;
 
 /* How often the node says "I am here", independent of any reading.
 
@@ -179,8 +236,10 @@ const uint32_t DEVICE_POLL_MS = 5000UL;
    the backend could not call a node offline until it had missed two of them -
    ten minutes at a 5-minute interval. The node was in fact talking to Firebase
    every 2 seconds the whole time to poll for commands; it simply never said so.
-   At 30 s the backend can decide after three missed beats instead. */
-const uint32_t HEARTBEAT_MS = 30000UL;
+   At 30 s the backend can decide after three missed beats instead.
+   A QUIET board beats every 60 s - see the QUIET_NODE note on what that costs
+   against the backend's 90 s window. */
+const uint32_t HEARTBEAT_MS = QUIET_NODE ? 60000UL : 30000UL;
 
 // While a pour is running: checked so a second command cannot start one on top
 // of it, and so a stop can be recognised as belonging to this run.
@@ -290,7 +349,12 @@ void relaySelfTest() {
 // ═══════════ 3. TIMING ═══════════
 // 5 minutes matches the production node. Use 30000 while you are watching the
 // serial monitor, then put it back before leaving it in the house.
+// A QUIET board starts at 60 s; the app's readIntervalMs overrides either.
+#if QUIET_NODE
+#define READ_INTERVAL_MS 60000UL
+#else
 #define READ_INTERVAL_MS 15000UL
+#endif
 
 /* The interval the board is ACTUALLY using, settable from the app.
 
@@ -343,6 +407,10 @@ String HIST = FARM + "/history/" HOUSE_ID "/" SECTION_ID;
 String assignedHouse   = HOUSE_ID;
 String assignedSection = SECTION_ID;
 bool   isClaimed       = false;      // false = no farmer has assigned this board
+// Has this boot read its device record even once? Until it has, isClaimed=false
+// means "do not know yet", not "unlinked" - which is what a board restarted
+// while the router is down has to say instead of telling the farmer to link it.
+bool   assignmentKnown = false;
 
 static void rebuildPaths() {
   BASE = FARM + "/houses/" + assignedHouse + "/sections/" + assignedSection;
@@ -596,7 +664,12 @@ void connectWiFi() {
 
   // Modem sleep lets the radio idle between beacons. This node only posts
   // outward and never waits on inbound traffic, so nothing is lost.
+  // A QUIET board goes to the deepest setting (see QUIET_NODE) - unmeasured.
+#if QUIET_NODE
+  WiFi.setSleep(WIFI_PS_MAX_MODEM);
+#else
   WiFi.setSleep(true);
+#endif
 
   // Let the supply settle after the mode change before drawing the surge.
   delay(200);
@@ -749,7 +822,13 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-2.1\"" +
+                ",\"fw\":\"" FW_VERSION "\"" +
+                // Whether this board listens for commands at all, and how often
+                // it promises to beat. Sent by EVERY build, false/30 included:
+                // this is a merge, so a board reflashed from QUIET back to normal
+                // would otherwise carry "quiet":true in its record forever.
+                ",\"quiet\":" + String(QUIET_NODE ? "true" : "false") +
+                ",\"heartbeatSec\":" + String(HEARTBEAT_MS / 1000) +
                 // Which farm this board was flashed for. The backend filters
                 // the global registry on it, so an unflashed board carries no
                 // tenant and stays claimable by anyone - which is right: it
@@ -795,6 +874,7 @@ void fetchAssignment() {
   String body = (code == 200) ? http.getString() : "";
   http.end();
   if (code != 200) return;
+  assignmentKnown = true;
 
   // ---- read interval, when the app has set one ----
   long want = jsonNum(body, "readIntervalMs", 0);
@@ -1187,7 +1267,12 @@ bool beginLightMeter() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\n\n=== SENSOR NODE (validation build) " HOUSE_ID "-" SECTION_ID " ===");
+  Serial.printf("\n\n=== SENSOR NODE %s%s " HOUSE_ID "-" SECTION_ID " ===\n",
+                FW_VERSION, QUIET_NODE ? " QUIET (recording only)" : "");
+#if QUIET_NODE
+  Serial.println("[QUIET] battery build: watering commands and the master queue are"
+                 " DISABLED on this board - never use it where it should run pumps");
+#endif
 
   // Do this before anything touches the radio, so the clock is already down
   // when the first surge arrives.
@@ -1223,6 +1308,10 @@ void setup() {
   // cannot arrive while a pin is still floating. On an ACTIVE-LOW board a
   // floating pin reads as ON, which is a valve opening at power-up.
   masterSetupRelays();
+
+  // Before Wi-Fi, so a board that boots into an outage can already store - and
+  // so readings kept before a restart are counted and announced up front.
+  bufBegin();
 
   connectWiFi();
   syncClock();
@@ -1326,14 +1415,20 @@ void takeReading() {
      announceDevice() and the heartbeat keep fresh is all the app's Link-a-node
      list needs, so nothing is lost by waiting. */
   if (!isClaimed) {
-    Serial.println("[DEV] not linked to a section yet - reading NOT uploaded."
-                   " Link this board in the app.");
+    if (!assignmentKnown && WiFi.status() != WL_CONNECTED)
+      Serial.println("[DEV] no Wi-Fi since this restart, so the board does not know"
+                     " its section yet - reading NOT stored");
+    else
+      Serial.println("[DEV] not linked to a section yet - reading NOT uploaded."
+                     " Link this board in the app.");
     return;
   }
 
+  bool archived = false;
   if (WiFi.status() == WL_CONNECTED) {
     bool a = postJson(BASE + "/latest.json", body, true);   // current state
     bool b = postJson(HIST + ".json",        body, false);  // archive
+    archived = b;
     Serial.printf("[CLOUD] latest=%s history=%s\n", a ? "ok" : "FAIL", b ? "ok" : "FAIL");
     if (!a || !b) {
       Serial.println("[CLOUD] if WiFi is connected but this keeps failing, the");
@@ -1341,6 +1436,17 @@ void takeReading() {
     }
   }
 
+  /* A reading the ARCHIVE did not get is kept on flash and sent later (see
+     store_forward.ino). Keyed on history alone: a missed latest is replaced by
+     the next reading anyway, and latest must never be written from the buffer.
+
+     A POST that timed out AFTER Firebase stored it is counted as failed here
+     and will arrive a second time later, under a different key - a duplicate
+     reading, rare and visible by its "buffered" flag. Losing a reading was the
+     worse of the two outcomes on offer. */
+  bufNoteUpload(archived);
+  if (!archived)
+    bufStore(d, WiFi.status() == WL_CONNECTED ? "history upload failed" : "no Wi-Fi");
 }
 
 
@@ -1446,6 +1552,7 @@ void loop() {
     lastReadAt = millis();
   }
 
+#if !QUIET_NODE
   // Only a linked board has a command document of its own; an unlinked one
   // would be reading the fallback section's (see takeReading).
   if (!firstCycle && isClaimed && WiFi.status() == WL_CONNECTED
@@ -1461,6 +1568,9 @@ void loop() {
      anybody else. Harmless until a master is named for the house - the queue
      path is keyed by this board's MAC and simply reads back empty. */
   if (!firstCycle) masterPollQueue();
+#else
+  (void)lastCmdAt;   // a QUIET board never polls for commands - see QUIET_NODE
+#endif
 
   // Identify and scan work whether or not this node is assigned to a section,
   // so unlike pollCommand they are not gated on the first reading cycle - the
@@ -1503,6 +1613,12 @@ void loop() {
     lastBeatAt = millis();
     sendHeartbeat();
   }
+
+  /* Readings kept during an outage go up last, ONE batch per pass, so a
+     day's backlog never holds Stop, Identify or the setup page hostage. After
+     the first cycle, because only takeReading() learns which section this
+     board is in - and a backlog is only ever sent to that section. */
+  if (!firstCycle) bufFlushStep();
 
   delay(50);
 }

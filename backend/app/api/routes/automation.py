@@ -445,6 +445,7 @@ def _flush_pending_pushes():
     WORDING = {
         "water":     ("Water the plants now", "Water"),
         "fill-tray": ("Fill the humidity tray now", "Fill the tray in"),
+        "check-device": ("A sensor node needs checking", "Check the nodes in"),
     }
     for action, items in pending.items():
         title, verb = WORDING.get(action, ("The farm needs you", "Attend to"))
@@ -835,7 +836,20 @@ def _engine_pass(now: datetime) -> dict:
     # 4. Watering, checked every tick because a planned minute must not be missed.
     did["water"] = run_watering_link(now, houses)
 
-    # 5. Anything the farmer must act on gets pushed to their phone, grouped so
+    # 5. Is the hardware telling the truth? Broken, frozen or jumping sensors,
+    #    silent nodes, commands never carried out, trays that did not fill.
+    #    In memory from the farm fetched above - no reads of its own - and an
+    #    alarm only when a fault STARTS. Advisory: it must never stop the clock.
+    try:
+        from app.services import device_health as _dh
+        for issue in _dh.check_farm(current_tenant(), houses, now.timestamp() * 1000.0,
+                                    set(_acting_houses(houses))):
+            _raise_alarm("action", issue["key"], issue["title"], issue["message"],
+                         issue["houseId"], issue["sectionId"], action="check-device")
+    except Exception as e:
+        print(f"[HEALTH] pass skipped: {e}")
+
+    # 6. Anything the farmer must act on gets pushed to their phone, grouped so
     #    four due sections do not mean four separate buzzes.
     _flush_pending_pushes()
 
