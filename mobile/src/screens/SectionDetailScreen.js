@@ -24,11 +24,13 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
+  getHouseHealth,
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
 } from '../services/careV2';
+import { sectionIssues, farmClock } from '../services/deviceHealth';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -195,8 +197,11 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [sheet, setSheet] = useState(null);
   const [toast, setToast] = useState(null);      // { text, kind }
   const [pendingCtl, setPendingCtl] = useState(null);
+  const [health, setHealth] = useState(null);
 
   const load = useCallback(async () => {
+    // Hardware checks, on their own: never allowed to stop the screen loading.
+    getHouseHealth(houseId).then(setHealth).catch(() => setHealth(null));
     try {
       // The device lookup is allowed to fail on its own: an older backend
       // without /api/v2/devices should still render the whole screen.
@@ -1179,6 +1184,25 @@ export default function SectionDetailScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refresh} tintColor={COLORS.primary}
           onRefresh={() => { setRefresh(true); load(); }} />}>
+
+        {/* Something wrong with the hardware goes first, above the tabs: the
+            push about it brings the farmer to this screen, and a reading from
+            a sensor that is not answering is not worth looking at. */}
+        {sectionIssues(health, sectionId).length > 0 && (
+          <View style={[styles.healthCard, SHADOW.sm]}>
+            {sectionIssues(health, sectionId).map((i) => (
+              <View key={i.kind} style={styles.healthRow}>
+                <Ionicons name="warning-outline" size={16} color={COLORS.danger} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.healthTitle}>
+                    {i.title}{i.sinceMs ? ` · since ${farmClock(i.sinceMs)}` : ''}
+                  </Text>
+                  <Text style={styles.healthMsg}>{i.message}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Three jobs, not one scroll: what is happening now, what has
             happened, and how this section is set up. */}
@@ -2377,4 +2401,9 @@ const styles = StyleSheet.create({
   lg:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
   lgDot:   { width: 8, height: 8, borderRadius: 4 },
   lgTxt:   { color: COLORS.textTertiary, fontSize: 9 },
+  healthCard:  { backgroundColor: COLORS.dangerDim, borderRadius: RADIUS.sm,
+                 padding: SPACE.md, marginBottom: SPACE.md, gap: SPACE.sm },
+  healthRow:   { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start' },
+  healthTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800' },
+  healthMsg:   { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginTop: 2 },
 });

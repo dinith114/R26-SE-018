@@ -42,7 +42,23 @@ const ACTION = {
     heading: 'Fill the humidity tray now',
     button: 'Fill tray',
   },
+  /* A hardware fault (backend app/services/device_health.py). There is
+     NOTHING to send to the node: the fix is a person checking a wire or a
+     battery. So no action button at all - only "open the section" and
+     Acknowledge. Before this entry existed, an unknown action fell back to
+     `water`, and the act button's else-branch FILLED THE TRAY: a sensor-fault
+     alarm would have offered "Water now" and opened the tray valve. */
+  'check-device': {
+    icon: 'hardware-chip-outline', tint: COLORS.warning,
+    heading: 'A sensor node needs checking',
+    button: null,
+  },
 };
+
+/* Only these two actions ever move water. Anything else - check-device, or an
+   action a newer server sends that this build does not know - must never reach
+   waterSection or fillTray. */
+const MOVES_WATER = new Set(['water', 'fill-tray']);
 
 export default function AlarmScreen({ route, navigation }) {
   /* What this account may do. The server refuses the rest whatever
@@ -90,7 +106,9 @@ export default function AlarmScreen({ route, navigation }) {
   }, [load]));
 
   const primary = alarms[0] || null;
-  const cfg = ACTION[primary?.action] || ACTION.water;
+  // An action this build does not know is shown as a check, never as watering.
+  const cfg = ACTION[primary?.action] || ACTION['check-device'];
+  const actable = MOVES_WATER.has(primary?.action);
 
   const doAck = async (a) => {
     setSheet(null);
@@ -111,12 +129,13 @@ export default function AlarmScreen({ route, navigation }) {
 
   const doAct = async (a) => {
     setSheet(null);
+    if (!MOVES_WATER.has(a.action)) return;          // see ACTION['check-device']
     setBusy('act');
     try {
       if (a.action === 'water') {
         await waterSection(a.houseId, a.sectionId,
           section?.plan?.durationSec || 45, !!section?.fertilizer?.due);
-      } else {
+      } else if (a.action === 'fill-tray') {
         await fillTray(a.houseId, a.sectionId, section?.tray?.fillSeconds || 15);
       }
       // Doing the thing is the strongest possible acknowledgement.
@@ -207,7 +226,7 @@ export default function AlarmScreen({ route, navigation }) {
             <Text style={s.h}>Also waiting</Text>
             {others.map((a) => (
               <View key={a.id} style={s.otherRow}>
-                <Ionicons name={(ACTION[a.action] || ACTION.water).icon}
+                <Ionicons name={(ACTION[a.action] || ACTION['check-device']).icon}
                   size={16} color={COLORS.textTertiary} />
                 <Text style={s.otherTxt}>{a.title} · {a.sectionId}</Text>
               </View>
@@ -231,17 +250,30 @@ export default function AlarmScreen({ route, navigation }) {
                           : <Text style={s.ackTxt}>Acknowledge</Text>}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[s.btn, { backgroundColor: cfg.tint }]}
-          disabled={!can('waterSection')}
-          onPress={can('waterSection') ? () => setSheet('act') : undefined}
-          disabled={!!busy}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-          accessibilityLabel={`${cfg.button} in ${section?.meta?.name || primary.sectionId}`}>
-          {busy === 'act' ? <ActivityIndicator color="#FFF" size="small" />
-                          : <Text style={s.actTxt}>{cfg.button}</Text>}
-        </TouchableOpacity>
+        {actable ? (
+          <TouchableOpacity
+            style={[s.btn, { backgroundColor: cfg.tint }]}
+            disabled={!can('waterSection')}
+            onPress={can('waterSection') ? () => setSheet('act') : undefined}
+            disabled={!!busy}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`${cfg.button} in ${section?.meta?.name || primary.sectionId}`}>
+            {busy === 'act' ? <ActivityIndicator color="#FFF" size="small" />
+                            : <Text style={s.actTxt}>{cfg.button}</Text>}
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[s.btn, { backgroundColor: cfg.tint }]}
+            disabled={!primary.houseId || !primary.sectionId}
+            onPress={() => navigation.navigate('SectionDetail', {
+              houseId: primary.houseId, sectionId: primary.sectionId })}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${section?.meta?.name || primary.sectionId}`}>
+            <Text style={s.actTxt}>Open the section</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <ConfirmSheet

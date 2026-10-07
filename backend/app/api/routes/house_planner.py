@@ -726,6 +726,22 @@ async def shadehouse_check(house_id: str, section: Optional[str] = None,
             "sinceMs": sinceMs, **out}
 
 
+@router.get("/{house_id}/health")
+async def house_health(house_id: str, ctx: AuthContext = Depends(require_auth)) -> dict:
+    """What is wrong with this house's hardware right now, per section.
+
+    From the engine's in-memory checks (app/services/device_health.py), so it
+    costs nothing to ask. `checkedAtMs` is null until the engine has run once
+    since the server started; the slow checks (frozen, silent) need their whole
+    window again after a restart, which the app says rather than showing an
+    all-clear it has not earned.
+    """
+    from app.services import device_health as dh
+    from app.services.tenant_context import current_tenant
+    snap = dh.snapshot(current_tenant(), house_id)
+    return {"status": "success", "houseId": house_id, **snap}
+
+
 class AnalyseIn(BaseModel):
     """Kept for the app's existing call. maxSensors no longer limits anything:
     the analysis covers every count the house allows."""
