@@ -170,7 +170,21 @@ void masterRunOne(const String& payload) {
     masterAck(id, section, (int)channel, 0, "unsupported");
     return;
   }
-  if (issued > 0 && clockOK) {
+  /* NO CLOCK, NO POUR. The age check below needs the time, and it used to be
+   * skipped when the time was unknown - so the command was OBEYED. A master
+   * that booted and failed syncClock() would have poured every entry left in
+   * its queue, however old. On 8 Oct 2026 that queue held ten pours from
+   * 3-6 Sep, some with fertilizer, left there while this board was offline.
+   *
+   * Held, not acked: the entry stays, and the first poll after the clock is
+   * set judges it by its age like any other. masterPollQueue() already waits
+   * for the clock; this is the same rule where the valve would open. */
+  if (!clockOK) {
+    Serial.printf("[MASTER] %s held: the time is not known, so its age cannot be checked\n",
+                  section.c_str());
+    return;
+  }
+  if (issued > 0) {
     long age = (long)(nowMs() / 1000ULL) - issued;
     if (age > MASTER_MAX_AGE_SEC) {
       Serial.printf("[MASTER] %s issued %lds ago - too old to obey\n",
@@ -249,6 +263,18 @@ void masterPollQueue() {
   if (WiFi.status() != WL_CONNECTED) return;
   if (millis() - lastQueuePoll < QUEUE_POLL_MS) return;
   lastQueuePoll = millis();
+
+  /* The queue is not even read until the time is known: every entry would be
+   * held anyway (see masterRunOne), and this keeps the log to one line a
+   * minute. takeReading() retries syncClock() on every reading cycle. */
+  if (!clockOK) {
+    static unsigned long lastSaid = 0;
+    if (lastSaid == 0 || millis() - lastSaid >= 60000UL) {
+      lastSaid = millis();
+      Serial.println("[MASTER] queue not read: the time is not known yet");
+    }
+    return;
+  }
 
   HTTPClient http;
   http.setTimeout(6000);
