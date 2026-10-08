@@ -915,6 +915,28 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
     return cmd
 
 
+SETUP_HINT = ("Choose the house's master controller and its pump channels from the "
+              "house's master button in My Farm.")
+
+
+def _command_refusal(house_id: str, section_id: str, action: str) -> Optional[str]:
+    """Why `_issue_node_command` would not send this pour, in the farmer's words,
+    or None if it would. Asked only AFTER a refusal, so the normal path does not
+    pay for the extra reads.
+
+    Every caller must act on a refusal. On 8 Oct 2026 the manual Water Now still
+    answered "Watering for 45s" with no master set, logged a watering and
+    recorded a feed; the engine marked the day watered and said "Plants
+    watered". Nothing had been poured in any of them.
+    """
+    if not _master_for_house(house_id):
+        return "no master controller is set for this house"
+    if not _relay_channel(house_id, section_id, action):
+        return ("no tray pump channel is set for this house" if action == "tray"
+                else "no watering pump channel is set for this house")
+    return None
+
+
 def _last_ack(section: dict) -> dict:
     """What the node last reported finishing, for the app to confirm against."""
     ack = (section or {}).get("commandAck") or {}
@@ -1466,7 +1488,10 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         "inputs": {"dawnTemp": dawn["temperature"], "dawnHumidity": dawn["humidity"],
                    "dawnLight": dawn["light"], "dawnVpd": dawn_vpd,
                    "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"]},
-        "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        # `now` is the FARM's clock here; stamped as farm time with a "UTC"
+        # label it read five and a half hours in the future (8 Oct E2E run).
+        "generatedAt": (now.astimezone(timezone.utc) if now.tzinfo else now
+                        ).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
     # Predict how the rest of today will go, so the tray can act BEFORE the heat
@@ -1895,17 +1920,25 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # Acts on ANY dose the model asks for, not just a full "fill". Top-ups were
     # previously computed and then silently dropped, so the small maintenance
     # doses the model is best at never actually reached the valve.
+    refused = None
     if auto and status in ("fill", "topup", "prefill", "refill") and secs > 0:
-        cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
-               "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
-        _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
         node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
-        _log_event(house_id, section_id, section,
-                   action="tray", durationSec=secs, withFertilizer=False,
-                   by="auto", commandId=(node_cmd or {}).get("id"),
-                   confirmed=False)
-        commanded = True
-        msg += " Auto mode: filling now."
+        if node_cmd:
+            cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
+                   "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+            _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
+            _log_event(house_id, section_id, section,
+                       action="tray", durationSec=secs, withFertilizer=False,
+                       by="auto", commandId=node_cmd.get("id"),
+                       confirmed=False)
+            commanded = True
+            msg += " Auto mode: filling now."
+        else:
+            # Not commanded, so no cooldown starts and the tray cycle says so -
+            # this used to count as filled and stay silent (_command_refusal).
+            refused = (_command_refusal(house_id, section_id, "tray")
+                       or "the command could not be sent")
+            msg += f" Auto mode could not fill it: {refused}."
 
     out = {"fillSeconds": secs, "status": status, "message": msg,
            # what the model asked for before any safety override, so the app and
@@ -1916,6 +1949,8 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                          else "model" if secs == model_secs else "safety-override"),
            "manualSeconds": manual.get("tray"),
            "autoCommanded": commanded,
+           # Why an automatic fill could not be sent, for run_tray_cycle to say.
+           "autoRefused": refused,
            "lastFillTs": (dev_now if commanded else prev.get("lastFillTs")),
            # Remembered so the NEXT check can size the hold to what actually
            # went in, rather than charging a splash the same six hours as a fill.
@@ -1991,13 +2026,24 @@ def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
     correct it from the section screen.
     """
     now_ms = _device_now_ms(section)
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedTs.json",
-            now_ms)
+    base = f"/farm/houses/{house_id}/sections/{section_id}/fertilizer"
+    _fb_put(f"{base}/lastFertilizedTs.json", now_ms)
     # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
     # raised inside the request and turned every fertilised watering into a 500,
     # after the timestamp above had already been written.
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedAt.json",
-            to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"))
+    fed_at = to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M")
+    _fb_put(f"{base}/lastFertilizedAt.json", fed_at)
+    # NO LONGER DUE, as of now. `due` used to stay true until the next 05:00
+    # plan, so the afternoon's second watering mixed in plant food again (the
+    # engine reads `due`), the app went on saying "Fertilizer due" and offered
+    # to feed again. Found in the 8 Oct E2E run: due was still true a minute
+    # after the fed watering. npkForStage is kept - it is what the stage takes.
+    fert = (section or {}).get("fertilizer") or {}
+    interval = fert.get("intervalDays") or 7
+    _fb_put(f"{base}/due.json", False)
+    _fb_put(f"{base}/npkType.json", "None")
+    _fb_put(f"{base}/message.json",
+            f"Fed at {fed_at[-5:]} - next feed in about {int(interval)} days.")
 
 
 # How many events are kept per section. Events are written a handful of times a
@@ -2531,12 +2577,17 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
                "withFertilizer": cmd.withFertilizer,
                "triggeredBy": cmd.triggeredBy,
                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
-    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/waterCommand.json", command)
-    # ...and the document the real firmware actually polls. Without this the
-    # button only ever moved data inside the server.
+    # The document the real firmware actually polls. Without this the button
+    # only ever moved data inside the server.
     node_cmd = _issue_node_command(house_id, section_id, "water",
                                    command["durationSec"],
                                    withFertilizer=command["withFertilizer"])
+    if not node_cmd:
+        # Refused BEFORE anything is logged or a feed recorded - see
+        # _command_refusal. The rule tray-fill has always followed.
+        why = _command_refusal(house_id, section_id, "water") or "the command could not be sent"
+        raise HTTPException(409, f"Nothing was poured: {why}. {SETUP_HINT}")
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/waterCommand.json", command)
     # Start the fertilizer clock. Without this the counter never moves, so every
     # subsequent watering claims to mix in plant food and the "due" alert can
     # never be cleared.
@@ -2892,7 +2943,7 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthConte
             f"Section {section_id} has no tray valve wired. Watering and filling "
             "the tray are different outputs, so this cannot be sent to the "
             "watering valve - that would put water on the roots when you asked "
-            "to raise humidity. Set the tray channel in the section's Setup tab.")
+            f"to raise humidity. {SETUP_HINT}")
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)
 
     # Stamp the fill so the cooldown guard knows the tray now has water.
@@ -3489,8 +3540,18 @@ async def set_house_master(house_id: str, body: MasterIn, ctx: AuthContext = Dep
 
     mac = (body.masterMac or "").strip().upper()
     if mac:
-        if mac not in _devices_for_caller():
+        devices = _devices_for_caller()
+        if mac not in devices:
             raise HTTPException(400, f"No device {mac} has ever registered.")
+        if (devices.get(mac) or {}).get("quiet") is True:
+            # A QUIET (battery, recording-only) build never reads the command
+            # queue, so every pour sent to it would sit there unrun. The app
+            # offered these as "keeps sensing and runs the valves" - found in
+            # the 8 Oct E2E run. The firmware announces quiet:true for this.
+            raise HTTPException(
+                409, f"Node {mac[-4:]} is a recording-only (QUIET) board: it never reads "
+                     "commands, so it cannot open valves. Choose a board flashed without "
+                     "QUIET_NODE.")
         meta["masterMac"] = mac
     else:
         meta.pop("masterMac", None)

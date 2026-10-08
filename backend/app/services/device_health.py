@@ -105,6 +105,18 @@ MAX_ALARMS_PER_DAY = 3
 # How much history is kept per section: enough for the frozen window.
 KEEP_MS = 3 * 3600_000
 
+# What it takes to say a light sensor or tray probe IS FITTED, so that losing it
+# later is a fault. Two ways this went wrong on 8 Oct 2026, both on Node 1:
+#  * the first pass after a deploy read H1/S8's latest - 38 days old, from when
+#    a probe was wired - and marked the probe fitted. The board had been rebuilt
+#    without one, so its fresh -999s became "tray probe stopped", pushed to the
+#    phone. A reading that old describes the board as it WAS.
+#  * D34 left floating (no probe, not tied to GND) reads at random, now and then
+#    inside the valid range. One stray value is not a probe.
+# So it takes CONSECUTIVE_GOOD valid readings, each under FRESH_MS old when seen.
+FRESH_MS = 2 * 3600_000
+CONSECUTIVE_GOOD = 3
+
 FARM_OFFSET_MIN = 330          # Sri Lanka, no DST
 
 # What each fault is called, and what the farmer should do about it. Plain
@@ -143,13 +155,17 @@ CARE_ONLY = ("command", "tray-fill")
 
 
 class _Section:
-    __slots__ = ("hist", "had_light", "had_soil", "active", "day_counts", "seen_live")
+    __slots__ = ("hist", "had_light", "had_soil", "good_light", "good_soil",
+                 "active", "day_counts", "seen_live")
 
     def __init__(self) -> None:
         # (ts_ms, temperature|None, humidity|None, light|None, soil|None)
         self.hist: Deque[tuple] = deque()
         self.had_light = False
         self.had_soil = False
+        # The current run of fresh valid readings - see CONSECUTIVE_GOOD.
+        self.good_light = 0
+        self.good_soil = 0
         self.active: Dict[str, dict] = {}            # kind -> the issue as raised
         self.day_counts: Dict[Tuple[str, str], int] = {}
         # Has this node been seen REPORTING since the server started? Only then
@@ -207,8 +223,11 @@ def observe(st: _Section, latest: Optional[dict], now_ms: Optional[float] = None
     lx = rd.value(latest, "light")
     so = _soil(latest)
     st.hist.append((ts, t, h, lx, so))
-    st.had_light = st.had_light or lx is not None
-    st.had_soil = st.had_soil or so is not None
+    fresh = now_ms is None or now_ms - ts < FRESH_MS
+    st.good_light = st.good_light + 1 if (lx is not None and fresh) else 0
+    st.good_soil = st.good_soil + 1 if (so is not None and fresh) else 0
+    st.had_light = st.had_light or st.good_light >= CONSECUTIVE_GOOD
+    st.had_soil = st.had_soil or st.good_soil >= CONSECUTIVE_GOOD
     if now_ms is not None and now_ms - ts < SEEN_LIVE_MS:
         st.seen_live = True
     while st.hist and st.hist[0][0] < ts - KEEP_MS:
