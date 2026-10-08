@@ -34,7 +34,8 @@ def farm(latest, lifecycle=None, extra=None):
     meta = {"name": "Shade house"}
     if lifecycle:
         meta["lifecycle"] = lifecycle
-    sec = {"meta": {"name": "S1"}, "latest": latest, **(extra or {})}
+    sec = {"meta": {"name": "S1"}, "latest": latest, "deviceMac": "A1B2C3D4E5F6",
+           **(extra or {})}
     return {"H1": {"meta": meta, "sections": {"S1": sec}}}
 
 
@@ -115,7 +116,7 @@ def test_a_fault_that_really_clears_and_returns_alarms_again_under_a_new_key():
     # Fixed for 40 minutes - longer than CLEAR_AFTER_MS - then broken again.
     started = run(good(0, 3) + bad(3, 8) + good(8, 48) + bad(48, 53))
     keys = [x["key"] for x in started]
-    assert len(keys) == 2 and keys[0] != keys[1] and keys[1].endswith("-2")
+    assert len(keys) == 2 and keys[0] != keys[1]
 
 
 def test_a_flapping_wire_is_one_alarm_not_one_per_flap():
@@ -195,7 +196,7 @@ def test_a_pour_left_in_the_masters_queue_is_caught():
     """The first version read the SECTION's command document - pours do not go
     there - so it could never have seen one. Found in review."""
     readings = [rec(i, *jitter(i)) for i in range(6)]
-    started = _run_with_master(readings, _queue(1))
+    started = _run_with_master(readings, _queue(-25))       # 25 min old, never run
     assert [x["kind"] for x in started] == ["command"]
     assert "master" in started[0]["message"] and "current sensor" in started[0]["message"]
 
@@ -206,6 +207,11 @@ def test_a_pour_the_master_ran_leaves_nothing_to_say():
     # ...nor one still within its run time plus grace.
     dh.reset()
     assert _run_with_master(readings[:2], _queue(1)) == []
+    # ...nor two pours queued together: a working master runs them one at a time,
+    # so the second legitimately waits for the first. Found in review.
+    dh.reset()
+    two = {**_queue(-10), "c2": {**_queue(-10)["c1"], "durationSec": 120}}
+    assert _run_with_master(readings, two) == []
 
 
 def test_a_calibrating_house_gets_sensor_checks_but_no_care_checks():
@@ -215,7 +221,7 @@ def test_a_calibrating_house_gets_sensor_checks_but_no_care_checks():
         f = farm(r, "calibrating", {"tray": {"trayResponds": False}})
         f["H1"]["meta"]["masterMac"] = MASTER
         started += dh.check_farm(TENANT, f, r["timestamp"] + 30_000, [],
-                                 master_queues={MASTER: _queue(1)})
+                                 master_queues={MASTER: _queue(-25)})
     assert [x["kind"] for x in started] == ["dht"]
 
 
@@ -280,3 +286,67 @@ def test_the_health_route_lists_what_is_wrong_per_section():
         assert other["sections"] == {}
     finally:
         set_decoder(None)
+
+
+
+# ── 8 Oct review: each finding, as a test that failed before its fix ────────
+
+def test_a_failed_farm_download_does_not_wipe_what_is_known():
+    """_fb_get returns None on a timeout and the engine turned it into {}. The
+    forget loop then dropped every section: a node already dead was never
+    "silent" again, and the app showed a green all-clear."""
+    run([rec(i, *jitter(i)) for i in range(5)])
+    assert dh.check_farm(TENANT, {}, T0 + 6 * MIN, ["H1"]) == []
+    assert (TENANT, "H1", "S1") in dh._SECTIONS
+    later = dh.check_farm(TENANT, farm(rec(4, *jitter(4))), T0 + 30 * MIN, ["H1"])
+    assert [x["kind"] for x in later] == ["silent"]
+
+
+def test_a_stuck_pour_is_reported_for_a_section_with_no_node():
+    """Every pour goes through the master, so a section whose own node is dead
+    or absent is still watered - and a pour stuck for it must still be said."""
+    f = {"H1": {"meta": {"name": "H", "masterMac": MASTER},
+                "sections": {"S7": {"meta": {"name": "S7"}}}}}     # no node at all
+    started = dh.check_farm(TENANT, f, T0 + 30 * MIN, ["H1"],
+                            master_queues={MASTER: _queue(-5, section="S7")})
+    assert [(x["kind"], x["sectionId"]) for x in started] == [("command", "S7")]
+
+
+def test_a_battery_dying_after_a_wifi_drop_is_said_again():
+    """Silent at 13:20, back at 13:25, dead at 13:30: the second outage used to
+    be folded into the first (still in its 30-minute clear-down) and never said."""
+    seq = [rec(i, *jitter(i)) for i in range(5)]                    # 00:00-00:04
+    run(seq)
+    first = dh.check_farm(TENANT, farm(seq[-1]), seq[-1]["timestamp"] + 25 * MIN, ["H1"])
+    back = [rec(i, *jitter(i)) for i in range(30, 34)]               # reports again
+    run(back)
+    second = dh.check_farm(TENANT, farm(back[-1]), back[-1]["timestamp"] + 25 * MIN, ["H1"])
+    assert [x["kind"] for x in first] == ["silent"] and [x["kind"] for x in second] == ["silent"]
+    assert first[0]["key"] != second[0]["key"]
+
+
+def test_a_new_fault_after_a_restart_gets_its_own_key():
+    """The key used a per-day counter that restarted with the server, so the
+    first fault after a deploy reused that morning's acknowledged key and
+    _raise_alarm wrote nothing."""
+    before = run([rec(i, *jitter(i)) for i in range(3)] + bad(3, 8))
+    dh.reset()                                                       # the deploy
+    after = run([rec(i, *jitter(i)) for i in range(400, 403)] + bad(403, 408))
+    assert before[0]["key"] != after[0]["key"]
+
+
+def test_a_node_that_died_shortly_before_a_restart_is_still_caught():
+    """seen_live needed a reading under 20 min old at first sight, so a node that
+    died an hour before a deploy could never be called silent."""
+    last = rec(0, *jitter(0))
+    started = dh.check_farm(TENANT, farm(last), last["timestamp"] + 60 * MIN, ["H1"])
+    assert [x["kind"] for x in started] == ["silent"]
+
+
+def test_an_unlinked_section_is_not_called_silent():
+    """Unlinking deletes deviceMac but leaves latest; twenty minutes later the
+    section was reported as a node that stopped."""
+    run([rec(i, *jitter(i)) for i in range(5)])
+    f = farm(rec(4, *jitter(4)))
+    del f["H1"]["sections"]["S1"]["deviceMac"]
+    assert dh.check_farm(TENANT, f, T0 + 40 * MIN, ["H1"]) == []

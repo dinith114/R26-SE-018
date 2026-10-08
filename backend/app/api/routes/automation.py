@@ -818,7 +818,8 @@ def _engine_pass(now: datetime) -> dict:
     """
     did = {}
     st = _state_for(current_tenant())
-    houses = _fb_get("/farm/houses.json") or {}
+    raw_houses = _fb_get("/farm/houses.json")
+    houses = raw_houses or {}
 
     # 1. Today's plan, once per day, after dawn so the dawn reading exists.
     if st["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
@@ -856,15 +857,25 @@ def _engine_pass(now: datetime) -> dict:
         # The masters' queues, every MASTER_QUEUE_MINUTES: every pour goes there,
         # and one still waiting past its time was never carried out. Usually an
         # empty document - a few bytes - per master per check.
-        queues = None
+        # Kept between fetches, so a standing fault is seen on every pass and
+        # not only one minute in five. A fetch that fails keeps the last copy
+        # for that master rather than reading as "nothing queued".
+        queues = st.get("masterQueues") or {}
         last_q = st.get("lastMasterQueue")
         if last_q is None or (now - last_q) >= timedelta(minutes=MASTER_QUEUE_MINUTES):
-            queues = {}
+            fresh = {}
             for h in _acting_houses(houses).values():
                 mac = ((h.get("meta") or {}).get("masterMac") or "").strip()
-                if mac and mac not in queues:
-                    queues[mac] = _fb_get(f"/farm/masters/{mac}/queue.json") or {}
+                if mac and mac not in fresh:
+                    got = _fb_get(f"/farm/masters/{mac}/queue.json")
+                    fresh[mac] = got if got is not None else queues.get(mac, {})
+            queues = fresh
+            st["masterQueues"] = queues
             st["lastMasterQueue"] = now
+        # Only on a farm that actually downloaded: a failed fetch is not an
+        # empty farm, and treating it as one wiped every standing fault.
+        if raw_houses is None:
+            raise RuntimeError("farm download failed this tick - health state kept as it was")
         for issue in _dh.check_farm(current_tenant(), houses, now.timestamp() * 1000.0,
                                     set(_acting_houses(houses)), master_queues=queues):
             _raise_alarm("action", issue["key"], issue["title"], issue["message"],
