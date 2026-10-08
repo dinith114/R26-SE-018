@@ -67,7 +67,7 @@
 
 /* Reported in the device record, and printed in the boot banner so the serial
    monitor alone shows which build is on the board. */
-#define FW_VERSION "validation-2.3"
+#define FW_VERSION "validation-2.4"
 
 /* ═══════════ QUIET_NODE: battery boards that only record ═══════════
    0 (the default) changes nothing. Set it to 1 for a board that runs from a
@@ -647,6 +647,13 @@ void servePortal() {
 }
 
 void connectWiFi() {
+  /* CONSECUTIVE failed joins. It lived inside the failure branch and was never
+     reset, so it counted every failure since boot: three short router drops
+     spread over a day "were" three in a row, and a board whose network was on
+     trial (a remote Wi-Fi change) rolled back and RESTARTED mid-outage - losing
+     the clock, and with it everything store-and-forward could have kept.
+     Found in review, 8 Oct 2026. */
+  static uint8_t failures = 0;
   loadCreds();
   Serial.printf("\n[WIFI] joining %s", provSsid.c_str());
   // Tear the previous attempt down first. Calling begin() while the station is
@@ -681,6 +688,11 @@ void connectWiFi() {
     Serial.print(".");
   }
   if (WiFi.status() == WL_CONNECTED) {
+    failures = 0;
+    // A network that has carried us is no longer on trial. confirmCreds() was
+    // written for exactly this and never called, so the trial flag - and the
+    // roll-back-and-restart it arms - survived for ever.
+    confirmCreds();
     Serial.printf("\n[WIFI] connected, ip=%s rssi=%d dBm\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
@@ -699,7 +711,6 @@ void connectWiFi() {
        portal is the only way back without a laptop.
        Three, not one: a router rebooting should not drop a working node into
        setup mode and stop it reporting. */
-    static uint8_t failures = 0;
     if (++failures >= 3 && !portalRunning) {
       // A failed REMOTE change is recoverable: restore what worked and restart.
       // Only raise the portal when there is nothing left to fall back to.
@@ -1392,6 +1403,20 @@ void takeReading() {
                 (!tempOK || !lightIsOK) ? "   <-- SENSOR FAULT" : "");
 
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
+
+  /* Taken before the clock was ever set (a restart with no Wi-Fi), this reading
+     carries timestamp 0 - and the reconnect just above would post it as 1970.
+     Set the clock now and stamp it with now: the reading is seconds old, which
+     is closer than any alternative. Found in review, 8 Oct 2026. */
+  if (ms == 0 && WiFi.status() == WL_CONNECTED) {
+    if (!clockOK) syncClock();
+    if (clockOK) {
+      ms = nowMs();
+      d["timestamp"] = ms;
+      body = "";
+      serializeJson(d, body);
+    }
+  }
 
   // Announce presence and pick up any assignment change before posting, so a
   // reading always lands in whatever section the board currently belongs to.
