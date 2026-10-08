@@ -3207,7 +3207,11 @@ async def set_house_lifecycle(house_id: str, body: LifecycleIn, ctx: AuthContext
             "minReadings": CALIBRATION_MIN_READINGS,
             "sectionCount": len(sections),
         }
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    # Checked for the same reason as co-location: "calibration has started"
+    # is something the farmer then waits days on.
+    if not _fb_put(f"/farm/houses/{house_id}/meta.json", meta):
+        raise HTTPException(502, "That was not saved - the database did not answer. "
+                                 "Check the connection and try again.")
     return {"status": "success", "houseId": house_id,
             "lifecycle": want, "calibration": meta.get("calibration")}
 

@@ -536,7 +536,12 @@ async def colocation(house_id: str, body: ColocationIn,
 
     cal["colocation"] = co or None
     meta["calibration"] = cal
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    # Checked, because the farmer acts on the answer: on 8 Oct a Start that was
+    # never saved still came back 200, the app said "Started", and the nodes
+    # would have sat together for 40 minutes that counted for nothing.
+    if not _fb_put(f"/farm/houses/{house_id}/meta.json", meta):
+        raise HTTPException(502, "That was not saved - the database did not answer. "
+                                 "Check the connection and press it again.")
     return {"status": "success", "houseId": house_id, "colocation": co or None,
             "serverNowMs": now}
 

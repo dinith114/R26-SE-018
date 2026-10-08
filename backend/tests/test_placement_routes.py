@@ -96,6 +96,47 @@ def test_colocation_needs_forty_minutes_and_uses_the_server_clock(farm):
     assert c["colocation"] == stored and c["serverNowMs"] == T0 + 60 * STEP
 
 
+def _writes_down(monkeypatch):
+    """Reads still work, every write fails in transit - twice, so the retry
+    cannot save it."""
+    from app.api.routes import smart_watering
+    monkeypatch.setattr(smart_watering, "FB_RETRY_DELAY_S", 0)
+    real = smart_watering._req
+
+    class _WritesDown:
+        def get(self, url, **kw):
+            # A copy, as a real HTTP read returns. The shared fake hands back the
+            # stored dict itself, so a route editing what it read would change
+            # the "database" without any write - and hide the very failure
+            # this test is about.
+            import copy
+            r = real.get(url, **kw)
+            return type(r)(copy.deepcopy(r.json()))
+
+        def put(self, url, **kw):
+            raise ConnectionError("firebase unreachable")
+
+    monkeypatch.setattr(smart_watering, "_req", _WritesDown())
+
+
+def test_colocation_says_so_when_the_database_did_not_take_it(farm, monkeypatch):
+    """The 8 Oct rehearsal: Start answered 200, the app said "Started", and the
+    write had never reached the database."""
+    client, db, _clock = farm
+    _writes_down(monkeypatch)
+    r = client.post(f"{H}/colocation", json={"action": "start"}, headers=_tok())
+    assert r.status_code == 502
+    assert "press it again" in r.json()["detail"]
+    assert not (db[f"{BASE}/houses/H1/meta.json"].get("calibration") or {}).get("colocation")
+
+
+def test_starting_calibration_says_so_when_it_was_not_saved(farm, monkeypatch):
+    client, _db, _clock = farm
+    _writes_down(monkeypatch)
+    r = client.put(f"{H}/lifecycle", json={"lifecycle": "calibrating"}, headers=_tok())
+    assert r.status_code == 502
+
+
 def test_a_viewer_cannot_mark_colocation_or_run_the_analysis(farm):
     client, _db, _clock = farm
     assert client.post(f"{H}/colocation", json={"action": "start"},
