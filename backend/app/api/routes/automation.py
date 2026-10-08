@@ -48,7 +48,7 @@ from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
-    _record_fertilized, _log_event, _acting_houses,
+    _record_fertilized, _log_event, _acting_houses, _is_current,
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
@@ -615,7 +615,11 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
             continue
         hname = (h.get("meta") or {}).get("name", hid)
         for sid, s in ((h.get("sections") or {})).items():
-            if not isinstance(s, dict) or not s.get("latest"):
+            # No watering, and no "water now", from readings over two hours
+            # old (smart_care_v2.PLAN_STALE_MS): the plan may be today's, but the
+            # node that should confirm the conditions has gone quiet.
+            if (not isinstance(s, dict) or not s.get("latest")
+                    or not _is_current(s, now.timestamp() * 1000.0)):
                 continue
             plan = s.get("plan") or {}
             for sess in _due_sessions(plan, now, s):

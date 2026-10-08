@@ -204,8 +204,8 @@ export default function DigitalTwin({
         {xs.map((m) => (
           <Text key={m} style={[styles.axisTxt, { left: mx(m) - 6, top: 0 }]}>{m}</Text>
         ))}
-        <Text style={styles.dims}>{W} m × {L} m</Text>
       </View>
+      <Text style={[styles.dims, { width: pw, marginLeft: 22 }]}>{W} m × {L} m</Text>
 
       {/* Values live BELOW the map, not inside the markers. A number crammed
           into a 30 px circle is unreadable, and an estimate has to carry its
@@ -282,7 +282,7 @@ const styles = StyleSheet.create({
   axisX:   { height: 16, marginTop: 2 },
   axisTxt: { position: 'absolute', color: COLORS.textTertiary, fontSize: 9,
              fontWeight: '700', width: 14, textAlign: 'center' },
-  dims:    { position: 'absolute', right: 0, top: 1,
+  dims:    { textAlign: 'right', marginTop: 2,
              color: COLORS.textTertiary, fontSize: 9.5, fontWeight: '700' },
 
   plot:  { backgroundColor: COLORS.bgCardAlt, borderWidth: 1.5,

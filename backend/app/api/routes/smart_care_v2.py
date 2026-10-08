@@ -1526,6 +1526,29 @@ def _hours_since(ts_ms, now_ms: Optional[float] = None) -> Optional[float]:
         return None
 
 
+# A section whose newest reading is older than this gets no plan, no tray
+# decision and no "water now". Planning from it means watering - or alarming the
+# farmer to water - from conditions that may be days old. Found on 8 Oct 2026:
+# every section on the farm had stopped reporting in September, yet each morning
+# the engine planned from those readings and pushed "Water the plants now -
+# Section 3, 92 s" six times per section. The hardware checks say the node has
+# stopped (device_health "silent"); this stops the system acting on it.
+PLAN_STALE_MS = 2 * 3600_000
+
+
+def _reading_ms(section: dict) -> Optional[float]:
+    try:
+        return float(((section or {}).get("latest") or {}).get("timestamp"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_current(section: dict, now_ms: float) -> bool:
+    """True if the section's newest reading is recent enough to act on."""
+    ts = _reading_ms(section)
+    return ts is not None and now_ms - ts <= PLAN_STALE_MS
+
+
 def _run_per_section(houses: dict, fn) -> dict:
     """Apply `fn(house_id, section_id, section)` to every reporting section.
 
@@ -1535,10 +1558,13 @@ def _run_per_section(houses: dict, fn) -> dict:
     work itself is independent per section, so a small thread pool collapses
     that to roughly the time of one section.
     """
+    # Measured on the farm's clock (the server's, never dragged forward by a
+    # node whose clock is wrong), so a stale section is stale whoever asks.
+    now_ms = _farm_now_ms(houses)
     jobs = [(hid, sid, s)
             for hid, h in _acting_houses(houses).items() if isinstance(h, dict)
             for sid, s in ((h.get("sections") or {}).items())
-            if isinstance(s, dict) and s.get("latest")]
+            if isinstance(s, dict) and s.get("latest") and _is_current(s, now_ms)]
     if not jobs:
         return {}
 
