@@ -77,6 +77,15 @@ SILENT_MS = 20 * 60_000
 COMMAND_GRACE_SEC = 90
 COMMAND_LOOKBACK_SEC = 6 * 3600
 
+# A FLAPPING fault - a loose wire making and breaking contact - would start and
+# clear every few minutes, and each start was a new alarm: about 150 pushes a
+# night from one DHT22 wire, found in review. So a fault only counts as cleared
+# after this long without it, and one kind of fault on one section alarms at
+# most MAX_ALARMS_PER_DAY times a farm day; after that it stays on the screens
+# but sends nothing more.
+CLEAR_AFTER_MS = 30 * 60_000
+MAX_ALARMS_PER_DAY = 3
+
 # How much history is kept per section: enough for the frozen window.
 KEEP_MS = 3 * 3600_000
 
@@ -104,10 +113,10 @@ TEXT = {
                "{where}: no reading since {since}. If the Wi-Fi dropped, a node on firmware "
                "2.3 keeps its readings and sends them later; if its battery or power bank ran "
                "out, nothing is being recorded. Check the power first."),
-    "command": ("Node did not carry out a command",
-                "{where}: the {action} sent at {since} was never confirmed by the node. Check "
-                "its power and Wi-Fi. (A loose pump wire cannot be seen without a current "
-                "sensor - look at the pump too.)"),
+    "command": ("Master did not carry out a watering",
+                "{where}: the {action} sent at {since} is still waiting in the master "
+                "controller's queue. Check the master's power and Wi-Fi. (A loose pump wire "
+                "cannot be seen without a current sensor - look at the pump too.)"),
     "tray-fill": ("Tray did not fill",
                   "{where}: after a fill the tray still reads empty. The probe, the tray pump "
                   "or its wire, or the water supply needs checking."),
@@ -254,22 +263,47 @@ def sensor_faults(st: _Section, now_ms: float) -> Dict[str, dict]:
     return out
 
 
-def care_faults(section: dict, now_ms: float) -> Dict[str, dict]:
-    """Faults that only exist where the system sends commands and fills trays."""
+def overdue_commands(queue: Optional[dict], now_ms: float) -> Dict[str, dict]:
+    """section id -> the oldest pour still sitting in a master's queue past its time.
+
+    EVERY pour goes through the house's master (_issue_node_command writes
+    /farm/masters/{mac}/queue/{id}); the master deletes an entry only after it
+    has run it and acked. So an entry still there after its run time plus a
+    grace period was never carried out. The first version of this check read
+    the SECTION's command document - where pours no longer go - and so could
+    never have seen one. Found in review.
+    """
     out: Dict[str, dict] = {}
-    cmd = (section or {}).get("command") or {}
-    ack = (section or {}).get("commandAck") or {}
-    try:
-        issued = float(cmd.get("issuedAtSec"))
-    except (TypeError, ValueError):
-        issued = None
-    if cmd.get("id") and issued is not None and ack.get("id") != cmd.get("id"):
+    for cid, cmd in (queue or {}).items():
+        if not isinstance(cmd, dict):
+            continue
+        try:
+            issued = float(cmd.get("issuedAtSec"))
+        except (TypeError, ValueError):
+            continue
+        sid = cmd.get("targetSection")
+        if not sid:
+            continue
         due = issued + float(cmd.get("durationSec") or 0) + COMMAND_GRACE_SEC
         age = now_ms / 1000.0 - issued
-        if now_ms / 1000.0 >= due and age <= COMMAND_LOOKBACK_SEC:
-            out["command"] = {"since": issued * 1000.0, "n": 0,
-                              "action": str(cmd.get("action") or "command"),
-                              "commandId": cmd.get("id")}
+        if now_ms / 1000.0 < due or age > COMMAND_LOOKBACK_SEC:
+            continue
+        prev = out.get(sid)
+        if prev is None or issued * 1000.0 < prev["since"]:
+            out[sid] = {"since": issued * 1000.0, "n": 0,
+                        "action": "tray fill" if cmd.get("action") == "tray"
+                        else ("watering" if cmd.get("action") == "water"
+                              else str(cmd.get("action") or "command")),
+                        "commandId": cid}
+    return out
+
+
+def care_faults(section: dict, now_ms: float, overdue: Optional[dict] = None) -> Dict[str, dict]:
+    """Faults that only exist where the system sends commands and fills trays.
+    `overdue` is this section's entry from overdue_commands(), if any."""
+    out: Dict[str, dict] = {}
+    if overdue:
+        out["command"] = overdue
     tray = (section or {}).get("tray") or {}
     if tray.get("trayResponds") is False:
         out["tray-fill"] = {"since": now_ms, "n": 0}
@@ -277,7 +311,8 @@ def care_faults(section: dict, now_ms: float) -> Dict[str, dict]:
 
 
 def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
-               offset_min: int = FARM_OFFSET_MIN) -> List[dict]:
+               offset_min: int = FARM_OFFSET_MIN,
+               master_queues: Optional[Dict[str, dict]] = None) -> List[dict]:
     """Update every section's history from this tick's houses and return the
     faults that STARTED this pass - the ones to raise an alarm for.
 
@@ -295,6 +330,9 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
         if meta.get("simulated") is True:
             continue                                   # the node bench invents its readings
         hname = meta.get("name") or hid
+        # The master's pending pours, if the engine fetched them this pass.
+        overdue = overdue_commands((master_queues or {}).get(meta.get("masterMac") or ""),
+                                   now_ms) if hid in acting else {}
         for sid, s in (h.get("sections") or {}).items():
             if not isinstance(s, dict):
                 continue
@@ -313,12 +351,14 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
             # Care checks only while the node is live: a dead node is already
             # "silent", and a tray state left from weeks ago is not news.
             if hid in acting and st.seen_live and now_ms - st.hist[-1][0] < SILENT_MS:
-                faults.update(care_faults(s, now_ms))
+                faults.update(care_faults(s, now_ms, overdue.get(sid)))
             sname = (s.get("meta") or {}).get("name") or sid
 
             for kind in list(st.active):
-                if kind not in faults:
-                    del st.active[kind]                # cleared: a recurrence alarms again
+                if kind in faults:
+                    st.active[kind]["lastSeenMs"] = int(now_ms)
+                elif now_ms - st.active[kind].get("lastSeenMs", 0) >= CLEAR_AFTER_MS:
+                    del st.active[kind]                # cleared for real: may alarm again
             for kind, f in faults.items():
                 if kind in st.active:
                     st.active[kind].update(n=f.get("n", 0))
@@ -334,10 +374,12 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
                                            since=_local(f["since"], offset_min),
                                            action=f.get("action", "command")),
                     "sinceMs": int(f["since"]),
+                    "lastSeenMs": int(now_ms),
                     "key": f"{hid}-{sid}-dev-{kind}-{day}-{count}",
                 }
                 st.active[kind] = issue
-                started.append(issue)
+                if count <= MAX_ALARMS_PER_DAY:
+                    started.append(issue)              # beyond the cap: shown, not pushed
 
     # A section that disappeared (house deleted) is forgotten.
     for key in [k for k in _SECTIONS if k[0] == tenant and k not in seen]:
@@ -349,11 +391,16 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
 def snapshot(tenant: str, house_id: str) -> dict:
     """What is wrong in one house right now, per section, for the app."""
     sections: Dict[str, list] = {}
+    ran = _LAST_RUN.get(tenant)
     for (t, hid, sid), st in _SECTIONS.items():
         if t != tenant or hid != house_id:
             continue
+        # Only faults seen on the last pass. One that has stopped is kept in
+        # `active` for CLEAR_AFTER_MS so a flapping wire cannot re-alarm, but a
+        # screen must not go on saying "not answering" about a sensor that is.
         sections[sid] = [
             {k: v for k, v in issue.items() if k in ("kind", "title", "message", "sinceMs")}
             for issue in st.active.values()
+            if ran is None or issue.get("lastSeenMs", ran) >= ran
         ]
     return {"checkedAtMs": _LAST_RUN.get(tenant), "sections": sections}

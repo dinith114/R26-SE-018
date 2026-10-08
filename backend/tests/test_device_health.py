@@ -107,12 +107,36 @@ def test_an_unplugged_dht22_is_caught_within_minutes_and_said_once():
     assert issue["key"].startswith("H1-S1-dev-dht-")
 
 
-def test_a_fault_that_clears_and_returns_alarms_again_under_a_new_key():
-    bad = lambda a, b: [rec(i, -999, -999) for i in range(a, b)]
-    good = lambda a, b: [rec(i, *jitter(i)) for i in range(a, b)]
-    started = run(good(0, 3) + bad(3, 8) + good(8, 12) + bad(12, 17))
+bad = lambda a, b: [rec(i, -999, -999) for i in range(a, b)]
+good = lambda a, b: [rec(i, *jitter(i)) for i in range(a, b)]
+
+
+def test_a_fault_that_really_clears_and_returns_alarms_again_under_a_new_key():
+    # Fixed for 40 minutes - longer than CLEAR_AFTER_MS - then broken again.
+    started = run(good(0, 3) + bad(3, 8) + good(8, 48) + bad(48, 53))
     keys = [x["key"] for x in started]
     assert len(keys) == 2 and keys[0] != keys[1] and keys[1].endswith("-2")
+
+
+def test_a_flapping_wire_is_one_alarm_not_one_per_flap():
+    """Found in review: a loose DHT22 wire making and breaking contact every few
+    minutes started and cleared a fault on each flap - ~150 pushes a night."""
+    seq = []
+    for start in range(0, 600, 10):                    # ten hours: 6 min bad, 4 min good
+        seq += bad(start, start + 6) + good(start + 6, start + 10)
+    assert [x["kind"] for x in run(seq)] == ["dht"]
+
+
+def test_one_fault_alarms_at_most_three_times_a_day():
+    seq = good(0, 3)
+    t = 3
+    for _ in range(6):                                 # six real recurrences, 35 min apart
+        seq += bad(t, t + 5) + good(t + 5, t + 40)
+        t += 40
+    started = run(seq)
+    assert len(started) == dh.MAX_ALARMS_PER_DAY == 3
+    # ...and the fault is still on the screens after the cap.
+    assert ("t_a", "H1", "S1") in dh._SECTIONS
 
 
 def test_a_light_sensor_that_worked_and_stopped_is_caught():
@@ -148,30 +172,50 @@ def test_a_node_that_was_reporting_and_stopped_is_called_silent():
 
 # ── commands and trays: only where the system sends them ────────────────────
 
-def _cmd(issued_min, ack=None):
-    extra = {"command": {"id": "c1", "action": "water", "durationSec": 40,
-                         "issuedAtSec": (T0 + issued_min * MIN) / 1000}}
-    if ack:
-        extra["commandAck"] = {"id": ack}
-    return extra
+MASTER = "AABBCCDDEEFF"
 
 
-def test_a_command_never_carried_out_is_caught_on_a_working_house():
+def _queue(issued_min, section="S1"):
+    """The master's queue as _issue_node_command writes it - where EVERY pour goes."""
+    return {"c1": {"action": "water", "durationSec": 40, "targetSection": section,
+                   "issuedAtSec": (T0 + issued_min * MIN) / 1000, "routedTo": MASTER}}
+
+
+def _run_with_master(readings, queue):
+    started = []
+    for r in readings:
+        f = farm(r)
+        f["H1"]["meta"]["masterMac"] = MASTER
+        started += dh.check_farm(TENANT, f, r["timestamp"] + 30_000, ["H1"],
+                                 master_queues={MASTER: queue})
+    return started
+
+
+def test_a_pour_left_in_the_masters_queue_is_caught():
+    """The first version read the SECTION's command document - pours do not go
+    there - so it could never have seen one. Found in review."""
     readings = [rec(i, *jitter(i)) for i in range(6)]
-    started = run(readings, extra=_cmd(1))
+    started = _run_with_master(readings, _queue(1))
     assert [x["kind"] for x in started] == ["command"]
-    assert "current sensor" in started[0]["message"]      # says what it cannot see
+    assert "master" in started[0]["message"] and "current sensor" in started[0]["message"]
 
 
-def test_a_confirmed_command_is_fine():
+def test_a_pour_the_master_ran_leaves_nothing_to_say():
     readings = [rec(i, *jitter(i)) for i in range(6)]
-    assert run(readings, extra=_cmd(1, ack="c1")) == []
+    assert _run_with_master(readings, {}) == []         # the master deletes it after acking
+    # ...nor one still within its run time plus grace.
+    dh.reset()
+    assert _run_with_master(readings[:2], _queue(1)) == []
 
 
 def test_a_calibrating_house_gets_sensor_checks_but_no_care_checks():
     readings = [rec(i, *jitter(i)) for i in range(4)] + [rec(i, -999, -999) for i in range(4, 10)]
-    extra = {**_cmd(1), "tray": {"trayResponds": False}}
-    started = run(readings, lifecycle="calibrating", extra=extra)
+    started = []
+    for r in readings:
+        f = farm(r, "calibrating", {"tray": {"trayResponds": False}})
+        f["H1"]["meta"]["masterMac"] = MASTER
+        started += dh.check_farm(TENANT, f, r["timestamp"] + 30_000, [],
+                                 master_queues={MASTER: _queue(1)})
     assert [x["kind"] for x in started] == ["dht"]
 
 

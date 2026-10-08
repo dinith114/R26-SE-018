@@ -71,6 +71,12 @@ export default function AlarmScreen({ route, navigation }) {
   const [section, setSection] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy]       = useState(null);
+  /* { kind: 'ack' | 'act', alarm } - the alarm the sheet was OPENED for.
+     It used to be a bare 'ack'/'act' and the sheet read whatever alarm was
+     first in the list when Confirm was tapped. The list reloads every 30 s, so
+     a newer alarm could slide under an open "Water now in Section 1?" sheet and
+     Confirm acted on that one instead - or, for a check-device alarm, quietly
+     did nothing while the farmer believed Section 1 was watered. Found in review. */
   const [sheet, setSheet]     = useState(null);
   const [toast, setToast]     = useState(null);
 
@@ -109,6 +115,9 @@ export default function AlarmScreen({ route, navigation }) {
   // An action this build does not know is shown as a check, never as watering.
   const cfg = ACTION[primary?.action] || ACTION['check-device'];
   const actable = MOVES_WATER.has(primary?.action);
+  // The sheet only stays open while the alarm it was opened for is still listed.
+  const sheetAlive = !!(sheet && sheet.alarm && alarms.some((a) => a.id === sheet.alarm.id));
+  const sheetCfg = ACTION[sheet?.alarm?.action] || ACTION['check-device'];
 
   const doAck = async (a) => {
     setSheet(null);
@@ -241,7 +250,7 @@ export default function AlarmScreen({ route, navigation }) {
         <TouchableOpacity
           style={[s.btn, s.ackBtn]}
           disabled={!can('ackAlarm')}
-          onPress={can('ackAlarm') ? () => setSheet('ack') : undefined}
+          onPress={can('ackAlarm') ? () => setSheet({ kind: 'ack', alarm: primary }) : undefined}
           disabled={!!busy}
           activeOpacity={0.85}
           accessibilityRole="button"
@@ -254,7 +263,7 @@ export default function AlarmScreen({ route, navigation }) {
           <TouchableOpacity
             style={[s.btn, { backgroundColor: cfg.tint }]}
             disabled={!can('waterSection')}
-            onPress={can('waterSection') ? () => setSheet('act') : undefined}
+            onPress={can('waterSection') ? () => setSheet({ kind: 'act', alarm: primary }) : undefined}
             disabled={!!busy}
             activeOpacity={0.85}
             accessibilityRole="button"
@@ -277,26 +286,26 @@ export default function AlarmScreen({ route, navigation }) {
       </View>
 
       <ConfirmSheet
-        visible={sheet === 'ack'}
+        visible={sheetAlive && sheet.kind === 'ack'}
         icon="notifications-off-outline"
         title="Stop reminding me?"
         body={'The alarm stops repeating. The plants are NOT watered — do that '
             + 'yourself, or use the other button.'}
         confirmLabel="Acknowledge"
         onCancel={() => setSheet(null)}
-        onConfirm={() => doAck(primary)}
+        onConfirm={() => doAck(sheet.alarm)}
       />
 
       <ConfirmSheet
-        visible={sheet === 'act'}
-        icon={cfg.icon}
-        title={`${cfg.button} in ${section?.meta?.name || primary.sectionId}?`}
-        body={primary.action === 'water'
+        visible={sheetAlive && sheet.kind === 'act' && MOVES_WATER.has(sheet.alarm.action)}
+        icon={sheetCfg.icon}
+        title={`${sheetCfg.button} in ${sheet?.alarm?.sectionId || ''}?`}
+        body={sheet?.alarm?.action === 'water'
           ? `The pump runs for ${section?.plan?.durationSec || 45} seconds.`
           : `The valve opens for ${section?.tray?.fillSeconds || 15} seconds.`}
-        confirmLabel={cfg.button}
+        confirmLabel={sheetCfg.button || 'Confirm'}
         onCancel={() => setSheet(null)}
-        onConfirm={() => doAct(primary)}
+        onConfirm={() => doAct(sheet.alarm)}
       />
     </View>
   );
