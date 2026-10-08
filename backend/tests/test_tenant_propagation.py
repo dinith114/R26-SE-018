@@ -45,8 +45,10 @@ def test_the_thread_pool_carries_the_tenant():
     Firebase problem, not a threading one."""
     from app.api.routes.smart_care_v2 import _run_per_section
 
-    houses = {"H1": {"sections": {"S1": {"latest": {"temperature": 25}},
-                                  "S2": {"latest": {"temperature": 26}}}}}
+    import time
+    now = time.time() * 1000          # current readings: a stale one is not planned
+    houses = {"H1": {"sections": {"S1": {"latest": {"temperature": 25, "timestamp": now}},
+                                  "S2": {"latest": {"temperature": 26, "timestamp": now}}}}}
 
     with tenant_scope("t_abc"):
         seen = _run_per_section(houses, lambda h, s, sec: current_tenant())

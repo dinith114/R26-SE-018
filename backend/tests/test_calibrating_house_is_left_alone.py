@@ -15,7 +15,19 @@ from datetime import datetime, timezone
 from app.api.routes import automation
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
-LATEST = {"timestamp": 1_791_000_000_000, "temperature": 31.0, "humidity": 55.0, "light": -999}
+NOW_MS = NOW.timestamp() * 1000
+# A minute old: current. Stale readings are not planned at all (PLAN_STALE_MS).
+LATEST = {"timestamp": NOW_MS - 60_000, "temperature": 31.0, "humidity": 55.0, "light": -999}
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _farm_clock(monkeypatch):
+    """The farm's clock reads NOW, so 'a minute old' stays a minute old."""
+    from app.api.routes import smart_care_v2 as sc
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: NOW_MS)
 
 
 def _farm():
@@ -92,3 +104,38 @@ def test_alerts_keep_a_silent_node_but_no_care_items(monkeypatch):
     assert "H1-S1-tray" in ids                      # the working house is still cared for
     assert "HC-S2-stale" in ids                     # a silent calibration node is still said
     assert not any(i.startswith("HC-") and not i.endswith("-stale") for i in ids)
+
+
+
+# ── 8 Oct: no plan, no tray decision, no "water now" from readings > 2 h old ──
+
+def test_a_section_whose_readings_are_old_is_not_planned_or_alarmed(monkeypatch):
+    """Every section on the farm had stopped reporting in September, yet each
+    morning the engine planned from those readings and pushed "Water the plants
+    now" six times per section."""
+    from app.api.routes import smart_care_v2 as sc
+    farm = _farm()
+    old = farm["H1"]["sections"]["S1"]
+    old["latest"] = {**LATEST, "timestamp": NOW_MS - 3 * 3600_000}       # 3 h old
+    farm["H1"]["sections"]["S2"] = {"meta": {"name": "S2"}, "latest": dict(LATEST),
+                                   "plan": dict(old["plan"])}             # current
+    seen = []
+    sc._run_per_section(farm, lambda hid, sid, s: seen.append(f"{hid}-{sid}") or {})
+    assert seen == ["H1-S2"]
+
+    raised = []
+    monkeypatch.setattr(automation, "get_auto_mode", lambda: False)
+    monkeypatch.setattr(automation, "section_is_auto", lambda s, m=None: False)
+    monkeypatch.setattr(automation, "_already_done", lambda s, d, t: False)
+    monkeypatch.setattr(automation, "_due_sessions",
+                        lambda plan, now, s=None: [{"tag": "am", "time": "12:00", "durationSec": 40}])
+    monkeypatch.setattr(automation, "_raise_alarm", lambda kind, key, *a, **k: raised.append(key))
+    out = automation.run_watering_link(NOW, farm)
+    assert out["alarmed"] == ["H1-S2-am"]
+
+
+def test_a_reading_just_under_two_hours_old_is_still_acted_on():
+    from app.api.routes import smart_care_v2 as sc
+    assert sc._is_current({"latest": {"timestamp": NOW_MS - 119 * 60_000}}, NOW_MS)
+    assert not sc._is_current({"latest": {"timestamp": NOW_MS - 121 * 60_000}}, NOW_MS)
+    assert not sc._is_current({"latest": {}}, NOW_MS)                     # no time, no plan

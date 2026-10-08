@@ -37,11 +37,22 @@ const SOIL_WET_ADC = 1100;   // measured with the blade in water to the printed 
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 const Divider = () => <View style={s.divider} />;
 
-const StatusBadge = ({ ok, label }) => (
-  <View style={[s.badge, { backgroundColor: ok ? COLORS.successDim : COLORS.dangerDim }]}>
-    <View style={[s.badgeDot, { backgroundColor: ok ? COLORS.success : COLORS.danger }]} />
-    <Text style={[s.badgeText, { color: ok ? COLORS.success : COLORS.danger }]}>{label}</Text>
-  </View>
+const StatusBadge = ({ ok, label, unknown }) => {
+  const fg = unknown ? COLORS.textTertiary : ok ? COLORS.success : COLORS.danger;
+  const bg = unknown ? COLORS.bgCardAlt : ok ? COLORS.successDim : COLORS.dangerDim;
+  return (
+    <View style={[s.badge, { backgroundColor: bg }]}>
+      <View style={[s.badgeDot, { backgroundColor: fg }]} />
+      <Text style={[s.badgeText, { color: fg }]}>{label}</Text>
+    </View>
+  );
+};
+
+/* A sensor's badge judges the node's LAST reading, so it only means anything
+   while the node is online. Offline for 38 days, it went on saying "OK". */
+const SensorBadge = ({ ok, live }) => (
+  live ? <StatusBadge ok={ok} label={ok ? 'OK' : 'Error'} />
+       : <StatusBadge unknown label="No recent reading" />
 );
 
 const Row = ({ icon, iconColor, label, value, hint, right, onPress }) => (
@@ -292,11 +303,11 @@ export default function SettingsScreen({ navigation }) {
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="hardware-chip"        iconColor={COLORS.primary}     label="ESP32 Controller"      right={<StatusBadge ok={isESP32Live} label={isESP32Live ? 'Live' : 'Offline'} />} />
             <Divider />
-            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<StatusBadge ok={isDHT22OK}   label={isDHT22OK   ? 'OK'   : 'Error'}   />} />
+            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<SensorBadge ok={isDHT22OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<StatusBadge ok={isBH1750OK}  label={isBH1750OK  ? 'OK'   : 'Error'}   />} />
+            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<SensorBadge ok={isBH1750OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<StatusBadge ok={isMoisOK}    label={isMoisOK    ? 'OK'   : 'Error'}   />} />
+            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<SensorBadge ok={isMoisOK} live={isESP32Live} />} />
             <Divider />
             <Row icon="wifi-outline"         iconColor={COLORS.info}        label="Wi-Fi Signal"          value={sig.label} hint={device?.ip || undefined} />
             <Divider />
