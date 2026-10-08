@@ -67,7 +67,7 @@
 
 /* Reported in the device record, and printed in the boot banner so the serial
    monitor alone shows which build is on the board. */
-#define FW_VERSION "validation-2.4"
+#define FW_VERSION "validation-2.5"
 
 /* ═══════════ QUIET_NODE: battery boards that only record ═══════════
    0 (the default) changes nothing. Set it to 1 for a board that runs from a
@@ -1162,6 +1162,23 @@ void pollCommand() {
      overflows it. Commands without the field are obeyed, so an older backend
      keeps working. */
   const long COMMAND_MAX_AGE_SEC = 900;             // 15 minutes
+
+  /* Without the time there is no age check, and skipping the check used to
+     mean OBEYING - the same hole as the master queue (see masterRunOne). Water
+     and tray are held until the clock is set. lastCmdId is NOT stamped, so the
+     first poll after syncClock() succeeds judges the command by its age like
+     any other. Wi-Fi credentials move no water and are still taken: they may
+     be what puts this board on a network that has the time. */
+  if (!clockOK && (action == "water" || action == "tray")) {
+    static String heldId;                           // one log line per command
+    if (heldId != id) {
+      heldId = id;
+      Serial.printf("[CMD] %s held: the time is not known, so its age cannot be checked\n",
+                    action.c_str());
+    }
+    return;
+  }
+
   long issuedAtSec = jsonNum(body, "issuedAtSec", 0);
   if (issuedAtSec > 0 && clockOK) {
     long age = (long)(nowMs() / 1000ULL) - issuedAtSec;
