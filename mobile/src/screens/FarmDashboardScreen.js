@@ -299,7 +299,14 @@ export default function FarmDashboardScreen({ navigation }) {
   const isTrayFlow = flow?.kind !== 'water';
   const trayCooling = (x) =>
     x?.tray?.status === 'cooldown' && Number(x?.tray?.hoursUntilNextFill) > 0;
-  const flowLive = flowSections.filter((x) => x.freshness?.state === 'live');
+  /* A zone with no sensor of its own (kriged, 'estimated') is watered through
+     the master like every other section, and the server takes it. It was
+     left out because this list predates the master: "a command is a document
+     the node polls". After the placement decision that is most of a house, so
+     the farmer could not water most of it by hand. Trays stay live-only:
+     their cooldown and fill checks read the section's own probe. */
+  const flowLive = flowSections.filter((x) => x.freshness?.state === 'live'
+    || (!isTrayFlow && x.freshness?.state === 'estimated'));
   const flowPickable = flowLive.filter((x) => !(isTrayFlow && trayCooling(x)));
   const coolingHidden = flowLive.length - flowPickable.length;
   const chosen = flowSections.filter((x) => (flow?.sectionIds || []).includes(x.sectionId));
@@ -1055,7 +1062,8 @@ export default function FarmDashboardScreen({ navigation }) {
               key: x.sectionId,
               label: x.meta?.name || x.sectionId,
               sub: `${x.latest?.temperature?.toFixed?.(1) ?? '--'}°  `
-                 + `${x.latest?.humidity?.toFixed?.(0) ?? '--'}%  ${rh.label}`,
+                 + `${x.latest?.humidity?.toFixed?.(0) ?? '--'}%  ${rh.label}`
+                 + (x.freshness?.state === 'estimated' ? '  · estimated, no sensor' : ''),
             };
           })}
         emptyText={

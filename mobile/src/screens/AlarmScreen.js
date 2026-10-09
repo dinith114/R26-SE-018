@@ -19,6 +19,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
@@ -138,11 +139,21 @@ export default function AlarmScreen({ route, navigation }) {
   const sheetAlive = !!(sheet && sheet.alarm && alarms.some((a) => a.id === sheet.alarm.id));
   const sheetCfg = ACTION[sheet?.alarm?.action] || ACTION['check-device'];
 
+  /* The farmer is in the app and has dealt with it, so the alarm's own
+     notification is stale. The full-screen one stays pinned as a heads-up
+     banner while the app is open: on 9 Oct a "Still waiting - fill the tray"
+     banner sat over every screen for 14 minutes after the tray was filled.
+     Anything still waiting is pushed again by the next repeat. */
+  const clearShade = () => {
+    Notifications.dismissAllNotificationsAsync().catch(() => {});
+  };
+
   const doAck = async (a) => {
     setSheet(null);
     setBusy('ack');
     try {
       await ackAlarm(a.id);
+      clearShade();
       setToast({ text: 'Acknowledged. It will stop reminding you.', kind: 'success' });
       await load();
       // Nothing left needing a person: this screen has no reason to exist.
@@ -168,6 +179,7 @@ export default function AlarmScreen({ route, navigation }) {
       }
       // Doing the thing is the strongest possible acknowledgement.
       await ackAlarm(a.id);
+      clearShade();
       setToast({ text: 'Sent to the node. It runs within about a minute.', kind: 'success' });
       await load();
     } catch (e) {
