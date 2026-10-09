@@ -110,6 +110,7 @@ def _fb_delete(path: str) -> bool:
 READ_INTERVAL_MIN_MS = 5_000        # 5 s
 READ_INTERVAL_MAX_MS = 3_600_000    # 1 hour
 READ_INTERVAL_DEFAULT_MS = 15_000   # what the firmware falls back to
+QUIET_READ_INTERVAL_DEFAULT_MS = 60_000   # ...and on a QUIET_NODE build
 
 
 class IntervalBody(BaseModel):
@@ -206,9 +207,15 @@ def _decorate(mac: str, rec: dict) -> dict:
         "section": section,
         "identifying": bool(rec.get("identify")),
         # What the node is actually using. Absent means it has never been set
-        # and the board is on its compiled-in default.
-        "readIntervalMs": rec.get("readIntervalMs") or READ_INTERVAL_DEFAULT_MS,
+        # and the board is on its compiled-in default - which is 60 s on a QUIET
+        # build, not 15 (the app said "Reads every 15s" for one, 8 Oct E2E run).
+        "readIntervalMs": rec.get("readIntervalMs") or (
+            QUIET_READ_INTERVAL_DEFAULT_MS if rec.get("quiet") is True
+            else READ_INTERVAL_DEFAULT_MS),
         "readIntervalSet": rec.get("readIntervalMs") is not None,
+        # A QUIET (battery, recording-only) build never reads commands, so the
+        # app must not offer it as a master controller.
+        "quiet": rec.get("quiet") is True,
     }
 
 

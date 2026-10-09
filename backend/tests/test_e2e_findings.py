@@ -139,7 +139,7 @@ def test_an_automatic_tray_fill_that_cannot_be_sent_is_said(monkeypatch):
     raised = []
     refused = {"status": "fill", "fillSeconds": 12, "humidity": 45.0,
                "autoCommanded": False, "autoRefused": "no tray pump channel is set for this house"}
-    monkeypatch.setattr(a, "_run_per_section", lambda houses, fn: {"H1-S1": refused})
+    monkeypatch.setattr(a, "_run_per_section", lambda houses, fn, **k: {"H1-S1": refused})
     monkeypatch.setattr(a, "_fb_get", lambda p: {"meta": {"name": "S1"}})
     monkeypatch.setattr(a, "get_auto_mode", lambda: True)
     monkeypatch.setattr(a, "section_is_auto", lambda s, m=None: True)
@@ -154,7 +154,7 @@ def test_a_tray_alarm_names_the_house(monkeypatch):
     from app.api.routes import automation as a
     raised = []
     fill = {"status": "fill", "fillSeconds": 15, "humidity": 44.5, "autoCommanded": False}
-    monkeypatch.setattr(a, "_run_per_section", lambda houses, fn: {"H2-S4": fill})
+    monkeypatch.setattr(a, "_run_per_section", lambda houses, fn, **k: {"H2-S4": fill})
     monkeypatch.setattr(a, "_fb_get", lambda p: {"meta": {"name": "Section 4"}})
     monkeypatch.setattr(a, "get_auto_mode", lambda: False)
     monkeypatch.setattr(a, "section_is_auto", lambda s, m=None: False)
@@ -253,3 +253,100 @@ def test_one_stray_value_from_a_floating_pin_is_not_a_probe(_dh_reset):
 def test_a_real_probe_that_stops_is_still_caught(_dh_reset):
     seq = [_rec(m, 60.0) for m in range(0, 5)] + [_rec(m, -999) for m in range(5, 25)]
     assert _feed(seq) == ["tray-probe"]
+
+
+# ── F2/F9: the app is told which boards only record, and their real interval ─
+
+def test_a_quiet_board_is_marked_and_shows_its_real_interval():
+    """The app offered QUIET boards as masters and said 'Reads every 15s' for one."""
+    from app.api.routes import devices as d
+    quiet = d._decorate("AABBCCDDEE01", {"quiet": True, "lastSeen": 0})
+    assert quiet["quiet"] is True and quiet["readIntervalMs"] == 60_000
+    normal = d._decorate("AABBCCDDEE02", {"lastSeen": 0})
+    assert normal["quiet"] is False and normal["readIntervalMs"] == 15_000
+
+
+# ── F15: a section whose sensor was taken out is still planned and watered ──
+
+def _kriged_farm():
+    fresh = {"timestamp": NOW_MS - 60_000, "temperature": 30.0, "humidity": 60.0}
+    plan = {"date": "2026-10-08", "waterTime": "06:30", "durationSec": 40}
+    return {"H1": {"meta": {"name": "Test house"}, "sections": {
+        "S1": {"meta": {"name": "S1"}, "latest": fresh, "plan": dict(plan)},
+        # sensor taken out by apply-placement: no latest, a fresh estimate
+        "S2": {"meta": {"name": "S2"}, "plan": dict(plan),
+               "estimated": {"timestampMs": NOW_MS - 5 * 60_000, "temperature": 30.4,
+                             "humidity": 59.0}},
+        # its anchors stopped: the estimate is two hours old
+        "S3": {"meta": {"name": "S3"}, "plan": dict(plan),
+               "estimated": {"timestampMs": NOW_MS - 2 * 3600_000, "temperature": 30.0,
+                             "humidity": 60.0}},
+        # a sensor of its own that died: a neighbour's estimate does not rescue it
+        "S4": {"meta": {"name": "S4"}, "plan": dict(plan),
+               "latest": {"timestamp": NOW_MS - 3 * 3600_000, "temperature": 30.0},
+               "estimated": {"timestampMs": NOW_MS - 60_000, "temperature": 30.0}}}}}
+
+
+def test_kriged_sections_are_planned_but_not_given_tray_decisions(monkeypatch):
+    """Only sections with their own reading were ever planned, so the zones the
+    placement decision handed to kriging got no plan and no water at all."""
+    from app.api.routes import smart_care_v2 as sc
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: NOW_MS)
+    seen = []
+    sc._run_per_section(_kriged_farm(), lambda h, s, sec: seen.append(s) or {})
+    assert sorted(seen) == ["S1", "S2"]
+    seen.clear()
+    sc._run_per_section(_kriged_farm(), lambda h, s, sec: seen.append(s) or {}, estimates=False)
+    assert seen == ["S1"]                      # the tray needs the section's own probe
+
+
+def test_a_kriged_section_that_is_due_is_alarmed(monkeypatch):
+    from app.api.routes import automation as a
+    raised = []
+    monkeypatch.setattr(a, "get_auto_mode", lambda: False)
+    monkeypatch.setattr(a, "section_is_auto", lambda s, m=None: False)
+    monkeypatch.setattr(a, "_already_done", lambda s, d, t: False)
+    monkeypatch.setattr(a, "_raise_alarm", lambda kind, key, *x, **k: raised.append(key))
+    out = a.run_watering_link(NOW, _kriged_farm())
+    assert sorted(out["alarmed"]) == ["H1-S1-first", "H1-S2-first"]
+
+
+# ── F16: no tray fill in the dark ───────────────────────────────────────────
+
+def test_no_tray_fill_is_sent_at_night_but_the_same_air_fills_by_day(monkeypatch):
+    """02:02 on 9 Oct: the model, trained on daylight hours, asked for a fill at
+    night and one was sent - against the rule TRAY_DAY_START/END states."""
+    from app.api.routes import smart_care_v2 as sc
+    from app.services.tenant_context import tenant_scope
+
+    class _Scaler:
+        @staticmethod
+        def transform(x):
+            return x
+
+    class _Model:
+        @staticmethod
+        def predict(x):
+            return [40.0]
+
+    monkeypatch.setattr(sc, "_tray", {"scaler": _Scaler(), "model": _Model(),
+                                      "rh_target_low": 60.0, "rh_target_high": 80.0,
+                                      "drop_threshold": 0.7})
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: True)
+    monkeypatch.setattr(sc, "_fb_get", lambda p: {})
+    sent = []
+    monkeypatch.setattr(sc, "_issue_node_command", lambda *x, **k: sent.append(x) or {"id": "c1"})
+    tz = timezone(timedelta(minutes=330))
+
+    def decide(when):
+        latest = {"timestamp": when.timestamp() * 1000, "temperature": 27.0,
+                  "humidity": 45.0, "light": 0}
+        section = {"latest": latest, "control": {"override": "auto"}}
+        with tenant_scope(TENANT):
+            return sc._tray_decision("H1", "S1", section, now=when)
+
+    night = decide(datetime(2026, 10, 9, 2, 2, tzinfo=tz))
+    assert night["fillSeconds"] == 0 and not night["autoCommanded"] and sent == []
+    assert "night" in night["message"]
+    day = decide(datetime(2026, 10, 9, 10, 0, tzinfo=tz))
+    assert day["fillSeconds"] > 0 and day["autoCommanded"] and len(sent) == 1

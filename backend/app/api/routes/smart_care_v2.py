@@ -1574,7 +1574,41 @@ def _is_current(section: dict, now_ms: float) -> bool:
     return ts is not None and now_ms - ts <= PLAN_STALE_MS
 
 
-def _run_per_section(houses: dict, fn) -> dict:
+# An estimate is redone every SPATIAL_MINUTES from the sections that kept a
+# sensor; one older than this means those anchors have stopped. The same hour
+# _reading_for_plan already accepts.
+ESTIMATE_STALE_MS = 60 * 60_000
+
+
+def _has_current_estimate(section: dict, now_ms: float) -> bool:
+    """A section with no sensor of its own, kriged recently enough to act on."""
+    try:
+        ts = float(((section or {}).get("estimated") or {}).get("timestampMs"))
+    except (TypeError, ValueError):
+        return False
+    return now_ms - ts <= ESTIMATE_STALE_MS
+
+
+def _actionable(section: dict, now_ms: float, estimates: bool = True) -> bool:
+    """Can the engine plan or water this section on what it knows now?
+
+    ITS OWN CURRENT READING, OR A CURRENT ESTIMATE. Only the first used to
+    count, so a section whose sensor the placement decision took out - the
+    sections kriging exists to cover - was never planned, never watered and
+    never alarmed: _reading_for_plan's estimate fallback was unreachable from
+    the engine. Found reading the engine in the 8 Oct E2E run. `estimates=False`
+    is for the tray cycle, which needs the section's own probe.
+    """
+    if not isinstance(section, dict):
+        return False
+    if section.get("latest"):
+        # A section with a sensor stands on that sensor: a dead node is not
+        # rescued by its neighbours' estimate.
+        return _is_current(section, now_ms)
+    return estimates and _has_current_estimate(section, now_ms)
+
+
+def _run_per_section(houses: dict, fn, estimates: bool = True) -> dict:
     """Apply `fn(house_id, section_id, section)` to every reporting section.
 
     Runs them concurrently. Each call is dominated by Firebase round-trips
@@ -1589,7 +1623,7 @@ def _run_per_section(houses: dict, fn) -> dict:
     jobs = [(hid, sid, s)
             for hid, h in _acting_houses(houses).items() if isinstance(h, dict)
             for sid, s in ((h.get("sections") or {}).items())
-            if isinstance(s, dict) and s.get("latest") and _is_current(s, now_ms)]
+            if _actionable(s, now_ms, estimates)]
     if not jobs:
         return {}
 
@@ -1731,6 +1765,15 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     if secs > TRAY_MAX_SEC:
         secs = TRAY_MAX_SEC
 
+    # NOT IN THE DARK. TRAY_DAY_START/END states it, and the model was trained
+    # on daylight hours only - but just the prefill and refill paths applied it.
+    # At 02:00 on 9 Oct (E2E run) the model, extrapolating, asked for a fill and
+    # one was sent: water that cannot evaporate overnight, and on a farm with
+    # Auto off, an alarm to wake the farmer for it.
+    dark = not (TRAY_DAY_START <= hour <= TRAY_DAY_END)
+    if dark:
+        secs = 0
+
     lo, hi = _tray["rh_target_low"], _tray["rh_target_high"]
     rh = latest["humidity"]
 
@@ -1753,7 +1796,11 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # The bands survive only to choose the WORDS shown to the farmer.
     if secs == 0:
         status = "ok"
-        if rh >= hi:
+        if dark and model_secs > 0:
+            msg = (f"Humidity is {rh}%, but no tray fill at night: the water would not "
+                   f"evaporate before morning. The first check after "
+                   f"{TRAY_DAY_START:02d}:00 decides.")
+        elif rh >= hi:
             msg = f"Humidity {rh}% is above target, no fill needed."
         elif rh >= lo:
             msg = f"Humidity {rh}% is inside the {lo:.0f}-{hi:.0f}% band, no fill needed."
@@ -2546,7 +2593,7 @@ async def tray_check_all(ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROL
     if not _ready():
         raise HTTPException(503, "v2 models not loaded")
     houses = _fb_get("/farm/houses.json") or {}
-    results = _run_per_section(houses, _tray_decision)
+    results = _run_per_section(houses, _tray_decision, estimates=False)
     filling = sum(1 for r in results.values() if r["fillSeconds"] > 0)
     return {"status": "success", "sectionsChecked": len(results),
             "sectionsFilling": filling, "results": results}

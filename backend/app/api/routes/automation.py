@@ -48,7 +48,7 @@ from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
-    _record_fertilized, _log_event, _acting_houses, _is_current,
+    _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
     _command_refusal, SETUP_HINT,
 )
 from app.api.deps import require_auth, require_role
@@ -619,8 +619,9 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
             # No watering, and no "water now", from readings over two hours
             # old (smart_care_v2.PLAN_STALE_MS): the plan may be today's, but the
             # node that should confirm the conditions has gone quiet.
-            if (not isinstance(s, dict) or not s.get("latest")
-                    or not _is_current(s, now.timestamp() * 1000.0)):
+            # ...and a section with no sensor of its own is watered on a current
+            # kriging estimate, as its plan was made (smart_care_v2._actionable).
+            if not _actionable(s, now.timestamp() * 1000.0):
                 continue
             plan = s.get("plan") or {}
             for sess in _due_sessions(plan, now, s):
@@ -713,7 +714,8 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
     houses = _acting_houses(houses)
     # pass the pass's clock down, so a simulated run stays self-consistent
-    results = _run_per_section(houses, partial(_tray_decision, now=now))
+    # Measured sections only: the tray decision needs the section's own probe.
+    results = _run_per_section(houses, partial(_tray_decision, now=now), estimates=False)
     master = get_auto_mode()
     alarmed = []
 

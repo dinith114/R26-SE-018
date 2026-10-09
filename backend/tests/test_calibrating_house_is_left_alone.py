@@ -43,7 +43,7 @@ def _farm():
 def test_only_working_houses_reach_the_tray_and_plan_cycles(monkeypatch):
     seen = []
 
-    def _fake_per_section(houses, fn):
+    def _fake_per_section(houses, fn, **k):
         seen.append(sorted(houses))
         return {}
 
