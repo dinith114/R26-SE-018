@@ -497,38 +497,108 @@ def vpd_kpa(temp_c: float, rh_pct: float) -> float:
     return round(svp * (1.0 - rh_pct / 100.0), 3)
 
 
-def _recent_history(house_id: str, section_id: str) -> dict:
-    """The section's last ~24 h of readings, fetched ONCE.
+# A Firebase push ID starts with its creation time in this alphabet, so a range
+# of keys is a range of time. That is how the plan asks for "since yesterday
+# 00:00" without an .indexOn rule, which a REST orderBy="timestamp" needs.
+_PUSH_CHARS = "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
 
-    Both _yesterday_stats and _dawn_reading need this same window. They each
-    used to fetch it themselves, so every plan pulled the identical ~50 KB from
-    Firebase twice — about a second of pure waste per section, multiplied by
-    every section on the farm.
+# Fewer clock hours than this recorded yesterday and the plan says it is partial.
+YESTERDAY_FULL_HOURS = 20
+
+
+def _push_key_prefix(ms: float) -> str:
+    """The first 8 characters of a push ID created at epoch-ms `ms`."""
+    ms, out = int(ms), []
+    for _ in range(8):
+        out.append(_PUSH_CHARS[ms % 64])
+        ms //= 64
+    return "".join(reversed(out))
+
+
+def _recent_history(house_id: str, section_id: str,
+                    now: Optional[datetime] = None) -> dict:
+    """Every reading from the start of YESTERDAY (farm time) up to now.
+
+    Fetched once; both _yesterday_stats and _dawn_reading use it.
+
+    This used to be the last 288 records by key. At a node's real rate that
+    is about 2.6 hours (measured on Node 1, 9 Oct 2026: 04:50 -> 07:26), so
+    at 05:00 "yesterday's peak" was the night. The model was trained on the
+    whole previous day, and every plan came out later than it should have.
+    "Last by key" also returned the `seed###` demo records, which sort after
+    push IDs: H1 S1-S4 were planned from 20 Aug fake data (35 C) forever.
+    A push-ID key range fixes both, since seed keys are outside it.
     """
+    now = now or farm_now()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    lo = _push_key_prefix(start.timestamp() * 1000)
+    hi = _push_key_prefix(now.timestamp() * 1000 + 60_000) + "~"
     return _fb_get(f'/farm/history/{house_id}/{section_id}.json'
-                   f'?orderBy="$key"&limitToLast=288') or {}
+                   f'?orderBy="$key"&startAt="{lo}"&endAt="{hi}"') or {}
 
 
-def _yesterday_stats(raw: dict, fallback: dict) -> dict:
-    """Summarise the section's own history (previous ~24 h)."""
-    if not raw:
+def _measured(r: dict, key: str) -> Optional[float]:
+    """The reading's own value, or None if the sensor did not give a real one.
+
+    Not _clean(): that swaps a failed reading for a training-range default,
+    which is right for a model input and wrong for a day's peak or mean."""
+    try:
+        v = float(r.get(key))
+    except (TypeError, ValueError):
+        return None
+    lo, hi = PLAUSIBLE[key]
+    return v if v > SENTINEL and lo <= v <= hi else None
+
+
+def _timed_th(raw: dict) -> list:
+    """(farm time, temperature, humidity) for each reading that has both."""
+    out = []
+    for r in (raw or {}).values():
+        if not isinstance(r, dict) or r.get("timestamp") is None:
+            continue
+        t, h = _measured(r, "temperature"), _measured(r, "humidity")
+        if t is None or h is None:
+            continue
+        try:
+            out.append((to_farm_time(r["timestamp"]), t, h))
+        except Exception:
+            continue
+    return out
+
+
+def _yesterday_stats(raw: dict, fallback: dict, now: Optional[datetime] = None) -> dict:
+    """Yesterday's peak temperature, mean humidity and mean VPD.
+
+    "Yesterday" is the previous calendar day on the farm's clock, which is
+    what the model was trained on (train_on_real_data.py: the previous
+    day's max and means). If the node recorded nothing yesterday, the last
+    24 hours stand in. `hours` and `source` say how much of it was really
+    there, so a plan from half a day can say so."""
+    now = now or farm_now()
+    recs = _timed_th(raw)
+    day = (now - timedelta(days=1)).date()
+    pick = [x for x in recs if x[0].date() == day]
+    source = "yesterday"
+    if not pick:
+        since = now - timedelta(hours=24)
+        pick = [x for x in recs if since <= x[0] <= now]
+        source = "last 24 h"
+    if not pick:
         return {"peak_temp": fallback["temperature"] + 5,
                 "mean_humidity": fallback["humidity"],
-                "mean_vpd": vpd_kpa(fallback["temperature"], fallback["humidity"])}
-    recs = [_clean(r) for r in raw.values() if isinstance(r, dict)]
-    if not recs:
-        return {"peak_temp": fallback["temperature"] + 5,
-                "mean_humidity": fallback["humidity"],
-                "mean_vpd": vpd_kpa(fallback["temperature"], fallback["humidity"])}
-    temps = [r["temperature"] for r in recs]
-    hums  = [r["humidity"] for r in recs]
-    vpds  = [vpd_kpa(r["temperature"], r["humidity"]) for r in recs]
+                "mean_vpd": vpd_kpa(fallback["temperature"], fallback["humidity"]),
+                "hours": 0, "source": "none"}
+    temps = [t for _, t, _ in pick]
+    hums  = [h for _, _, h in pick]
+    vpds  = [vpd_kpa(t, h) for _, t, h in pick]
     return {"peak_temp": round(max(temps), 1),
             "mean_humidity": round(sum(hums) / len(hums), 1),
-            "mean_vpd": round(sum(vpds) / len(vpds), 3)}
+            "mean_vpd": round(sum(vpds) / len(vpds), 3),
+            "hours": len({(ts.date(), ts.hour) for ts, _, _ in pick}),
+            "source": source}
 
 
-def _dawn_reading(raw: dict, latest: dict) -> dict:
+def _dawn_reading(raw: dict, latest: dict, now: Optional[datetime] = None) -> dict:
     """Find this section's DAWN reading (~5-6 AM) from its own history.
 
     The watering-time model is trained on dawn conditions — that is when the
@@ -552,6 +622,11 @@ def _dawn_reading(raw: dict, latest: dict) -> dict:
         recs.append((ts, _clean(r)))
     if not recs:
         return latest
+    # The history now reaches back to yesterday 00:00, so it can hold two
+    # dawns. Today's is the one the decision is about.
+    if now is not None:
+        today = [(t, r) for t, r in recs if t.date() == now.date()]
+        recs = today or recs
 
     dawn = [(t, r) for t, r in recs if 4 <= t.hour <= 7]
     if dawn:
@@ -1446,10 +1521,10 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     now = now or farm_now()
 
     # one history fetch feeds both the daily summary and the dawn lookup
-    hist = _recent_history(house_id, section_id)
-    y = _yesterday_stats(hist, latest)
+    hist = _recent_history(house_id, section_id, now)
+    y = _yesterday_stats(hist, latest, now)
     # the model decides at dawn — use the dawn reading, not whatever time it is now
-    dawn = _dawn_reading(hist, latest)
+    dawn = _dawn_reading(hist, latest, now)
     dawn_vpd = vpd_kpa(dawn["temperature"], dawn["humidity"])
 
     feats = np.array([[
@@ -1501,12 +1576,22 @@ def _plan_section(house_id: str, section_id: str, section: dict,
                    f"then, on measured conditions."),
         "inputs": {"dawnTemp": dawn["temperature"], "dawnHumidity": dawn["humidity"],
                    "dawnLight": dawn["light"], "dawnVpd": dawn_vpd,
-                   "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"]},
+                   "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"],
+                   "yesterdayMeanHumidity": y["mean_humidity"],
+                   # How much of "yesterday" the node actually recorded.
+                   "yesterdayHours": y["hours"], "yesterdaySource": y["source"]},
         # `now` is the FARM's clock here; stamped as farm time with a "UTC"
         # label it read five and a half hours in the future (8 Oct E2E run).
         "generatedAt": (now.astimezone(timezone.utc) if now.tzinfo else now
                         ).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
+
+    # Said, not hidden: the time leans on a day the node only partly saw.
+    if y["hours"] < YESTERDAY_FULL_HOURS:
+        plan["reason"] += (
+            " No record of yesterday, so this time rests on the latest reading only."
+            if y["source"] == "none" else
+            f" Yesterday was recorded for {y['hours']} of 24 hours, so this time is less certain.")
 
     # Predict how the rest of today will go, so the tray can act BEFORE the heat
     # instead of chasing it. Stored per section: each microclimate has its own
