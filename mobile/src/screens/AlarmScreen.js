@@ -55,6 +55,25 @@ const ACTION = {
   },
 };
 
+/* When the alarm was raised, on the phone's clock. createdAt is stored as
+   "YYYY-MM-DD HH:MM:SS UTC"; the header used to print the UTC hour, so a 21:06
+   alarm read "15:36 UTC" above a message that said "since 20:55". */
+function raisedAt(createdAt) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(createdAt || '');
+  if (!m) return undefined;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]));
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === new Date().toDateString()
+    ? `Raised at ${hm}` : `Raised ${d.getDate()}/${d.getMonth() + 1} at ${hm}`;
+}
+
+function todayYMD() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const titleCase = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : t);
+
 /* Only these two actions ever move water. Anything else - check-device, or an
    action a newer server sends that this build does not know - must never reach
    waterSection or fillTray. */
@@ -187,7 +206,7 @@ export default function AlarmScreen({ route, navigation }) {
 
   return (
     <View style={s.screen}>
-      <ScreenHeader title="Alarm" subtitle={primary.createdAt?.slice(11, 16) + ' UTC'}
+      <ScreenHeader title="Alarm" subtitle={raisedAt(primary.createdAt)}
         navigation={navigation} showBack />
       <Toast text={toast?.text} kind={toast?.kind} onDone={() => setToast(null)} />
 
@@ -210,23 +229,27 @@ export default function AlarmScreen({ route, navigation }) {
         <View style={[s.grid, SHADOW.sm]}>
           {[
             ['thermometer-outline', COLORS.temperature,
-             latest.temperature?.toFixed?.(1) ?? '--', '°C', 'Temperature'],
+             latest.temperature?.toFixed?.(1) ?? '--', '°C', 'Temperature', null],
             ['water-outline', rh.color,
-             latest.humidity?.toFixed?.(0) ?? '--', '%', `Humidity · ${rh.label}`],
+             latest.humidity?.toFixed?.(0) ?? '--', '%', 'Humidity', titleCase(rh.label)],
             ['speedometer-outline', vp.color,
-             latest.vpd ?? '--', 'kPa', `Drying · ${vp.label}`],
-          ].map(([ic, c, v, u, l], i) => (
+             latest.vpd ?? '--', 'kPa', 'Drying', vp.label],
+          ].map(([ic, c, v, u, l, st], i) => (
             <View key={i} style={s.cell}>
               <Ionicons name={ic} size={16} color={c} />
               <Text style={[s.cellVal, { color: c }]}>{v}<Text style={s.cellUnit}>{u}</Text></Text>
+              {/* Name and status on their own lines, across the whole cell. As
+                  one centred line ("Humidity · HUMID") Android measured it short
+                  at a large font size and cut it to "Humidity ·" (9 Oct). */}
               <Text style={s.cellLbl}>{l}</Text>
+              {st ? <Text style={s.cellLbl}>{st}</Text> : null}
             </View>
           ))}
         </View>
 
-        {section?.plan?.waterTime && (
+        {section?.plan?.waterTime && section.plan.date === todayYMD() && (
           <Text style={s.note}>
-            Today's plan was {section.plan.waterTime} for {section.plan.durationSec} seconds.
+            Today's plan: water at {section.plan.waterTime} for {section.plan.durationSec} seconds.
           </Text>
         )}
 
@@ -237,7 +260,9 @@ export default function AlarmScreen({ route, navigation }) {
               <View key={a.id} style={s.otherRow}>
                 <Ionicons name={(ACTION[a.action] || ACTION['check-device']).icon}
                   size={16} color={COLORS.textTertiary} />
-                <Text style={s.otherTxt}>{a.title} · {a.sectionId}</Text>
+                <Text style={s.otherTxt}>
+                  {a.title}{a.sectionId ? ` · ${a.houseId ? `${a.houseId} ` : ''}${a.sectionId}` : ''}
+                </Text>
               </View>
             ))}
           </>
@@ -344,7 +369,7 @@ const s = StyleSheet.create({
   cell: { flex: 1, alignItems: 'center', gap: 3 },
   cellVal: { fontSize: 20, fontWeight: '800', fontVariant: ['tabular-nums'] },
   cellUnit: { fontSize: FONT.xs, fontWeight: '600' },
-  cellLbl: { color: COLORS.textTertiary, fontSize: FONT.xs, textAlign: 'center' },
+  cellLbl: { color: COLORS.textTertiary, fontSize: FONT.xs, textAlign: 'center', alignSelf: 'stretch' },
 
   note: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.md },
 
@@ -352,7 +377,8 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
     paddingVertical: SPACE.sm,
   },
-  otherTxt: { color: COLORS.textSecondary, fontSize: FONT.md },
+  // flex: 1, or a long line runs off the right edge instead of wrapping.
+  otherTxt: { color: COLORS.textSecondary, fontSize: FONT.md, flex: 1 },
 
   clearTitle: { color: COLORS.text, fontSize: 22, fontWeight: '700', marginTop: SPACE.lg },
   clearBody: {

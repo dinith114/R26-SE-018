@@ -77,6 +77,9 @@ TRAY_CHECK_MINUTES  = 15      # how often the humidity trays are assessed
 # up scheduling in UTC. 05:00 local is after the dawn reading exists (dawn is
 # 04:00-07:00) and before the earliest watering the model ever plans (06:06).
 PLAN_HOUR_LOCAL     = 5
+# A section that had no plan at 05:00 - a house activated later that morning,
+# a node that came back - is planned on the next catch-up instead of tomorrow.
+PLAN_CATCHUP_MINUTES = 10
 WATER_WINDOW_MIN    = 20      # how late a missed watering may still be started
 
 
@@ -768,6 +771,33 @@ def run_plan_cycle(now: Optional[datetime] = None, houses: Optional[dict] = None
     return {"planned": len(results)}
 
 
+def run_plan_catch_up(now: datetime, houses: dict) -> dict:
+    """Plan the sections that do not have a plan for today yet.
+
+    The day's plan runs once, at 05:00. A house activated after that - the
+    farm is set up in the morning - had no plan until the next dawn, and the
+    dashboard said "no plan" all day (F8, 9 Oct 2026). This plans only what is
+    missing, with the same dawn reading _plan_section always uses, so the
+    result is the plan 05:00 would have made.
+
+    It cannot pour at a wrong hour: plan times are clamped to 06:00-09:00 and a
+    session is only started within WATER_WINDOW_MIN of its time, so a plan made
+    at 14:00 for 07:10 is shown and never acted on."""
+    today = _today(now)
+    missing = {}
+    for hid, h in _acting_houses(houses or {}).items():
+        if not isinstance(h, dict):
+            continue
+        secs = {sid: sec for sid, sec in (h.get("sections") or {}).items()
+                if isinstance(sec, dict) and (sec.get("plan") or {}).get("date") != today}
+        if secs:
+            missing[hid] = {**h, "sections": secs}
+    if not missing:
+        return {"planned": 0}
+    results = _run_per_section(missing, partial(_plan_section, now=now))
+    return {"planned": len(results), "sections": sorted(results)}
+
+
 # ═══════════════════════ The clock ═══════════════════════════════════════════
 
 # Process-wide facts only: is the clock ticking, and how many passes and
@@ -788,7 +818,8 @@ _state_by_tenant: Dict[str, Dict[str, object]] = {}
 def _state_for(tenant_id: Optional[str]) -> dict:
     return _state_by_tenant.setdefault(tenant_id or "-", {
         "lastTick": None, "lastTray": None, "lastSpatial": None,
-        "lastPlanDay": None, "autoMode": None, "lastError": None,
+        "lastPlanDay": None, "lastPlanCatchUp": None, "autoMode": None,
+        "lastError": None,
     })
 
 
@@ -873,6 +904,13 @@ def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False
     if st["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
         did["plan"] = run_plan_cycle(now, houses)
         st["lastPlanDay"] = _today(now)
+        st["lastPlanCatchUp"] = now
+    elif now.hour >= PLAN_HOUR_LOCAL and (
+            st.get("lastPlanCatchUp") is None
+            or (now - st["lastPlanCatchUp"]) >= timedelta(minutes=PLAN_CATCHUP_MINUTES)):
+        # 1b. ...and anything that missed it, without waiting for tomorrow.
+        did["planCatchUp"] = run_plan_catch_up(now, houses)
+        st["lastPlanCatchUp"] = now
 
     # 2. Estimate the zones with no hardware, BEFORE anything reads them.
     #    Placed here so that by the time the tray check and the watering link

@@ -388,3 +388,171 @@ def test_pump_channels_are_stored_when_the_write_lands(api):
     assert r.status_code == 200, r.text
     meta = db[f"{BASE}/houses/H1/meta.json"]
     assert (meta["waterChannel"], meta["trayChannel"]) == (1, 2)
+
+
+# ── F8: a house activated after 05:00 had no plan until the next dawn ───────
+
+def test_catch_up_plans_only_the_sections_without_todays_plan(monkeypatch):
+    from app.api.routes import automation as a
+    today = NOW.strftime("%Y-%m-%d")
+    houses = {
+        "H1": {"meta": {"lifecycle": "active"}, "sections": {
+            "S1": {"plan": {"date": today, "waterTime": "06:40"}},     # planned at 05:00
+            "S2": {"plan": {"date": "2026-10-07", "waterTime": "06:10"}},  # yesterday's
+            "S3": {"meta": {"name": "no plan ever"}}}},
+        "H2": {"meta": {"lifecycle": "calibrating"}, "sections": {"S1": {}}},
+    }
+    seen = {}
+
+    def fake_run(hs, fn, **k):
+        seen.update({f"{hid}-{sid}": True for hid, h in hs.items()
+                     for sid in (h.get("sections") or {})})
+        return {key: {} for key in seen}
+
+    monkeypatch.setattr(a, "_run_per_section", fake_run)
+    out = a.run_plan_catch_up(NOW, houses)
+    assert sorted(seen) == ["H1-S2", "H1-S3"]           # never the calibrating house
+    assert out["planned"] == 2
+
+
+def test_the_engine_catches_up_every_few_minutes_after_the_dawn_plan(monkeypatch):
+    from app.api.routes import automation as a
+    from app.api.routes import spatial_service
+    from app.services import device_health
+    st = {"lastPlanDay": NOW.strftime("%Y-%m-%d"), "lastPlanCatchUp": None,
+          "lastTray": NOW, "lastSpatial": NOW, "lastTick": None}
+    calls = []
+    monkeypatch.setattr(a, "_fb_get", lambda p: {})
+    monkeypatch.setattr(a, "run_plan_cycle", lambda now, houses: calls.append(("dawn", now)))
+    monkeypatch.setattr(a, "run_plan_catch_up", lambda now, houses: calls.append(("catch", now)) or {})
+    monkeypatch.setattr(a, "run_tray_cycle", lambda now, houses: {})
+    monkeypatch.setattr(a, "run_watering_link", lambda now, houses: {})
+    monkeypatch.setattr(a, "_flush_pending_pushes", lambda: None)
+    monkeypatch.setattr(spatial_service, "interpolate_all", lambda houses, now: {})
+    monkeypatch.setattr(device_health, "check_farm", lambda *x, **k: [])
+    monkeypatch.setattr(a, "get_auto_mode", lambda: False)
+    from app.services.tenant_context import tenant_scope
+    with tenant_scope(TENANT):
+        for minute in (0, 1, 9, 10):
+            a._engine_pass(NOW + timedelta(minutes=minute), st=st, pretend=True)
+    assert [c[0] for c in calls] == ["catch", "catch"]
+    assert calls[1][1] - calls[0][1] == timedelta(minutes=a.PLAN_CATCHUP_MINUTES)
+
+
+def test_a_late_plan_for_a_morning_hour_is_shown_but_never_poured():
+    """Planned at 14:00 for 07:10 (hours are clamped to 06:00-09:00): the
+    watering window has long closed, so nothing is started."""
+    from app.api.routes import automation as a
+    afternoon = NOW.replace(hour=14, minute=0)
+    plan = {"date": afternoon.strftime("%Y-%m-%d"), "waterTime": "07:10", "durationSec": 60}
+    assert a._due_sessions(plan, afternoon) == []
+    assert a._due_sessions(plan, afternoon.replace(hour=7, minute=15))[0]["tag"] == "first"
+
+
+# ── F18: the plan's "yesterday" was the last 2.6 hours, or fake seed data ───
+
+TZ = timezone(timedelta(minutes=330))
+PLAN_NOW = datetime(2026, 10, 9, 5, 0, tzinfo=TZ)
+
+
+def _rd(when, temp, rh):
+    return {"timestamp": when.timestamp() * 1000, "temperature": temp, "humidity": rh, "light": 0}
+
+
+@pytest.fixture
+def farm_clock(monkeypatch):
+    from app.api.routes import smart_care_v2 as sc
+    monkeypatch.setattr(sc, "farm_tz", lambda: TZ)
+    return sc
+
+
+def test_push_key_prefix_matches_a_real_firebase_key(farm_clock):
+    """-P3TMumvi8eqF-Vwd0aO is a real Node 1 history key; its reading was taken
+    at 07:25 on 9 Oct 2026 (farm time). The prefix must decode to that minute
+    and encode back to itself, or the time range would miss real readings."""
+    sc = farm_clock
+    ms = 0
+    for ch in "-P3TMumv":
+        ms = ms * 64 + sc._PUSH_CHARS.index(ch)
+    assert datetime.fromtimestamp(ms / 1000, TZ).strftime("%Y-%m-%d %H:%M") == "2026-10-09 07:25"
+    assert sc._push_key_prefix(ms) == "-P3TMumv"
+    assert sc._push_key_prefix(ms - 1) < "-P3TMumv" < sc._push_key_prefix(ms + 60_000)
+
+
+def test_history_is_asked_for_from_yesterday_midnight_and_never_returns_seed_keys(farm_clock, monkeypatch):
+    sc = farm_clock
+    asked = []
+    monkeypatch.setattr(sc, "_fb_get", lambda p: asked.append(p) or {})
+    sc._recent_history("H1", "S8", PLAN_NOW)
+    q = asked[0]
+    lo = q.split('startAt="', 1)[1].split('"', 1)[0]
+    hi = q.split('endAt="', 1)[1].split('"', 1)[0]
+    midnight = datetime(2026, 10, 8, 0, 0, tzinfo=TZ).timestamp() * 1000
+    assert lo == sc._push_key_prefix(midnight)
+    key_at = lambda when: sc._push_key_prefix(when.timestamp() * 1000) + "abcdefghijkl"
+    assert lo <= key_at(datetime(2026, 10, 8, 13, 0, tzinfo=TZ)) <= hi    # yesterday's afternoon
+    assert lo <= key_at(datetime(2026, 10, 9, 4, 59, tzinfo=TZ)) <= hi    # this morning
+    assert not (lo <= "seed093" <= hi)                                     # the 20 Aug demo data
+    assert "limitToLast" not in q
+
+
+def test_yesterday_means_the_whole_previous_day_not_the_night(farm_clock):
+    """Node 1 on 9 Oct: the old window saw only the night, so 'yesterday's peak'
+    was 28.5 C beside a 28.2 C dawn. The day itself peaked in the afternoon."""
+    sc = farm_clock
+    day = datetime(2026, 10, 8, tzinfo=TZ)
+    raw = {}
+    for h in range(24):                                     # yesterday, every hour
+        temp = 33.0 if h == 14 else 26.0
+        raw[f"y{h:02d}"] = _rd(day + timedelta(hours=h), temp, 80.0)
+    raw["fault"] = _rd(day + timedelta(hours=12, minutes=30), -999, -999)   # a failed read
+    for m in range(0, 300, 10):                             # tonight, 00:00-05:00
+        raw[f"t{m:03d}"] = _rd(PLAN_NOW - timedelta(minutes=m), 25.0, 92.0)
+    y = sc._yesterday_stats(raw, {"temperature": 28.0, "humidity": 70.0}, PLAN_NOW)
+    assert y["peak_temp"] == 33.0                           # the afternoon, not the night
+    assert y["mean_humidity"] == 80.0                       # tonight's 92 % is not "yesterday"
+    assert (y["hours"], y["source"]) == (24, "yesterday")   # and -999 did not count
+
+
+def test_a_partly_recorded_yesterday_is_used_and_labelled(farm_clock):
+    sc = farm_clock
+    raw = {f"k{m}": _rd(datetime(2026, 10, 8, 21, tzinfo=TZ) + timedelta(minutes=m), 28.0, 85.0)
+           for m in range(0, 180, 5)}                       # 21:00-24:00 only, like Node 1
+    y = sc._yesterday_stats(raw, {"temperature": 28.0, "humidity": 70.0}, PLAN_NOW)
+    assert (y["hours"], y["source"]) == (3, "yesterday")
+    assert sc._yesterday_stats({}, {"temperature": 28.0, "humidity": 70.0}, PLAN_NOW)["source"] == "none"
+
+
+def test_dawn_is_this_mornings_not_yesterdays(farm_clock):
+    sc = farm_clock
+    raw = {"yday": _rd(datetime(2026, 10, 8, 5, 0, tzinfo=TZ), 21.0, 95.0),
+           "today": _rd(datetime(2026, 10, 9, 5, 2, tzinfo=TZ), 27.0, 85.0)}
+    assert sc._dawn_reading(raw, {}, PLAN_NOW)["temperature"] == 27.0
+
+
+def test_a_plan_from_a_partial_yesterday_says_so(farm_clock, monkeypatch):
+    sc = farm_clock
+
+    class _Id:
+        @staticmethod
+        def transform(x):
+            return x
+
+    class _Const:
+        def __init__(self, v):
+            self.v = v
+
+        def predict(self, x):
+            return [self.v]
+
+    monkeypatch.setattr(sc, "_water", {"scaler": _Id(), "model_hour": _Const(7.0),
+                                       "model_duration": _Const(60.0), "growth_stage_map": {}})
+    raw = {f"k{m}": _rd(datetime(2026, 10, 8, 21, tzinfo=TZ) + timedelta(minutes=m), 28.0, 85.0)
+           for m in range(0, 180, 5)}
+    monkeypatch.setattr(sc, "_recent_history", lambda h, s, now=None: raw)
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: True)
+    monkeypatch.setattr(sc, "_fert_decision", lambda s: {})
+    section = {"latest": _rd(PLAN_NOW, 28.0, 85.0), "meta": {"name": "S8"}}
+    plan = sc._plan_section("H1", "S8", section, now=PLAN_NOW)
+    assert plan["inputs"]["yesterdayHours"] == 3
+    assert "recorded for 3 of 24 hours" in plan["reason"]
