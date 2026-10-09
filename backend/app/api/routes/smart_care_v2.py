@@ -39,6 +39,7 @@ import joblib
 import time
 import uuid
 import contextvars
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional
@@ -596,6 +597,78 @@ def _yesterday_stats(raw: dict, fallback: dict, now: Optional[datetime] = None) 
             "mean_vpd": round(sum(vpds) / len(vpds), 3),
             "hours": len({(ts.date(), ts.hour) for ts, _, _ in pick}),
             "source": source}
+
+
+# (tenant, house, today's date) -> what the house's sensors measured yesterday
+# and at this dawn. Every unmonitored section in a house needs the same answer
+# and they are planned in parallel, so it is worked out once, under a lock.
+_NEIGHBOURS: Dict[tuple, dict] = {}
+_NEIGHBOUR_LOCK = threading.Lock()
+
+
+def _neighbour_day(house_id: str, fallback: dict, now: datetime) -> dict:
+    """{"yesterday": [stats...], "dawn": [readings...]} from the house's sensors."""
+    key = (current_tenant(), house_id, now.date().isoformat())
+    with _NEIGHBOUR_LOCK:
+        if key not in _NEIGHBOURS:
+            if len(_NEIGHBOURS) > 64:
+                _NEIGHBOURS.clear()
+            sids = _fb_get(f"/farm/houses/{house_id}/sections.json?shallow=true") or {}
+            ys, dawns = [], []
+            for sid in sorted(sids):
+                raw = _recent_history(house_id, sid, now)
+                y = _yesterday_stats(raw, fallback, now)
+                if y["source"] != "none":
+                    ys.append(y)
+                # The same rule a measured section gets from _dawn_reading:
+                # nearest 05:00 today, else today's coolest reading.
+                today = {k: r for k, r in raw.items() if isinstance(r, dict)
+                         and r.get("timestamp") is not None
+                         and _measured(r, "temperature") is not None
+                         and to_farm_time(r["timestamp"]).date() == now.date()}
+                if today:
+                    dawns.append(_dawn_reading(today, {}, now))
+            _NEIGHBOURS[key] = {"yesterday": ys, "dawn": dawns}
+        return _NEIGHBOURS[key]
+
+
+def _neighbour_yesterday(house_id: str, fallback: dict, now: datetime) -> dict:
+    """Yesterday for a zone with no sensor: the mean of the sensors in its house.
+
+    A zone the placement decision left without hardware has no history, and
+    _yesterday_stats fell back to "latest + 5 C" - the same made-up day for
+    every such zone. Its neighbours measured the real one."""
+    got = _neighbour_day(house_id, fallback, now)["yesterday"]
+    if not got:
+        return _yesterday_stats({}, fallback, now)
+    n = len(got)
+    return {"peak_temp": round(sum(y["peak_temp"] for y in got) / n, 1),
+            "mean_humidity": round(sum(y["mean_humidity"] for y in got) / n, 1),
+            "mean_vpd": round(sum(y["mean_vpd"] for y in got) / n, 3),
+            "hours": min(y["hours"] for y in got),
+            "source": f"neighbours ({n})"}
+
+
+def _interpolated_dawn(house_id: str, estimate: dict, now: datetime) -> dict:
+    """Dawn for a zone with no sensor.
+
+    At dawn the kriged estimate IS the dawn reading, and the better one, since
+    it weights the nearer sensors. A plan made later in the day (the catch-up)
+    would otherwise feed the model midday air as "dawn" - 16,743 lux against
+    a training range of 0-4 - so then the sensors' own dawn readings (or,
+    as for a measured section, their coolest today) are averaged instead."""
+    try:
+        if 4 <= to_farm_time(estimate.get("timestamp")).hour <= 7:
+            return estimate
+    except Exception:
+        pass
+    dawns = _neighbour_day(house_id, estimate, now)["dawn"]
+    if not dawns:
+        return estimate
+    n = len(dawns)
+    return {"temperature": round(sum(d["temperature"] for d in dawns) / n, 2),
+            "humidity": round(sum(d["humidity"] for d in dawns) / n, 2),
+            "light": round(sum(d["light"] for d in dawns) / n, 1)}
 
 
 def _dawn_reading(raw: dict, latest: dict, now: Optional[datetime] = None) -> dict:
@@ -1509,7 +1582,12 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     pass was evaluating a simulated one, so `_due_sessions` compared two
     different days and the watering never fired. Defaults to real time, so
     production behaviour is unchanged."""
-    latest = _clean((section or {}).get("latest") or {})
+    # Its own reading, or - for a zone with no sensor - the kriged estimate.
+    # _reading_for_planning existed for exactly this and nothing called it, so
+    # every unmonitored zone was planned from _clean({}): 28 C and 70 %, the
+    # same plan for all of them (F19, 9 Oct 2026).
+    reading, provenance, est_info = _reading_for_planning(section)
+    latest = _clean(reading)
     meta   = (section or {}).get("meta") or {}
 
     gs = _resolve_growth_stage(section)
@@ -1523,8 +1601,11 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     # one history fetch feeds both the daily summary and the dawn lookup
     hist = _recent_history(house_id, section_id, now)
     y = _yesterday_stats(hist, latest, now)
+    if provenance == "interpolated" and y["source"] == "none":
+        y = _neighbour_yesterday(house_id, latest, now)
     # the model decides at dawn — use the dawn reading, not whatever time it is now
-    dawn = _dawn_reading(hist, latest, now)
+    dawn = (_interpolated_dawn(house_id, latest, now) if provenance == "interpolated"
+            else _dawn_reading(hist, latest, now))
     dawn_vpd = vpd_kpa(dawn["temperature"], dawn["humidity"])
 
     feats = np.array([[
@@ -1579,13 +1660,19 @@ def _plan_section(house_id: str, section_id: str, section: dict,
                    "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"],
                    "yesterdayMeanHumidity": y["mean_humidity"],
                    # How much of "yesterday" the node actually recorded.
-                   "yesterdayHours": y["hours"], "yesterdaySource": y["source"]},
+                   "yesterdayHours": y["hours"], "yesterdaySource": y["source"],
+                   # "interpolated": this zone has no sensor; read from kriging
+                   "source": provenance,
+                   **({"estimate": est_info} if est_info else {})},
         # `now` is the FARM's clock here; stamped as farm time with a "UTC"
         # label it read five and a half hours in the future (8 Oct E2E run).
         "generatedAt": (now.astimezone(timezone.utc) if now.tzinfo else now
                         ).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
+    if provenance == "interpolated":
+        plan["reason"] += (" This zone has no sensor of its own: its conditions are "
+                           "estimated from the sensors around it.")
     # Said, not hidden: the time leans on a day the node only partly saw.
     if y["hours"] < YESTERDAY_FULL_HOURS:
         plan["reason"] += (
