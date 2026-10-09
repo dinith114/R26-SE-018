@@ -388,3 +388,62 @@ def test_pump_channels_are_stored_when_the_write_lands(api):
     assert r.status_code == 200, r.text
     meta = db[f"{BASE}/houses/H1/meta.json"]
     assert (meta["waterChannel"], meta["trayChannel"]) == (1, 2)
+
+
+# ── F8: a house activated after 05:00 had no plan until the next dawn ───────
+
+def test_catch_up_plans_only_the_sections_without_todays_plan(monkeypatch):
+    from app.api.routes import automation as a
+    today = NOW.strftime("%Y-%m-%d")
+    houses = {
+        "H1": {"meta": {"lifecycle": "active"}, "sections": {
+            "S1": {"plan": {"date": today, "waterTime": "06:40"}},     # planned at 05:00
+            "S2": {"plan": {"date": "2026-10-07", "waterTime": "06:10"}},  # yesterday's
+            "S3": {"meta": {"name": "no plan ever"}}}},
+        "H2": {"meta": {"lifecycle": "calibrating"}, "sections": {"S1": {}}},
+    }
+    seen = {}
+
+    def fake_run(hs, fn, **k):
+        seen.update({f"{hid}-{sid}": True for hid, h in hs.items()
+                     for sid in (h.get("sections") or {})})
+        return {key: {} for key in seen}
+
+    monkeypatch.setattr(a, "_run_per_section", fake_run)
+    out = a.run_plan_catch_up(NOW, houses)
+    assert sorted(seen) == ["H1-S2", "H1-S3"]           # never the calibrating house
+    assert out["planned"] == 2
+
+
+def test_the_engine_catches_up_every_few_minutes_after_the_dawn_plan(monkeypatch):
+    from app.api.routes import automation as a
+    from app.api.routes import spatial_service
+    from app.services import device_health
+    st = {"lastPlanDay": NOW.strftime("%Y-%m-%d"), "lastPlanCatchUp": None,
+          "lastTray": NOW, "lastSpatial": NOW, "lastTick": None}
+    calls = []
+    monkeypatch.setattr(a, "_fb_get", lambda p: {})
+    monkeypatch.setattr(a, "run_plan_cycle", lambda now, houses: calls.append(("dawn", now)))
+    monkeypatch.setattr(a, "run_plan_catch_up", lambda now, houses: calls.append(("catch", now)) or {})
+    monkeypatch.setattr(a, "run_tray_cycle", lambda now, houses: {})
+    monkeypatch.setattr(a, "run_watering_link", lambda now, houses: {})
+    monkeypatch.setattr(a, "_flush_pending_pushes", lambda: None)
+    monkeypatch.setattr(spatial_service, "interpolate_all", lambda houses, now: {})
+    monkeypatch.setattr(device_health, "check_farm", lambda *x, **k: [])
+    monkeypatch.setattr(a, "get_auto_mode", lambda: False)
+    from app.services.tenant_context import tenant_scope
+    with tenant_scope(TENANT):
+        for minute in (0, 1, 9, 10):
+            a._engine_pass(NOW + timedelta(minutes=minute), st=st, pretend=True)
+    assert [c[0] for c in calls] == ["catch", "catch"]
+    assert calls[1][1] - calls[0][1] == timedelta(minutes=a.PLAN_CATCHUP_MINUTES)
+
+
+def test_a_late_plan_for_a_morning_hour_is_shown_but_never_poured():
+    """Planned at 14:00 for 07:10 (hours are clamped to 06:00-09:00): the
+    watering window has long closed, so nothing is started."""
+    from app.api.routes import automation as a
+    afternoon = NOW.replace(hour=14, minute=0)
+    plan = {"date": afternoon.strftime("%Y-%m-%d"), "waterTime": "07:10", "durationSec": 60}
+    assert a._due_sessions(plan, afternoon) == []
+    assert a._due_sessions(plan, afternoon.replace(hour=7, minute=15))[0]["tag"] == "first"
