@@ -48,7 +48,7 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import {
   getOverview, deleteHouse,
   renameFarm, renameHouse, getAlarms, humidityStatus, vpdStatus,
-  getDevices, setHouseMaster,
+  getDevices, setHouseMaster, setHousePumps,
 } from '../services/careV2';
 
 /** "GOOD" shouted at the farmer; "Good" just tells them. */
@@ -119,6 +119,10 @@ const nowHHMM = () => {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
+const todayYMD = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 export default function FarmDashboardScreen({ navigation }) {
   // { kind: 'farm' } or { kind: 'house', id, name } — null when nothing is open
@@ -166,6 +170,12 @@ export default function FarmDashboardScreen({ navigation }) {
      is least sure what they just tapped. The app already owns SelectSheet and
      ConfirmSheet; this is the last screen that was not using them. */
   const [houseMenu, setHouseMenu] = useState(null);   // the house, or null
+  /* Which relay channel drives each of the house's two pumps.
+     { houseId, name, step: 'water' | 'tray', water, tray }
+     The backend has had this setting for weeks and no screen could reach it, so
+     a house whose master was chosen in the app still refused every Water Now
+     with "no watering pump channel is set". Found in the end-to-end run. */
+  const [pumps, setPumps] = useState(null);
   /* What this account may do. The server refuses the rest whatever happens
      here; this only stops the screen offering a control that would 403. */
   const can = useCan();
@@ -187,7 +197,8 @@ export default function FarmDashboardScreen({ navigation }) {
 
   const openMaster = async (h) => {
     setMaster({ houseId: h.houseId, name: h.meta?.name || h.houseId,
-                current: h.meta?.masterMac || null, devices: null });
+                current: h.meta?.masterMac || null, devices: null,
+                hasChannels: h.meta?.waterChannel != null || h.meta?.trayChannel != null });
     try {
       const r = await getDevices();
       setMaster((m) => (m && m.houseId === h.houseId
@@ -205,9 +216,12 @@ export default function FarmDashboardScreen({ navigation }) {
      anything it "measured" would describe wherever it happens to be, which is
      the one mistake this whole system exists to avoid.
      Boards belonging to a DIFFERENT house are excluded: taking one would strip
-     that house of a sensor to solve this house's problem. */
+     that house of a sensor to solve this house's problem.
+     QUIET boards are excluded too. They are recording-only builds that never
+     poll the command queue, so naming one the master meant every command sat
+     unanswered until it expired. The server now refuses them as well. */
   const masterOptions = () => {
-    const list = master?.devices || [];
+    const list = (master?.devices || []).filter((d) => !d.quiet);
     const mine = list.filter((d) => d.house === master.houseId);
     const free = list.filter((d) => !d.assignedTo);
     const row = (d, sub) => ({
@@ -224,15 +238,43 @@ export default function FarmDashboardScreen({ navigation }) {
   };
 
   const saveMaster = async (mac) => {
-    const { houseId } = master;
+    const { houseId, hasChannels } = master;
     setMaster(null);
     setSavingMaster(true);
     try {
       await setHouseMaster(houseId, mac === '__none__' ? null : mac);
+      /* A master with no pump channels cannot pour anything, and nothing said
+         so until the first Water Now was refused. Channels 1 and 2 are the
+         wiring in the guide (IN1 watering pump, IN2 tray pump), so a house
+         that has none gets those - and is told, because a board wired
+         differently would otherwise run the wrong pump. */
+      if (mac !== '__none__' && !hasChannels) {
+        try {
+          await setHousePumps(houseId, 1, 2);
+          Alert.alert('Master set',
+            'Watering pump on relay channel 1 and tray pump on channel 2, as in the '
+            + 'wiring guide. If this board is wired differently, change it from the '
+            + "house's ... menu, under Pump channels.");
+        } catch (e) {
+          Alert.alert('Master set, pumps not set',
+            `${e.message}\n\nSet them from the house's ... menu, under Pump channels.`);
+        }
+      }
       await load();
     } catch (e) {
       Alert.alert('Could not set the master', e.message);
     } finally { setSavingMaster(false); }
+  };
+
+  const savePumps = async (water, tray) => {
+    const { houseId } = pumps;
+    setPumps(null);
+    try {
+      await setHousePumps(houseId, water, tray);
+      await load();
+    } catch (e) {
+      Alert.alert('Could not set the pump channels', e.message);
+    }
   };
 
   const startFlow = (kind) => {
@@ -322,15 +364,24 @@ export default function FarmDashboardScreen({ navigation }) {
   /* The next thing the farm will do on its own. Buried in a chip inside an
      expanded section card before, which meant the single most useful fact on
      the screen took two taps to reach. */
+  /* Only TODAY's plans. The engine waters a plan only on the day it was made
+     (automation checks plan.date), but this used every waterTime it found, so
+     a section that stopped reporting weeks ago kept its last plan and was
+     shown as the next watering - with " tomorrow" added once today's times had
+     passed, which promised something nobody had planned. Found in the
+     end-to-end run, 9 Oct 2026. */
   const t = nowHHMM();
+  const today = todayYMD();
   const upcoming = flat
-    .filter(s => s.plan?.waterTime)
+    .filter(s => s.plan?.waterTime && s.plan?.date === today)
     .map(s => ({ at: s.plan.waterTime, secs: s.plan.durationSec,
                  name: s.meta?.name || s.sectionId,
                  houseId: s.houseId, sectionId: s.sectionId }))
     .sort((a, b) => a.at.localeCompare(b.at));
-  const nextUp = upcoming.find(u => u.at > t) || upcoming[0];
-  const nextIsTomorrow = !!upcoming.length && !upcoming.find(u => u.at > t);
+  const nextUp = upcoming.find(u => u.at > t) || null;
+  // Not "done": a planned time can pass without a pour (Manual mode, an alarm
+  // nobody answered), and this line cannot tell which.
+  const doneToday = !!upcoming.length && !nextUp;
 
   /* The band's tone. Danger only for things that STOP the farm working; a tray
      wanting a top-up is ordinary business and must not paint the screen red,
@@ -525,14 +576,14 @@ export default function FarmDashboardScreen({ navigation }) {
                     Next: <Text style={styles.nextStrong}>{nextUp.name}</Text> at{' '}
                     <Text style={styles.nextStrong}>{nextUp.at}</Text>
                     {nextUp.secs ? ` for ${nextUp.secs}s` : ''}
-                    {nextIsTomorrow ? ' tomorrow' : ''}
                   </Text>
                   <Ionicons name="chevron-forward" size={14} color={COLORS.textTertiary} />
                 </TouchableOpacity>
               ) : (
                 <Text style={styles.nextNone}>
-                  No watering planned yet — the plan is worked out at dawn from that
-                  morning's readings.
+                  {doneToday
+                    ? "Nothing more is planned for today. Tomorrow's plan is worked out at dawn from that morning's readings."
+                    : "No watering planned yet — the plan is worked out at dawn from that morning's readings."}
                 </Text>
               )}
             </View>
@@ -641,9 +692,9 @@ export default function FarmDashboardScreen({ navigation }) {
 
                   <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     accessibilityRole="button"
-                    accessibilityLabel={`Options for ${h.meta?.name || h.houseId}: rename or delete`}
-                    disabled={!can('renameHouse') && !can('deleteHouse')}
-                    onPress={(can('renameHouse') || can('deleteHouse'))
+                    accessibilityLabel={`Options for ${h.meta?.name || h.houseId}: rename, pump channels or delete`}
+                    disabled={!can('renameHouse') && !can('deleteHouse') && !can('setHousePumps')}
+                    onPress={(can('renameHouse') || can('deleteHouse') || can('setHousePumps'))
                       ? () => setHouseMenu(h) : undefined}>
                     <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textTertiary} />
                   </TouchableOpacity>
@@ -872,11 +923,16 @@ export default function FarmDashboardScreen({ navigation }) {
           ? `${houseMenu.meta?.type || 'house'} · ${houseMenu.sections?.length || 0} sections`
           : undefined}
         options={[
-          { key: 'rename', label: 'Rename house',
+          can('renameHouse') && { key: 'rename', label: 'Rename house',
             sub: 'Only the name changes. Sections and readings are untouched.' },
-          { key: 'delete', label: 'Delete house',
+          can('setHousePumps') && { key: 'pumps', label: 'Pump channels',
+            sub: houseMenu?.meta?.waterChannel != null || houseMenu?.meta?.trayChannel != null
+              ? `Watering pump on channel ${houseMenu?.meta?.waterChannel ?? '-'}, `
+                + `tray pump on channel ${houseMenu?.meta?.trayChannel ?? '-'}.`
+              : 'Not set - Water Now and Fill Tray are refused until they are.' },
+          can('deleteHouse') && { key: 'delete', label: 'Delete house',
             sub: 'Removes the house, its sections and its readings, and frees its nodes.' },
-        ]}
+        ].filter(Boolean)}
         confirmOnSelect
         onCancel={() => setHouseMenu(null)}
         onConfirm={(k) => {
@@ -884,8 +940,39 @@ export default function FarmDashboardScreen({ navigation }) {
           setHouseMenu(null);
           if (k === 'rename') {
             setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else if (k === 'pumps') {
+            setPumps({ houseId: h.houseId, name: h.meta?.name || h.houseId, step: 'water',
+                       water: h.meta?.waterChannel ?? null, tray: h.meta?.trayChannel ?? null });
           } else {
             setConfirmDel(h);
+          }
+        }} />
+
+      {/* Pump channels, one pump at a time. The tray step leaves out the
+          watering pump's channel: one relay drives one motor, and the server
+          refuses a shared channel anyway. */}
+      <SelectSheet
+        key={`pumps-${pumps?.step || 'closed'}`}
+        visible={!!pumps}
+        title={pumps?.step === 'tray' ? 'Tray pump channel' : 'Watering pump channel'}
+        subtitle={pumps
+          ? `${pumps.name} · the relay channel (IN1-IN8) the pump is wired to`
+          : undefined}
+        options={[1, 2, 3, 4, 5, 6, 7, 8]
+          .filter((n) => pumps?.step !== 'tray' || n !== pumps?.water)
+          .map((n) => ({ key: String(n), label: `Channel ${n}`,
+                         sub: n === 1 ? 'IN1 - the watering pump in the wiring guide'
+                            : n === 2 ? 'IN2 - the tray pump in the wiring guide' : undefined }))}
+        value={pumps ? String((pumps.step === 'tray' ? pumps.tray : pumps.water) ?? '') : null}
+        confirmOnSelect
+        onCancel={() => setPumps(null)}
+        onConfirm={(k) => {
+          const n = Number(k);
+          if (pumps.step === 'water') {
+            setPumps({ ...pumps, water: n, step: 'tray',
+                       tray: pumps.tray === n ? null : pumps.tray });
+          } else {
+            savePumps(pumps.water, n);
           }
         }} />
 

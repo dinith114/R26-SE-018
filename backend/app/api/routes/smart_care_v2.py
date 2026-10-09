@@ -64,6 +64,20 @@ from app.services.tenant_context import (
 
 router = APIRouter()
 
+NOT_SAVED = ("That was not saved - the database did not answer. "
+             "Check the connection and try again.")
+
+
+def _put_or_502(path: str, data) -> None:
+    """Write a setting the farmer will then rely on, or say it did not happen.
+
+    _fb_put returns False on failure (after its one retry) and several routes
+    ignored that, so a house master, its pump channels or a placement could
+    answer "success" with nothing saved. The farmer only found out when the
+    next Water Now was refused. Same fault as the co-location button (F1)."""
+    if not _fb_put(path, data):
+        raise HTTPException(502, NOT_SAVED)
+
 
 def _fb_delete(path: str) -> bool:
     try:
@@ -3273,7 +3287,7 @@ async def set_house_dimensions(house_id: str, body: DimensionsIn, ctx: AuthConte
         raise HTTPException(404, "House not found")
     meta["width"] = round(float(body.width), 2)
     meta["length"] = round(float(body.length), 2)
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
     return {"status": "success", "width": meta["width"], "length": meta["length"]}
 
 
@@ -3405,7 +3419,7 @@ async def apply_placement(house_id: str, body: ApplyPlacementIn, ctx: AuthContex
     meta["placement"] = {"keep": sorted(keep, key=_natural_key),
                          "appliedAt": _server_now_ms(),
                          "freed": [f["mac"] for f in freed]}
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
     _DEVICE_CACHE["devices"] = None                 # assignments just changed
 
     # A house that has just given up sensors can ONLY water those zones through
@@ -3602,7 +3616,7 @@ async def set_house_master(house_id: str, body: MasterIn, ctx: AuthContext = Dep
         meta["masterMac"] = mac
     else:
         meta.pop("masterMac", None)
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
     _DEVICE_CACHE["devices"] = None                 # force a fresh read
 
     return {"status": "success", "masterMac": meta.get("masterMac"),
@@ -3655,7 +3669,7 @@ async def set_house_pumps(house_id: str, body: PumpsIn, ctx: AuthContext = Depen
             409, "The watering pump and the tray pump cannot share a channel - "
                  "one relay drives one motor, so they would be the same pump.")
 
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
     return {"status": "success", "houseId": house_id,
             "waterChannel": meta.get("waterChannel"),
             "trayChannel": meta.get("trayChannel"),
@@ -3880,7 +3894,7 @@ async def edit_house(house_id: str, body: HouseEdit, ctx: AuthContext = Depends(
         v = getattr(body, k)
         if v is not None:
             meta[k] = v
-    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
     return {"status": "success", "meta": meta}
 
 

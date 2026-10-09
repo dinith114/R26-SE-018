@@ -207,6 +207,12 @@ export const getHouseHealth = (h) => req(`/houses/${h}/health`);
 export const setHouseMaster = (h, masterMac) =>
   req(`/houses/${h}/master`, { method: 'PUT', body: JSON.stringify({ masterMac }) });
 
+/** Which relay channels drive the house's two pumps. Send BOTH every time: the
+ *  server clears a channel that is missing from the body. */
+export const setHousePumps = (h, waterChannel, trayChannel) =>
+  req(`/houses/${h}/pumps`, { method: 'PUT',
+    body: JSON.stringify({ waterChannel, trayChannel }) });
+
 export const addSection  = (h, s)     => req(`/houses/${h}/sections`, { method: 'POST', body: JSON.stringify(s) });
 export const updateSection = (h, s, body) =>
   req(`/houses/${h}/sections/${s}`, { method: 'PUT', body: JSON.stringify(body) });

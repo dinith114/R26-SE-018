@@ -350,3 +350,41 @@ def test_no_tray_fill_is_sent_at_night_but_the_same_air_fills_by_day(monkeypatch
     assert "night" in night["message"]
     day = decide(datetime(2026, 10, 9, 10, 0, tzinfo=tz))
     assert day["fillSeconds"] > 0 and day["autoCommanded"] and len(sent) == 1
+
+
+# ── F17: a house setting that was never saved answered "success" ────────────
+
+def _fail_writes(monkeypatch):
+    from app.api.routes import smart_watering
+    monkeypatch.setattr(smart_watering, "FB_RETRY_DELAY_S", 0)
+
+    def refuse(url, **kw):
+        raise ConnectionError("firebase unreachable")
+    monkeypatch.setattr(smart_watering._req, "put", refuse)
+
+
+@pytest.mark.parametrize("url,body", [
+    ("/api/v2/care/houses/H1/master", {"masterMac": "AABBCCDDEE02"}),
+    ("/api/v2/care/houses/H1/pumps", {"waterChannel": 1, "trayChannel": 2}),
+    ("/api/v2/care/houses/H1/dimensions", {"width": 10, "length": 20}),
+    ("/api/v2/care/houses/H1", {"name": "Renamed"}),
+])
+def test_a_house_setting_that_was_not_saved_says_so(api, monkeypatch, url, body):
+    """The master and pump routes ignored _fb_put's False. The farmer was told
+    the master was set, and found out otherwise when Water Now was refused."""
+    client, db = api
+    before = dict(db[f"{BASE}/houses/H1/meta.json"])
+    _fail_writes(monkeypatch)
+    r = client.put(url, json=body, headers=TOK)
+    assert r.status_code == 502, r.text
+    assert "not saved" in r.json()["detail"]
+    assert db[f"{BASE}/houses/H1/meta.json"] == before
+
+
+def test_pump_channels_are_stored_when_the_write_lands(api):
+    client, db = api
+    r = client.put("/api/v2/care/houses/H1/pumps",
+                   json={"waterChannel": 1, "trayChannel": 2}, headers=TOK)
+    assert r.status_code == 200, r.text
+    meta = db[f"{BASE}/houses/H1/meta.json"]
+    assert (meta["waterChannel"], meta["trayChannel"]) == (1, 2)

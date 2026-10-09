@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, Linking } from 'react-native';
 import SplashScreen from './src/screens/SplashScreen';
 import AppNavigator from './src/navigation/AppNavigator';
 import LoginScreen from './src/screens/LoginScreen';
@@ -35,6 +35,26 @@ export default function App() {
  * alarms it has no right to see.
  */
 function PushAlarms({ go }) {
+  /* The native alarm screen (AlarmActivity) opens the app with
+     orchidcare://alarm?ids=<json>. Without this nothing read it, and "Open the
+     app" landed on the dashboard with no way to the Alarm screen. Found in the
+     end-to-end run, 9 Oct 2026.
+
+     getInitialURL keeps returning the launch link for the life of the process,
+     so it is taken once; signing out and back in must not replay an old alarm. */
+  useEffect(() => {
+    const open = (url) => {
+      const ids = alarmIdsFromUrl(url);
+      if (ids !== undefined) go('Alarm', { alarmIds: ids });
+    };
+    if (!initialAlarmLinkTaken) {
+      initialAlarmLinkTaken = true;
+      Linking.getInitialURL().then(open).catch(() => {});
+    }
+    const sub = Linking.addEventListener('url', ({ url }) => open(url));
+    return () => sub.remove();
+  }, [go]);
+
   usePushAlarms(
     useCallback((data) => {
       /* An ALARM is a different thing from a notification. It was raised
@@ -59,6 +79,20 @@ function PushAlarms({ go }) {
     }, [go]),
   );
   return null;
+}
+
+let initialAlarmLinkTaken = false;
+
+/* undefined: not an alarm link. null: an alarm link with no usable ids, which
+   still opens the Alarm screen showing every alarm that is waiting. */
+function alarmIdsFromUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('orchidcare://alarm')) return undefined;
+  const m = url.match(/[?&]ids=([^&#]*)/);
+  if (!m || !m[1]) return null;
+  try {
+    const ids = JSON.parse(decodeURIComponent(m[1]));
+    return Array.isArray(ids) && ids.length ? ids.map(String) : null;
+  } catch (_) { return null; }
 }
 
 function Root() {
