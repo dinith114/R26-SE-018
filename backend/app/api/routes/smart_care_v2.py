@@ -2250,16 +2250,28 @@ def _days_since_fertilized(section: dict) -> float:
         return float(FERT_UNKNOWN_DAYS)
 
 
-def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
+def _record_fertilized(house_id: str, section_id: str, section: dict,
+                       command: Optional[dict] = None) -> None:
     """Start the clock. Called when a watering that CARRIES fertilizer is issued.
 
     Recorded at issue rather than at the node's acknowledgement: an ack can be
     lost, and feeding twice because a confirmation went missing is worse than
     the small risk of counting a feed the pump never delivered. The farmer can
     correct it from the section screen.
+
+    But a controller that ANSWERS "I did not pour that" is not a lost ack. With
+    `command` (the master-routed one) the feed is also parked under
+    /farm/pendingFeeds, and settle_pending_feeds() undoes it if the master
+    acks the pour with 0 seconds run - stale, invalid, unsupported, zero. Seen
+    on 9 Oct: a fed Water Now sat in an offline master's queue, was refused as
+    stale 23 minutes later, and the section still said "Fed at 09:58 - next
+    feed in about 7 days".
     """
     now_ms = _device_now_ms(section)
     base = f"/farm/houses/{house_id}/sections/{section_id}/fertilizer"
+    fert_before = (section or {}).get("fertilizer") or {}
+    prev = {k: fert_before.get(k) for k in
+            ("due", "npkType", "message", "lastFertilizedTs", "lastFertilizedAt")}
     _fb_put(f"{base}/lastFertilizedTs.json", now_ms)
     # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
     # raised inside the request and turned every fertilised watering into a 500,
@@ -2277,6 +2289,80 @@ def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
     _fb_put(f"{base}/npkType.json", "None")
     _fb_put(f"{base}/message.json",
             f"Fed at {fed_at[-5:]} - next feed in about {int(interval)} days.")
+    master = (command or {}).get("routedTo")
+    if command and command.get("id") and master:
+        _fb_put(f"/farm/pendingFeeds/{command['id']}.json",
+                {"houseId": house_id, "sectionId": section_id, "master": master,
+                 "issuedAtMs": int(_server_now_ms()), "fedAt": fed_at, "prev": prev})
+
+
+# A parked feed whose command never got an answer is let go after this: by then
+# the ack is lost, not late, and the rule above (never feed twice) wins.
+PENDING_FEED_MAX_MS = 24 * 3600_000
+
+
+def settle_pending_feeds() -> List[dict]:
+    """Undo a recorded feed that the master controller says it never poured.
+
+    Reads /farm/pendingFeeds - normally empty - and, for each, the master's
+    ack for that command. ranSec > 0: the water ran, the feed stands. 0: the
+    controller refused it, so the section is due again and says why. Returns
+    the feeds undone, for the engine to tell the farmer."""
+    undone: List[dict] = []
+    pend = _fb_get("/farm/pendingFeeds.json") or {}
+    for cid, p in pend.items():
+        if not isinstance(p, dict):
+            continue
+        ack = _fb_get(f"/farm/masters/{p.get('master')}/acks/{cid}.json") or {}
+        if ack.get("id") != cid:
+            if _server_now_ms() - float(p.get("issuedAtMs") or 0) > PENDING_FEED_MAX_MS:
+                _fb_delete(f"/farm/pendingFeeds/{cid}.json")
+            continue
+        hid, sid = p.get("houseId"), p.get("sectionId")
+        ran = int(ack.get("ranSec") or 0)
+        base = f"/farm/houses/{hid}/sections/{sid}/fertilizer"
+        # Only if nothing newer was fed in between: undoing a later, real feed
+        # would be the double-feeding this whole design exists to prevent.
+        if ran <= 0 and _fb_get(f"{base}/lastFertilizedAt.json") == p.get("fedAt"):
+            prev = p.get("prev") or {}
+            for k in ("lastFertilizedTs", "lastFertilizedAt"):
+                if prev.get(k) is None:
+                    _fb_delete(f"{base}/{k}.json")
+                else:
+                    _fb_put(f"{base}/{k}.json", prev[k])
+            _fb_put(f"{base}/due.json", True if prev.get("due") is None else prev["due"])
+            if prev.get("npkType") not in (None, "None"):
+                _fb_put(f"{base}/npkType.json", prev["npkType"])
+            why = ack.get("outcome") or "not run"
+            _fb_put(f"{base}/message.json",
+                    f"The {p.get('fedAt', '')[-5:]} feed did not happen: the master controller "
+                    f"did not run that watering ({why}). Still due - it goes with the next watering.")
+            undone.append({"houseId": hid, "sectionId": sid, "commandId": cid,
+                           "outcome": why, "fedAt": p.get("fedAt")})
+        _stamp_event_outcome(hid, sid, cid, ack)
+        _fb_delete(f"/farm/pendingFeeds/{cid}.json")
+    return undone
+
+
+def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict) -> None:
+    """Write what the controller did onto the event that asked for it.
+
+    `confirmed` means water moved. It used to be set for ANY final ack, so a
+    command the master threw away as stale went into the history as a
+    confirmed watering."""
+    try:
+        ran = int(ack.get("ranSec") or 0)
+        evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+        for k, v in evs.items():
+            if isinstance(v, dict) and v.get("commandId") == command_id and v.get("outcome") is None:
+                ev = f"/farm/events/{house_id}/{section_id}/{k}"
+                _fb_put(f"{ev}/confirmed.json", ran > 0)
+                _fb_put(f"{ev}/outcome.json", ack.get("outcome") or ("done" if ran > 0 else "not run"))
+                _fb_put(f"{ev}/ranSec.json", ran)
+                _fb_put(f"{ev}/stoppedEarly.json", ack.get("outcome") == "stopped")
+                break
+    except Exception:
+        pass
 
 
 # How many events are kept per section. Events are written a handful of times a
@@ -2826,7 +2912,7 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
     # never be cleared.
     fert_now = _fert_decision(s) if command["withFertilizer"] else None
     if command["withFertilizer"]:
-        _record_fertilized(house_id, section_id, s)
+        _record_fertilized(house_id, section_id, s, node_cmd)
     _log_event(house_id, section_id, s,
                action="water",
                durationSec=command["durationSec"],
@@ -3008,16 +3094,9 @@ def command_status(house_id: str, section_id: str,
     # throughout every manual run, so the history learns whether the node
     # actually did the work without any extra request.
     if matches and bool(ack.get("done")) and want:
-        try:
-            evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
-            for k, v in evs.items():
-                if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
-                    ev = f"/farm/events/{house_id}/{section_id}/{k}"
-                    _fb_put(f"{ev}/confirmed.json", True)
-                    _fb_put(f"{ev}/stoppedEarly.json", bool(ack.get("stopped")))
-                    break
-        except Exception:
-            pass
+        _stamp_event_outcome(house_id, section_id, want,
+                             {"ranSec": ack.get("ranSec", ack.get("durationSec")),
+                              "outcome": ack.get("outcome") or ("stopped" if ack.get("stopped") else None)})
 
     return {
         "status": "success",

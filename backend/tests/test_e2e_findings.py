@@ -633,3 +633,68 @@ def test_a_late_plan_for_an_unmonitored_zone_does_not_use_midday_air_as_dawn(far
     sc._plan_section("H2", "S5", {"estimated": estimate}, now=late)
     dawn_t, dawn_rh, dawn_light = seen[0][:3]
     assert (dawn_t, dawn_rh, dawn_light) == (23.0, 91.0, 0.0)   # S1's 05:01 reading
+
+
+# ── F20: a fed watering the master refused still counted as a feed ──────────
+
+def _fake_fb(monkeypatch, db):
+    from app.api.routes import smart_care_v2 as sc
+    monkeypatch.setattr(sc, "_fb_get", lambda p: db.get(p.split("?")[0]))
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: db.__setitem__(p, v) or True)
+    monkeypatch.setattr(sc, "_fb_delete", lambda p: db.pop(p, None) is not None or True)
+    return sc
+
+
+def test_a_feed_the_master_refused_as_stale_is_undone(farm_clock, monkeypatch):
+    """9 Oct, live: Water Now with plant food into an offline master; 23 min
+    later it acked 'stale', ranSec 0 - and the section still said 'Fed at
+    09:58 - next feed in about 7 days'."""
+    db = {}
+    sc = _fake_fb(monkeypatch, db)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    base = "/farm/houses/H2/sections/S2/fertilizer"
+    section = {"latest": _rd(PLAN_NOW, 28.0, 70.0),
+               "fertilizer": {"due": True, "npkType": "30-10-10", "intervalDays": 7,
+                              "message": "Feed 30-10-10 at 50%"}}
+    cmd = {"id": "c0ffee000001", "routedTo": "5E5E5E5E00FF"}
+    sc._record_fertilized("H2", "S2", section, cmd)
+    assert db[f"{base}/due.json"] is False                      # recorded at issue, as designed
+    db["/farm/pendingFeeds.json"] = {"c0ffee000001": db.pop("/farm/pendingFeeds/c0ffee000001.json")}
+    db["/farm/masters/5E5E5E5E00FF/acks/c0ffee000001.json"] = {
+        "id": "c0ffee000001", "outcome": "stale", "ranSec": 0}
+    deleted = []
+    monkeypatch.setattr(sc, "_fb_delete", lambda p: deleted.append(p) or True)
+    undone = sc.settle_pending_feeds()
+    assert [u["outcome"] for u in undone] == ["stale"]
+    assert db[f"{base}/due.json"] is True and db[f"{base}/npkType.json"] == "30-10-10"
+    assert "did not happen" in db[f"{base}/message.json"]
+    assert f"{base}/lastFertilizedAt.json" in deleted              # no feed before this one
+    assert "/farm/pendingFeeds/c0ffee000001.json" in deleted
+
+
+def test_a_feed_that_ran_stands_and_a_lost_ack_is_never_undone(farm_clock, monkeypatch):
+    db = {}
+    sc = _fake_fb(monkeypatch, db)
+    now = {"ms": PLAN_NOW.timestamp() * 1000}
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: now["ms"])
+    base = "/farm/houses/H2/sections/S2/fertilizer"
+    p = {"houseId": "H2", "sectionId": "S2", "master": "M1", "issuedAtMs": now["ms"],
+         "fedAt": "2026-10-09 05:00", "prev": {"due": True, "npkType": "30-10-10"}}
+    db["/farm/pendingFeeds.json"] = {"ran": dict(p), "lost": dict(p)}
+    db["/farm/masters/M1/acks/ran.json"] = {"id": "ran", "outcome": "done", "ranSec": 88}
+    db[f"{base}/lastFertilizedAt.json"] = "2026-10-09 05:00"
+    db[f"{base}/due.json"] = False
+    assert sc.settle_pending_feeds() == []
+    assert db[f"{base}/due.json"] is False                       # it poured: the feed stands
+    now["ms"] += 25 * 3600_000                                   # a day on, still no ack
+    db["/farm/pendingFeeds.json"] = {"lost": dict(p)}
+    assert sc.settle_pending_feeds() == []
+    assert db[f"{base}/due.json"] is False                       # never feed twice on a lost ack
+
+
+def test_a_refused_command_is_not_a_confirmed_watering_in_the_history(farm_clock, monkeypatch):
+    db = {"/farm/events/H2/S2.json": {"1": {"commandId": "c1", "confirmed": False}}}
+    sc = _fake_fb(monkeypatch, db)
+    sc._stamp_event_outcome("H2", "S2", "c1", {"outcome": "stale", "ranSec": 0})
+    assert db["/farm/events/H2/S2/1/confirmed.json"] is False
+    assert db["/farm/events/H2/S2/1/outcome.json"] == "stale"
