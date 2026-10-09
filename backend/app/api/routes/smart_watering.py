@@ -14,6 +14,7 @@ import io
 import json
 import os
 import pickle
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -92,24 +93,62 @@ def _models_ready() -> bool:
 
 # ======================== FIREBASE HELPERS ========================
 
+# One retry for a request that failed in transit. Both helpers used to give up
+# on the first error and say nothing: on 8 Oct 2026 a co-location Start
+# answered 200 while its write never reached the database, so the app said
+# "Started" and nothing had been saved. The same day an engine tick logged
+# "farm download failed" - the VPS's requests to Firebase do fail now and then.
+# A PUT or GET of the same body is safe to repeat; a 4xx is not retried,
+# because it will not change.
+FB_RETRY_DELAY_S = 0.5
+
+
+def _retryable(resp) -> bool:
+    return resp.status_code >= 500 or resp.status_code == 429
+
+
 def _fb_get(path: str) -> Optional[dict]:
-    try:
-        resp = _req.get(f"{FIREBASE_BASE_URL}{scoped(path)}", timeout=8)
-        return resp.json() if resp.status_code == 200 else None
-    except NoTenantInContext:
-        raise
-    except Exception:
-        return None
+    url = f"{FIREBASE_BASE_URL}{scoped(path)}"
+    failure = None
+    for attempt in (1, 2):
+        try:
+            resp = _req.get(url, timeout=8)
+            if resp.status_code == 200:
+                return resp.json()
+            failure = f"HTTP {resp.status_code}"
+            if not _retryable(resp):
+                break
+        except NoTenantInContext:
+            raise
+        except Exception as e:
+            failure = type(e).__name__
+        if attempt == 1:
+            time.sleep(FB_RETRY_DELAY_S)
+    print(f"[FB] GET failed ({failure}): {path}")
+    return None
 
 
 def _fb_put(path: str, data: dict) -> bool:
-    try:
-        resp = _req.put(f"{FIREBASE_BASE_URL}{scoped(path)}", json=data, timeout=8)
-        return resp.status_code == 200
-    except NoTenantInContext:
-        raise
-    except Exception:
-        return False
+    """True only once Firebase has accepted the write. Callers whose answer
+    the farmer will act on must check it rather than report success."""
+    url = f"{FIREBASE_BASE_URL}{scoped(path)}"
+    failure = None
+    for attempt in (1, 2):
+        try:
+            resp = _req.put(url, json=data, timeout=8)
+            if resp.status_code == 200:
+                return True
+            failure = f"HTTP {resp.status_code}"
+            if not _retryable(resp):
+                break
+        except NoTenantInContext:
+            raise
+        except Exception as e:
+            failure = type(e).__name__
+        if attempt == 1:
+            time.sleep(FB_RETRY_DELAY_S)
+    print(f"[FB] PUT failed ({failure}): {path}")
+    return False
 
 
 # ======================== FEATURE COMPUTATION ========================

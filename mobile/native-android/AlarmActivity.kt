@@ -2,6 +2,7 @@ package lk.ac.sliit.r26se018.orchidcare
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -45,10 +46,22 @@ class AlarmActivity : Activity() {
     findViewById<Button>(R.id.alarm_open).setOnClickListener {
       // Hand over to the app, which has the section detail and the acknowledge
       // button. Launching by package keeps this working if MainActivity moves.
+      //
+      // The ids used to ride along as an intent extra, which nothing in the
+      // JavaScript ever read, so this button opened the dashboard and the
+      // farmer had no way to the Alarm screen. React Native only hands the JS a
+      // VIEW intent's data URI (Linking), so the ids go in one. The component
+      // is still set explicitly, which is why no intent-filter is needed and no
+      // other app can send the farmer here.
       val open = packageManager.getLaunchIntentForPackage(packageName)
-      open?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-      open?.putExtra(EXTRA_IDS, intent?.getStringExtra(EXTRA_IDS))
-      if (open != null) startActivity(open)
+      if (open != null) {
+        val ids = intent?.getStringExtra(EXTRA_IDS) ?: ""
+        open.action = Intent.ACTION_VIEW
+        open.removeCategory(Intent.CATEGORY_LAUNCHER)
+        open.data = Uri.parse("orchidcare://alarm?ids=" + Uri.encode(ids))
+        open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        startActivity(open)
+      }
       finish()
     }
 

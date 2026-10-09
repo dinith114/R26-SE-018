@@ -41,6 +41,7 @@ export const PERMS = {
   setFarmLocation:     ['admin'],
   setHouseDimensions:  ['admin'],
   setHouseMaster:      ['admin'],
+  setHousePumps:       ['admin'],
   setLifecycle:        ['admin'],
   setMode:             ['admin'],
   setModeAll:          ['admin'],

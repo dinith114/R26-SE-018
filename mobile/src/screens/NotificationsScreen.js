@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import useLiveData from '../hooks/useLiveData';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
-import { getAlerts } from '../services/careV2';
+import { getAlerts, getAlarms } from '../services/careV2';
 
 const LEVEL = {
   urgent:  { c: COLORS.danger,  bg: COLORS.dangerDim,  tag: 'URGENT' },
@@ -22,6 +22,13 @@ const NotificationsScreen = ({ navigation }) => {
 
   const items  = data?.alerts || [];
   const urgent = data?.urgent || 0;
+
+  /* Alarms are a different list from these notifications, and the Alarm screen
+     used to be reachable only by tapping a push. Dismiss the push and the
+     alarm kept repeating with no way to it from inside the app. */
+  const alarmsLive = useLiveData(getAlarms);
+  const waiting = (alarmsLive.data?.alarms || alarmsLive.data?.items || [])
+    .filter(a => a.kind === 'action' && !a.acknowledged).length;
 
   return (
     <View style={styles.container}>
@@ -45,10 +52,27 @@ const NotificationsScreen = ({ navigation }) => {
               <Ionicons name={urgent ? 'alert-circle' : 'checkmark-circle'} size={20}
                 color={urgent ? COLORS.warning : COLORS.success} />
               <Text style={[styles.summaryTxt, { color: urgent ? COLORS.warning : COLORS.success }]}>
-                {urgent ? `${urgent} item${urgent !== 1 ? 's' : ''} need attention`
+                {urgent ? `${urgent} ${urgent === 1 ? 'item needs' : 'items need'} attention`
                         : 'Everything is running normally'}
               </Text>
             </View>
+
+            {waiting > 0 && (
+              <TouchableOpacity activeOpacity={0.75}
+                style={[styles.card, SHADOW.sm, { borderLeftColor: COLORS.danger }]}
+                onPress={() => navigation.navigate('Alarm')}>
+                <View style={[styles.icon, { backgroundColor: COLORS.dangerDim }]}>
+                  <Ionicons name="alarm" size={17} color={COLORS.danger} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.title}>
+                    {waiting === 1 ? '1 alarm is waiting' : `${waiting} alarms are waiting`}
+                  </Text>
+                  <Text style={styles.msg}>They repeat until someone deals with them. Tap to see what needs doing.</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={15} color={COLORS.textTertiary} />
+              </TouchableOpacity>
+            )}
 
             {items.length === 0 && (
               <View style={styles.empty}>

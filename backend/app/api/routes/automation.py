@@ -48,7 +48,8 @@ from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
-    _record_fertilized, _log_event, _acting_houses, _is_current,
+    _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
+    _command_refusal, SETUP_HINT,
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
@@ -618,8 +619,9 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
             # No watering, and no "water now", from readings over two hours
             # old (smart_care_v2.PLAN_STALE_MS): the plan may be today's, but the
             # node that should confirm the conditions has gone quiet.
-            if (not isinstance(s, dict) or not s.get("latest")
-                    or not _is_current(s, now.timestamp() * 1000.0)):
+            # ...and a section with no sensor of its own is watered on a current
+            # kriging estimate, as its plan was made (smart_care_v2._actionable).
+            if not _actionable(s, now.timestamp() * 1000.0):
                 continue
             plan = s.get("plan") or {}
             for sess in _due_sessions(plan, now, s):
@@ -636,6 +638,28 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                     # Same cap the relay enforces, so the alarm text and the
                     # pump agree on how long the plants were watered for.
                     secs = max(10, min(sess["durationSec"], RELAY_MAX_SEC))
+                    # The scheduled watering has to reach the physical node too,
+                    # not just the simulator's control/* contract.
+                    node_cmd = _issue_node_command(hid, sid, "water", secs,
+                                                   withFertilizer=with_fert)
+                    if not node_cmd:
+                        # NOT done, NOT fed, NOT "Plants watered". This branch
+                        # used to carry on regardless: with no master or no
+                        # pump channel the day was marked watered (so nothing
+                        # retried), a feed recorded and "Plants watered" said -
+                        # every day, with nothing poured (8 Oct E2E run). Left
+                        # unmarked, the next tick tries again within the window,
+                        # so fixing the setup in time still waters today.
+                        why = _command_refusal(hid, sid, "water") or "the command could not be sent"
+                        alarmed.append(f"{hid}-{sid}-{tag}")
+                        _raise_alarm(
+                            "action", f"{hid}-{sid}-cannot-water-{day}-{tag}",
+                            "Watering could not be sent",
+                            f"{hname} · {sname} was due to be watered at {sess['time']} for "
+                            f"{secs}s, but {why}. Nothing was poured - water it by hand. "
+                            f"{SETUP_HINT}",
+                            hid, sid, action="check-device")
+                        continue
                     _fb_put(f"/farm/houses/{hid}/sections/{sid}/control/waterCommand.json", {
                         "requested": True,
                         "durationSec": secs,
@@ -643,10 +667,6 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                         "triggeredBy": "auto-schedule",
                         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
                     })
-                    # The scheduled watering has to reach the physical node too,
-                    # not just the simulator's control/* contract.
-                    node_cmd = _issue_node_command(hid, sid, "water", secs,
-                                                   withFertilizer=with_fert)
                     if with_fert:
                         # Same reason as the manual path: feeding has to be
                         # recorded or the schedule can never advance. Inside the
@@ -694,7 +714,8 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
     houses = _acting_houses(houses)
     # pass the pass's clock down, so a simulated run stays self-consistent
-    results = _run_per_section(houses, partial(_tray_decision, now=now))
+    # Measured sections only: the tray decision needs the section's own probe.
+    results = _run_per_section(houses, partial(_tray_decision, now=now), estimates=False)
     master = get_auto_mode()
     alarmed = []
 
@@ -705,9 +726,24 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
             continue                       # handled automatically, nothing to say
         hid, _, sid = key.partition("-")
         s = _fb_get(f"/farm/houses/{hid}/sections/{sid}.json") or {}
+        # With the house's name, as the watering alarm has: "Section 4" alone
+        # is ambiguous on a farm with two houses (8 Oct E2E run).
+        hname = (((houses or {}).get(hid) or {}).get("meta") or {}).get("name", hid)
+        sname = f"{hname} · {(s.get('meta') or {}).get('name', sid)}"
+        if r.get("autoRefused"):
+            # Automatic, but the fill could not be sent (no master / no tray
+            # channel). It used to start the cooldown and say nothing.
+            alarmed.append(key)
+            _raise_alarm(
+                "action", f"{hid}-{sid}-cannot-fill-{now.strftime('%Y-%m-%d')}",
+                "Tray could not be filled",
+                f"{sname}: humidity is {r.get('humidity')}% and the tray needs "
+                f"{r.get('fillSeconds')}s, but {r['autoRefused']}. Fill it by hand. "
+                f"{SETUP_HINT}",
+                hid, sid, action="check-device")
+            continue
         if section_is_auto(s, master):
             continue                       # auto but not commanded => in cooldown
-        sname = (s.get("meta") or {}).get("name", sid)
         alarmed.append(key)
         _raise_alarm(
             "action", f"{hid}-{sid}-tray-{now.strftime('%Y-%m-%d-%H')}",
@@ -774,9 +810,13 @@ def run_one_tenant(tenant_id: str, at=None) -> dict:
         if at:
             now = datetime.strptime(
                 at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
-        else:
-            now = farm_now()
-        return _engine_pass(now)
+            # A PRETEND pass runs on a COPY of this farm's schedule state. On
+            # the real one, "at" = tomorrow 06:30 set lastPlanDay to tomorrow -
+            # so tomorrow's real 05:00 plan was skipped as already done - and
+            # put lastTray in the future, stopping real tray checks until then
+            # (found reading the engine for the 8 Oct E2E run).
+            return _engine_pass(now, st=dict(_state_for(tenant_id)), pretend=True)
+        return _engine_pass(farm_now())
 
 
 def run_all_tenants(at=None) -> dict:
@@ -812,16 +852,20 @@ def run_all_tenants(at=None) -> dict:
     return out
 
 
-def _engine_pass(now: datetime) -> dict:
+def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False) -> dict:
     """One pass. Kept separate from the loop so tests can call it directly.
 
     The farm is fetched ONCE here and handed to each cycle. Fetching it per
     cycle downloaded the whole document three times a minute, which is how a
     2.4 MB /farm/houses.json turned into roughly 10 GB of egress a day and
     exhausted the Firebase free tier.
+
+    `st`/`pretend` are for run-now with a pretend time: its own copy of the
+    schedule state, and no hardware health check - that compares readings with
+    the clock, and a pretend clock hours ahead calls every live node silent.
     """
     did = {}
-    st = _state_for(current_tenant())
+    st = st if st is not None else _state_for(current_tenant())
     raw_houses = _fb_get("/farm/houses.json")
     houses = raw_houses or {}
 
@@ -857,6 +901,8 @@ def _engine_pass(now: datetime) -> dict:
     #    In memory from the farm fetched above - no reads of its own - and an
     #    alarm only when a fault STARTS. Advisory: it must never stop the clock.
     try:
+        if pretend:
+            raise RuntimeError("pretend pass - health checks run on the real clock only")
         from app.services import device_health as _dh
         # The masters' queues, every MASTER_QUEUE_MINUTES: every pour goes there,
         # and one still waiting past its time was never carried out. Usually an
