@@ -39,6 +39,7 @@ import joblib
 import time
 import uuid
 import contextvars
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional
@@ -596,6 +597,78 @@ def _yesterday_stats(raw: dict, fallback: dict, now: Optional[datetime] = None) 
             "mean_vpd": round(sum(vpds) / len(vpds), 3),
             "hours": len({(ts.date(), ts.hour) for ts, _, _ in pick}),
             "source": source}
+
+
+# (tenant, house, today's date) -> what the house's sensors measured yesterday
+# and at this dawn. Every unmonitored section in a house needs the same answer
+# and they are planned in parallel, so it is worked out once, under a lock.
+_NEIGHBOURS: Dict[tuple, dict] = {}
+_NEIGHBOUR_LOCK = threading.Lock()
+
+
+def _neighbour_day(house_id: str, fallback: dict, now: datetime) -> dict:
+    """{"yesterday": [stats...], "dawn": [readings...]} from the house's sensors."""
+    key = (current_tenant(), house_id, now.date().isoformat())
+    with _NEIGHBOUR_LOCK:
+        if key not in _NEIGHBOURS:
+            if len(_NEIGHBOURS) > 64:
+                _NEIGHBOURS.clear()
+            sids = _fb_get(f"/farm/houses/{house_id}/sections.json?shallow=true") or {}
+            ys, dawns = [], []
+            for sid in sorted(sids):
+                raw = _recent_history(house_id, sid, now)
+                y = _yesterday_stats(raw, fallback, now)
+                if y["source"] != "none":
+                    ys.append(y)
+                # The same rule a measured section gets from _dawn_reading:
+                # nearest 05:00 today, else today's coolest reading.
+                today = {k: r for k, r in raw.items() if isinstance(r, dict)
+                         and r.get("timestamp") is not None
+                         and _measured(r, "temperature") is not None
+                         and to_farm_time(r["timestamp"]).date() == now.date()}
+                if today:
+                    dawns.append(_dawn_reading(today, {}, now))
+            _NEIGHBOURS[key] = {"yesterday": ys, "dawn": dawns}
+        return _NEIGHBOURS[key]
+
+
+def _neighbour_yesterday(house_id: str, fallback: dict, now: datetime) -> dict:
+    """Yesterday for a zone with no sensor: the mean of the sensors in its house.
+
+    A zone the placement decision left without hardware has no history, and
+    _yesterday_stats fell back to "latest + 5 C" - the same made-up day for
+    every such zone. Its neighbours measured the real one."""
+    got = _neighbour_day(house_id, fallback, now)["yesterday"]
+    if not got:
+        return _yesterday_stats({}, fallback, now)
+    n = len(got)
+    return {"peak_temp": round(sum(y["peak_temp"] for y in got) / n, 1),
+            "mean_humidity": round(sum(y["mean_humidity"] for y in got) / n, 1),
+            "mean_vpd": round(sum(y["mean_vpd"] for y in got) / n, 3),
+            "hours": min(y["hours"] for y in got),
+            "source": f"neighbours ({n})"}
+
+
+def _interpolated_dawn(house_id: str, estimate: dict, now: datetime) -> dict:
+    """Dawn for a zone with no sensor.
+
+    At dawn the kriged estimate IS the dawn reading, and the better one, since
+    it weights the nearer sensors. A plan made later in the day (the catch-up)
+    would otherwise feed the model midday air as "dawn" - 16,743 lux against
+    a training range of 0-4 - so then the sensors' own dawn readings (or,
+    as for a measured section, their coolest today) are averaged instead."""
+    try:
+        if 4 <= to_farm_time(estimate.get("timestamp")).hour <= 7:
+            return estimate
+    except Exception:
+        pass
+    dawns = _neighbour_day(house_id, estimate, now)["dawn"]
+    if not dawns:
+        return estimate
+    n = len(dawns)
+    return {"temperature": round(sum(d["temperature"] for d in dawns) / n, 2),
+            "humidity": round(sum(d["humidity"] for d in dawns) / n, 2),
+            "light": round(sum(d["light"] for d in dawns) / n, 1)}
 
 
 def _dawn_reading(raw: dict, latest: dict, now: Optional[datetime] = None) -> dict:
@@ -1509,7 +1582,12 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     pass was evaluating a simulated one, so `_due_sessions` compared two
     different days and the watering never fired. Defaults to real time, so
     production behaviour is unchanged."""
-    latest = _clean((section or {}).get("latest") or {})
+    # Its own reading, or - for a zone with no sensor - the kriged estimate.
+    # _reading_for_planning existed for exactly this and nothing called it, so
+    # every unmonitored zone was planned from _clean({}): 28 C and 70 %, the
+    # same plan for all of them (F19, 9 Oct 2026).
+    reading, provenance, est_info = _reading_for_planning(section)
+    latest = _clean(reading)
     meta   = (section or {}).get("meta") or {}
 
     gs = _resolve_growth_stage(section)
@@ -1523,8 +1601,11 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     # one history fetch feeds both the daily summary and the dawn lookup
     hist = _recent_history(house_id, section_id, now)
     y = _yesterday_stats(hist, latest, now)
+    if provenance == "interpolated" and y["source"] == "none":
+        y = _neighbour_yesterday(house_id, latest, now)
     # the model decides at dawn — use the dawn reading, not whatever time it is now
-    dawn = _dawn_reading(hist, latest, now)
+    dawn = (_interpolated_dawn(house_id, latest, now) if provenance == "interpolated"
+            else _dawn_reading(hist, latest, now))
     dawn_vpd = vpd_kpa(dawn["temperature"], dawn["humidity"])
 
     feats = np.array([[
@@ -1579,13 +1660,19 @@ def _plan_section(house_id: str, section_id: str, section: dict,
                    "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"],
                    "yesterdayMeanHumidity": y["mean_humidity"],
                    # How much of "yesterday" the node actually recorded.
-                   "yesterdayHours": y["hours"], "yesterdaySource": y["source"]},
+                   "yesterdayHours": y["hours"], "yesterdaySource": y["source"],
+                   # "interpolated": this zone has no sensor; read from kriging
+                   "source": provenance,
+                   **({"estimate": est_info} if est_info else {})},
         # `now` is the FARM's clock here; stamped as farm time with a "UTC"
         # label it read five and a half hours in the future (8 Oct E2E run).
         "generatedAt": (now.astimezone(timezone.utc) if now.tzinfo else now
                         ).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
+    if provenance == "interpolated":
+        plan["reason"] += (" This zone has no sensor of its own: its conditions are "
+                           "estimated from the sensors around it.")
     # Said, not hidden: the time leans on a day the node only partly saw.
     if y["hours"] < YESTERDAY_FULL_HOURS:
         plan["reason"] += (
@@ -2163,16 +2250,28 @@ def _days_since_fertilized(section: dict) -> float:
         return float(FERT_UNKNOWN_DAYS)
 
 
-def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
+def _record_fertilized(house_id: str, section_id: str, section: dict,
+                       command: Optional[dict] = None) -> None:
     """Start the clock. Called when a watering that CARRIES fertilizer is issued.
 
     Recorded at issue rather than at the node's acknowledgement: an ack can be
     lost, and feeding twice because a confirmation went missing is worse than
     the small risk of counting a feed the pump never delivered. The farmer can
     correct it from the section screen.
+
+    But a controller that ANSWERS "I did not pour that" is not a lost ack. With
+    `command` (the master-routed one) the feed is also parked under
+    /farm/pendingFeeds, and settle_pending_feeds() undoes it if the master
+    acks the pour with 0 seconds run - stale, invalid, unsupported, zero. Seen
+    on 9 Oct: a fed Water Now sat in an offline master's queue, was refused as
+    stale 23 minutes later, and the section still said "Fed at 09:58 - next
+    feed in about 7 days".
     """
     now_ms = _device_now_ms(section)
     base = f"/farm/houses/{house_id}/sections/{section_id}/fertilizer"
+    fert_before = (section or {}).get("fertilizer") or {}
+    prev = {k: fert_before.get(k) for k in
+            ("due", "npkType", "message", "lastFertilizedTs", "lastFertilizedAt")}
     _fb_put(f"{base}/lastFertilizedTs.json", now_ms)
     # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
     # raised inside the request and turned every fertilised watering into a 500,
@@ -2190,6 +2289,80 @@ def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
     _fb_put(f"{base}/npkType.json", "None")
     _fb_put(f"{base}/message.json",
             f"Fed at {fed_at[-5:]} - next feed in about {int(interval)} days.")
+    master = (command or {}).get("routedTo")
+    if command and command.get("id") and master:
+        _fb_put(f"/farm/pendingFeeds/{command['id']}.json",
+                {"houseId": house_id, "sectionId": section_id, "master": master,
+                 "issuedAtMs": int(_server_now_ms()), "fedAt": fed_at, "prev": prev})
+
+
+# A parked feed whose command never got an answer is let go after this: by then
+# the ack is lost, not late, and the rule above (never feed twice) wins.
+PENDING_FEED_MAX_MS = 24 * 3600_000
+
+
+def settle_pending_feeds() -> List[dict]:
+    """Undo a recorded feed that the master controller says it never poured.
+
+    Reads /farm/pendingFeeds - normally empty - and, for each, the master's
+    ack for that command. ranSec > 0: the water ran, the feed stands. 0: the
+    controller refused it, so the section is due again and says why. Returns
+    the feeds undone, for the engine to tell the farmer."""
+    undone: List[dict] = []
+    pend = _fb_get("/farm/pendingFeeds.json") or {}
+    for cid, p in pend.items():
+        if not isinstance(p, dict):
+            continue
+        ack = _fb_get(f"/farm/masters/{p.get('master')}/acks/{cid}.json") or {}
+        if ack.get("id") != cid:
+            if _server_now_ms() - float(p.get("issuedAtMs") or 0) > PENDING_FEED_MAX_MS:
+                _fb_delete(f"/farm/pendingFeeds/{cid}.json")
+            continue
+        hid, sid = p.get("houseId"), p.get("sectionId")
+        ran = int(ack.get("ranSec") or 0)
+        base = f"/farm/houses/{hid}/sections/{sid}/fertilizer"
+        # Only if nothing newer was fed in between: undoing a later, real feed
+        # would be the double-feeding this whole design exists to prevent.
+        if ran <= 0 and _fb_get(f"{base}/lastFertilizedAt.json") == p.get("fedAt"):
+            prev = p.get("prev") or {}
+            for k in ("lastFertilizedTs", "lastFertilizedAt"):
+                if prev.get(k) is None:
+                    _fb_delete(f"{base}/{k}.json")
+                else:
+                    _fb_put(f"{base}/{k}.json", prev[k])
+            _fb_put(f"{base}/due.json", True if prev.get("due") is None else prev["due"])
+            if prev.get("npkType") not in (None, "None"):
+                _fb_put(f"{base}/npkType.json", prev["npkType"])
+            why = ack.get("outcome") or "not run"
+            _fb_put(f"{base}/message.json",
+                    f"The {p.get('fedAt', '')[-5:]} feed did not happen: the master controller "
+                    f"did not run that watering ({why}). Still due - it goes with the next watering.")
+            undone.append({"houseId": hid, "sectionId": sid, "commandId": cid,
+                           "outcome": why, "fedAt": p.get("fedAt")})
+        _stamp_event_outcome(hid, sid, cid, ack)
+        _fb_delete(f"/farm/pendingFeeds/{cid}.json")
+    return undone
+
+
+def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict) -> None:
+    """Write what the controller did onto the event that asked for it.
+
+    `confirmed` means water moved. It used to be set for ANY final ack, so a
+    command the master threw away as stale went into the history as a
+    confirmed watering."""
+    try:
+        ran = int(ack.get("ranSec") or 0)
+        evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+        for k, v in evs.items():
+            if isinstance(v, dict) and v.get("commandId") == command_id and v.get("outcome") is None:
+                ev = f"/farm/events/{house_id}/{section_id}/{k}"
+                _fb_put(f"{ev}/confirmed.json", ran > 0)
+                _fb_put(f"{ev}/outcome.json", ack.get("outcome") or ("done" if ran > 0 else "not run"))
+                _fb_put(f"{ev}/ranSec.json", ran)
+                _fb_put(f"{ev}/stoppedEarly.json", ack.get("outcome") == "stopped")
+                break
+    except Exception:
+        pass
 
 
 # How many events are kept per section. Events are written a handful of times a
@@ -2739,7 +2912,7 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
     # never be cleared.
     fert_now = _fert_decision(s) if command["withFertilizer"] else None
     if command["withFertilizer"]:
-        _record_fertilized(house_id, section_id, s)
+        _record_fertilized(house_id, section_id, s, node_cmd)
     _log_event(house_id, section_id, s,
                action="water",
                durationSec=command["durationSec"],
@@ -2921,16 +3094,9 @@ def command_status(house_id: str, section_id: str,
     # throughout every manual run, so the history learns whether the node
     # actually did the work without any extra request.
     if matches and bool(ack.get("done")) and want:
-        try:
-            evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
-            for k, v in evs.items():
-                if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
-                    ev = f"/farm/events/{house_id}/{section_id}/{k}"
-                    _fb_put(f"{ev}/confirmed.json", True)
-                    _fb_put(f"{ev}/stoppedEarly.json", bool(ack.get("stopped")))
-                    break
-        except Exception:
-            pass
+        _stamp_event_outcome(house_id, section_id, want,
+                             {"ranSec": ack.get("ranSec", ack.get("durationSec")),
+                              "outcome": ack.get("outcome") or ("stopped" if ack.get("stopped") else None)})
 
     return {
         "status": "success",

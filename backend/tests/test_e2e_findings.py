@@ -556,3 +556,145 @@ def test_a_plan_from_a_partial_yesterday_says_so(farm_clock, monkeypatch):
     plan = sc._plan_section("H1", "S8", section, now=PLAN_NOW)
     assert plan["inputs"]["yesterdayHours"] == 3
     assert "recorded for 3 of 24 hours" in plan["reason"]
+
+
+# ── F19: a zone with no sensor was planned from 28 C / 70 % defaults ────────
+
+def _fake_water(sc, monkeypatch, seen):
+    class _Id:
+        @staticmethod
+        def transform(x):
+            seen.append([float(v) for v in x[0]])
+            return x
+
+    class _Const:
+        def __init__(self, v):
+            self.v = v
+
+        def predict(self, x):
+            return [self.v]
+
+    monkeypatch.setattr(sc, "_water", {"scaler": _Id(), "model_hour": _Const(7.0),
+                                       "model_duration": _Const(60.0), "growth_stage_map": {}})
+
+
+def test_an_unmonitored_zone_is_planned_from_its_estimate_and_its_neighbours(farm_clock, monkeypatch):
+    """9 Oct, live: H2 S5 (no sensor) was planned with dawn 28.0 C / 70.0 % and
+    yesterday 33.0 C - _clean({}) and "latest + 5" - while kriging said 72.5 %.
+    _reading_for_planning existed for this and nothing called it."""
+    sc = farm_clock
+    seen = []
+    _fake_water(sc, monkeypatch, seen)
+    sc._NEIGHBOURS.clear()
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: True)
+    monkeypatch.setattr(sc, "_fert_decision", lambda s: {})
+    monkeypatch.setattr(sc, "_fb_get", lambda p: {"S1": True, "S2": True, "S5": True}
+                        if p.endswith("sections.json?shallow=true") else {})
+    day = datetime(2026, 10, 8, tzinfo=TZ)
+
+    def hist(peak, rh):
+        h = {f"h{i:02d}": _rd(day + timedelta(hours=i), peak if i == 14 else 26.0, rh) for i in range(24)}
+        h["dawn"] = _rd(datetime(2026, 10, 9, 5, 0, tzinfo=TZ), 24.0, 90.0)
+        return h
+
+    histories = {"S1": hist(32.0, 80.0), "S2": hist(30.0, 70.0), "S5": {}}
+    monkeypatch.setattr(sc, "_recent_history", lambda h, s, now=None: histories[s])
+    estimate = {"temperature": 24.4, "humidity": 88.0, "light": 0.0, "anchorCount": 4,
+                "method": "ordinary-kriging",
+                "timestampMs": datetime(2026, 10, 9, 4, 55, tzinfo=TZ).timestamp() * 1000}
+    plan = sc._plan_section("H2", "S5", {"estimated": estimate, "meta": {"name": "S5"}}, now=PLAN_NOW)
+    dawn_t, dawn_rh, _light, _vpd, y_peak, y_rh = seen[0][:6]
+    assert (dawn_t, dawn_rh) == (24.4, 88.0)            # the 04:55 estimate, not 28 / 70
+    assert y_peak == 31.0 and y_rh == 75.0              # mean of S1 and S2, not 24.4 + 5
+    assert plan["inputs"]["source"] == "interpolated"
+    assert plan["inputs"]["yesterdaySource"] == "neighbours (2)"
+    assert "estimated from the sensors around it" in plan["reason"]
+
+
+def test_a_late_plan_for_an_unmonitored_zone_does_not_use_midday_air_as_dawn(farm_clock, monkeypatch):
+    """The catch-up plans at any hour. At 10:15 the estimate is midday air
+    (16,743 lux, live on 9 Oct) - the model was trained on dawn light 0-4."""
+    sc = farm_clock
+    seen = []
+    _fake_water(sc, monkeypatch, seen)
+    sc._NEIGHBOURS.clear()
+    late = datetime(2026, 10, 9, 10, 15, tzinfo=TZ)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: late.timestamp() * 1000)
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: True)
+    monkeypatch.setattr(sc, "_fert_decision", lambda s: {})
+    monkeypatch.setattr(sc, "_fb_get", lambda p: {"S1": True, "S5": True}
+                        if p.endswith("sections.json?shallow=true") else {})
+    s1 = {"d": _rd(datetime(2026, 10, 9, 5, 1, tzinfo=TZ), 23.0, 91.0),
+          "m": _rd(datetime(2026, 10, 9, 10, 0, tzinfo=TZ), 29.0, 70.0)}
+    monkeypatch.setattr(sc, "_recent_history", lambda h, s, now=None: s1 if s == "S1" else {})
+    estimate = {"temperature": 29.1, "humidity": 69.0, "light": 16743.0, "anchorCount": 4,
+                "timestampMs": late.timestamp() * 1000}
+    sc._plan_section("H2", "S5", {"estimated": estimate}, now=late)
+    dawn_t, dawn_rh, dawn_light = seen[0][:3]
+    assert (dawn_t, dawn_rh, dawn_light) == (23.0, 91.0, 0.0)   # S1's 05:01 reading
+
+
+# ── F20: a fed watering the master refused still counted as a feed ──────────
+
+def _fake_fb(monkeypatch, db):
+    from app.api.routes import smart_care_v2 as sc
+    monkeypatch.setattr(sc, "_fb_get", lambda p: db.get(p.split("?")[0]))
+    monkeypatch.setattr(sc, "_fb_put", lambda p, v: db.__setitem__(p, v) or True)
+    monkeypatch.setattr(sc, "_fb_delete", lambda p: db.pop(p, None) is not None or True)
+    return sc
+
+
+def test_a_feed_the_master_refused_as_stale_is_undone(farm_clock, monkeypatch):
+    """9 Oct, live: Water Now with plant food into an offline master; 23 min
+    later it acked 'stale', ranSec 0 - and the section still said 'Fed at
+    09:58 - next feed in about 7 days'."""
+    db = {}
+    sc = _fake_fb(monkeypatch, db)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    base = "/farm/houses/H2/sections/S2/fertilizer"
+    section = {"latest": _rd(PLAN_NOW, 28.0, 70.0),
+               "fertilizer": {"due": True, "npkType": "30-10-10", "intervalDays": 7,
+                              "message": "Feed 30-10-10 at 50%"}}
+    cmd = {"id": "c0ffee000001", "routedTo": "5E5E5E5E00FF"}
+    sc._record_fertilized("H2", "S2", section, cmd)
+    assert db[f"{base}/due.json"] is False                      # recorded at issue, as designed
+    db["/farm/pendingFeeds.json"] = {"c0ffee000001": db.pop("/farm/pendingFeeds/c0ffee000001.json")}
+    db["/farm/masters/5E5E5E5E00FF/acks/c0ffee000001.json"] = {
+        "id": "c0ffee000001", "outcome": "stale", "ranSec": 0}
+    deleted = []
+    monkeypatch.setattr(sc, "_fb_delete", lambda p: deleted.append(p) or True)
+    undone = sc.settle_pending_feeds()
+    assert [u["outcome"] for u in undone] == ["stale"]
+    assert db[f"{base}/due.json"] is True and db[f"{base}/npkType.json"] == "30-10-10"
+    assert "did not happen" in db[f"{base}/message.json"]
+    assert f"{base}/lastFertilizedAt.json" in deleted              # no feed before this one
+    assert "/farm/pendingFeeds/c0ffee000001.json" in deleted
+
+
+def test_a_feed_that_ran_stands_and_a_lost_ack_is_never_undone(farm_clock, monkeypatch):
+    db = {}
+    sc = _fake_fb(monkeypatch, db)
+    now = {"ms": PLAN_NOW.timestamp() * 1000}
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: now["ms"])
+    base = "/farm/houses/H2/sections/S2/fertilizer"
+    p = {"houseId": "H2", "sectionId": "S2", "master": "M1", "issuedAtMs": now["ms"],
+         "fedAt": "2026-10-09 05:00", "prev": {"due": True, "npkType": "30-10-10"}}
+    db["/farm/pendingFeeds.json"] = {"ran": dict(p), "lost": dict(p)}
+    db["/farm/masters/M1/acks/ran.json"] = {"id": "ran", "outcome": "done", "ranSec": 88}
+    db[f"{base}/lastFertilizedAt.json"] = "2026-10-09 05:00"
+    db[f"{base}/due.json"] = False
+    assert sc.settle_pending_feeds() == []
+    assert db[f"{base}/due.json"] is False                       # it poured: the feed stands
+    now["ms"] += 25 * 3600_000                                   # a day on, still no ack
+    db["/farm/pendingFeeds.json"] = {"lost": dict(p)}
+    assert sc.settle_pending_feeds() == []
+    assert db[f"{base}/due.json"] is False                       # never feed twice on a lost ack
+
+
+def test_a_refused_command_is_not_a_confirmed_watering_in_the_history(farm_clock, monkeypatch):
+    db = {"/farm/events/H2/S2.json": {"1": {"commandId": "c1", "confirmed": False}}}
+    sc = _fake_fb(monkeypatch, db)
+    sc._stamp_event_outcome("H2", "S2", "c1", {"outcome": "stale", "ranSec": 0})
+    assert db["/farm/events/H2/S2/1/confirmed.json"] is False
+    assert db["/farm/events/H2/S2/1/outcome.json"] == "stale"

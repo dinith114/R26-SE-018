@@ -49,7 +49,7 @@ from app.api.routes.smart_care_v2 import (
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
-    _command_refusal, SETUP_HINT,
+    _command_refusal, SETUP_HINT, settle_pending_feeds,
 )
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
@@ -676,7 +676,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                         # auto branch: a section that only ALARMS has not been
                         # fed, and recording one there would silently push its
                         # next feed a week out.
-                        _record_fertilized(hid, sid, s)
+                        _record_fertilized(hid, sid, s, node_cmd)
                     _log_event(hid, sid, s,
                                action="water",
                                durationSec=secs,
@@ -960,6 +960,14 @@ def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False
             queues = fresh
             st["masterQueues"] = queues
             st["lastMasterQueue"] = now
+            # Same cadence: a fed watering the master refused is not a feed.
+            for u in settle_pending_feeds():
+                _raise_alarm("info", f"{u['houseId']}-{u['sectionId']}-feed-undone-{u['commandId']}",
+                             "Plant food was not given",
+                             f"The feed recorded at {str(u.get('fedAt'))[-5:]} did not happen: the master "
+                             f"controller did not run that watering ({u['outcome']}). The section is "
+                             f"due again and the next watering will carry it.",
+                             u["houseId"], u["sectionId"])
         # Only on a farm that actually downloaded: a failed fetch is not an
         # empty farm, and treating it as one wiped every standing fault.
         if raw_houses is None:
