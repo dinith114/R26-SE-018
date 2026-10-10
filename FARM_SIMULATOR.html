@@ -177,7 +177,7 @@ async function pushReadings(){
     const s = S[k];
     if(REAL_SECTIONS.has(s.id)){ s.pushOk = null; s.status = 'real node'; continue; }
     const payload = { temperature:s.temp, humidity:s.rh, light:s.light,
-      vpd:vpd(s.temp,s.rh), sampleMoisture:Math.round((35+s.tray*12+Math.random()*6)*10)/10,
+      vpd:vpd(s.temp,s.rh),
       timestamp:now, timestampIso:new Date(now).toISOString().slice(0,16).replace('T',' ') };
     const base = `${FB}/farm/houses/${HOUSE}/sections/${s.id}`;
     // history lives on its own branch so /farm/houses.json stays small — see

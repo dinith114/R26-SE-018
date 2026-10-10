@@ -337,8 +337,6 @@ void bufStore(JsonDocument& d, const char* why) {
   r.rh10    = (int16_t)bufScaled(d["humidity"].as<double>(), 10.0);
   r.lux     = bufScaled(d["light"].as<double>(), 1.0);
   r.vpd1000 = bufScaled(d["vpd"].as<double>(), 1000.0);
-  r.soil10  = (int16_t)bufScaled(d["sampleMoisture"].as<double>(), 10.0);
-  r.soilRaw = (int16_t)d["soilRaw"].as<int>();
   r.flags   = d["sensorFault"].as<bool>() ? 1 : 0;
   r.ver     = BUF_REC_VER;
   r.check   = bufCheck(r);
@@ -440,8 +438,6 @@ void bufFlushStep() {
     d["light"]          = (float)r.lux;
     d["vpd"]            = r.vpd1000 / 1000.0;
     d["timestamp"]      = r.ms;
-    d["sampleMoisture"] = r.soil10 / 10.0;
-    d["soilRaw"]        = r.soilRaw;
     d["sensorFault"]    = (r.flags & 1) != 0;
     d["node"]           = "validation";
     d["buffered"]       = true;

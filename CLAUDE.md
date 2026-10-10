@@ -218,11 +218,12 @@ and has exactly one device.
     └── sections/{sectionId}/      e.g. S1  → deviceId "H1-S1"
         ├── meta/                  { name, label, growthStage, lightExposure }
         ├── latest/                { temperature, humidity, light, vpd,
-        │                            sampleMoisture, timestamp }   ← device writes
+        │                            sensorFault, timestamp }      ← device writes
         ├── plan/                  { waterTime, durationSec, secondSession,
         │                            secondTime, reason }          ← ML writes
-        ├── tray/                  { status: ok|topup|fill|cooldown, fillSeconds,
-        │                            hoursSinceFill, trayAtLimit, lastFillTs }
+        ├── tray/                  { status: ok|topup|fill|prefill|cooldown, fillSeconds,
+        │                            amountSeconds, amountSetBy, hoursSinceFill,
+        │                            trayAtLimit, lastFillTs }
         ├── fertilizer/            { daysSince }
         └── control/               ← the device POLLS this
             ├── override           "auto" | "manual" | absent (absent = follow farm)
@@ -527,8 +528,7 @@ arduino-cli upload -p COM3 --fqbn esp32:esp32:esp32 firmware/section_node_v2
 ```
 
 **Per-device edits before flashing:** `HOUSE_ID`, `SECTION_ID`, `IS_MASTER`
-(true on **one** node only — the one wired to the pump), Wi-Fi credentials, and
-`PROBE_DRY`/`PROBE_WET` from the `C` calibration command.
+(true on **one** node only — the one wired to the pump) and Wi-Fi credentials.
 
 > **ArduinoJson v7 note:** `StaticJsonDocument<N>` was **removed** in v7 — use
 > plain `JsonDocument`, which sizes itself. Code written for v6 will not compile.
