@@ -210,9 +210,9 @@ def test_a_pretend_pass_does_not_move_the_real_schedule_or_run_health(monkeypatc
 
 # ── F3: a sensor counts as fitted only on fresh, repeated evidence ──────────
 
-def _rec(minute, soil):
+def _rec(minute, light):
     return {"timestamp": NOW_MS + minute * 60_000, "temperature": 27.0 + 0.1 * (minute % 3),
-            "humidity": 75.0 + 0.1 * (minute % 4), "light": -999, "sampleMoisture": soil}
+            "humidity": 75.0 + 0.1 * (minute % 4), "light": light}
 
 
 def _farm1(latest):
@@ -237,22 +237,23 @@ def _dh_reset():
     dh.reset()
 
 
-def test_a_weeks_old_reading_does_not_make_the_probe_fitted(_dh_reset):
-    """Node 1 on 8 Oct: H1/S8's 38-day-old latest carried a probe value; the
-    rebuilt board has none; 'tray probe stopped' was pushed."""
-    old = _rec(-38 * 24 * 60, 60.0)
+def test_a_weeks_old_reading_does_not_make_a_sensor_fitted(_dh_reset):
+    """Node 1 on 8 Oct: H1/S8's 38-day-old latest carried a sensor value the
+    rebuilt board no longer had, and its fresh -999s were pushed as a fault.
+    (Found on the tray probe, since removed; the rule guards the light sensor.)"""
+    old = _rec(-38 * 24 * 60, 600.0)
     fresh = [_rec(m, -999) for m in range(0, 20)]
     assert _feed([old] + fresh, first_now=NOW_MS) == []
 
 
-def test_one_stray_value_from_a_floating_pin_is_not_a_probe(_dh_reset):
-    seq = [_rec(m, -999) for m in range(0, 3)] + [_rec(3, 55.0)] + [_rec(m, -999) for m in range(4, 25)]
+def test_one_stray_value_is_not_a_fitted_sensor(_dh_reset):
+    seq = [_rec(m, -999) for m in range(0, 3)] + [_rec(3, 550.0)] + [_rec(m, -999) for m in range(4, 25)]
     assert _feed(seq) == []
 
 
-def test_a_real_probe_that_stops_is_still_caught(_dh_reset):
-    seq = [_rec(m, 60.0) for m in range(0, 5)] + [_rec(m, -999) for m in range(5, 25)]
-    assert _feed(seq) == ["tray-probe"]
+def test_a_real_sensor_that_stops_is_still_caught(_dh_reset):
+    seq = [_rec(m, 600.0) for m in range(0, 5)] + [_rec(m, -999) for m in range(5, 25)]
+    assert _feed(seq) == ["light"]
 
 
 # ── F2/F9: the app is told which boards only record, and their real interval ─

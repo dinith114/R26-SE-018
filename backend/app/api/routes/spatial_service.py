@@ -40,9 +40,7 @@ from app.services.readings import measured
 # and the placement analysis import _krige_field from here.
 from app.services.kriging import IDW_POWER, idw_field as _idw_field, krige_field as _krige_field  # noqa: F401
 
-# Fields worth estimating. sampleMoisture is deliberately absent: it measures
-# water in THIS section's tray, which is a property of that tray's plumbing and
-# last fill, not of the air, and does not vary smoothly across the house.
+# Fields worth estimating: the air, which varies smoothly across a house.
 FIELDS = ("temperature", "humidity", "light")
 
 # Below this spread across ALL anchors, a field has no structure a variogram can

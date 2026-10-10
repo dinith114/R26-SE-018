@@ -1,5 +1,5 @@
 """Is the hardware telling the truth? Broken, frozen and erratic sensors, silent
-nodes, commands that never ran, and trays that did not fill.
+nodes, and commands that never ran.
 
 Asked for after the previous viva, where one pump did not run during the demo
 and the cause - a loose wire - was only found afterwards. Nothing had said a
@@ -11,9 +11,11 @@ WHAT THIS CAN AND CANNOT SEE
 Everything here is inferred from what the nodes report. There is no current
 sensor yet (the INA219 was postponed), so a pump wire that comes loose cannot be
 seen directly: the relay clicks, the node reports the run as done, and no water
-moves. What CAN be seen is a node that never carried a command out, and a tray
-that still reads empty after a fill - the messages say which part to check and
-never claim more than that.
+moves. What CAN be seen is a node that never carried a command out - the
+messages say which part to check and never claim more than that.
+
+There is no tray level check: the tray probe was removed on 10 Oct 2026 (the
+grower sets the fill amount in the app), so nothing reports a tray's level.
 
 COST
 ----
@@ -46,7 +48,7 @@ from app.services import readings as rd
 CONSECUTIVE_BAD = 3
 BAD_MIN_SPAN_MS = 2 * 60_000
 
-# A light sensor or tray probe that HAS worked and now reads -999. Ten minutes,
+# A light sensor that HAS worked and now reads -999. Ten minutes,
 # because the firmware re-probes a missing BH1750 every five: one probe cycle is
 # allowed to bring it back before anybody is told.
 LOST_MIN_MS = 10 * 60_000
@@ -105,15 +107,13 @@ MAX_ALARMS_PER_DAY = 3
 # How much history is kept per section: enough for the frozen window.
 KEEP_MS = 3 * 3600_000
 
-# What it takes to say a light sensor or tray probe IS FITTED, so that losing it
-# later is a fault. Two ways this went wrong on 8 Oct 2026, both on Node 1:
-#  * the first pass after a deploy read H1/S8's latest - 38 days old, from when
-#    a probe was wired - and marked the probe fitted. The board had been rebuilt
-#    without one, so its fresh -999s became "tray probe stopped", pushed to the
-#    phone. A reading that old describes the board as it WAS.
-#  * D34 left floating (no probe, not tied to GND) reads at random, now and then
-#    inside the valid range. One stray value is not a probe.
-# So it takes CONSECUTIVE_GOOD valid readings, each under FRESH_MS old when seen.
+# What it takes to say a light sensor IS FITTED, so that losing it later is a
+# fault. Found 8 Oct 2026 on Node 1 (then with a sensor that has since been
+# removed): the first pass after a deploy read a latest 38 days old and marked
+# the sensor fitted, so the board's fresh -999s were pushed to the phone as a
+# fault. A reading that old describes the board as it WAS, and one stray valid
+# value is not a sensor. So it takes CONSECUTIVE_GOOD valid readings, each under
+# FRESH_MS old when seen.
 FRESH_MS = 2 * 3600_000
 CONSECUTIVE_GOOD = 3
 
@@ -128,9 +128,6 @@ TEXT = {
     "light": ("Light sensor stopped",
               "{where}: the light sensor (BH1750) was working and has read nothing since "
               "{since}. Check its four wires: VCC to 3V3, GND, SDA to D21, SCL to D22."),
-    "tray-probe": ("Tray level probe stopped",
-                   "{where}: the tray level probe was working and has read nothing since "
-                   "{since}. Check its wire to D34."),
     "frozen": ("Sensor reading is stuck",
                "{where}: exactly the same temperature and humidity since {since}. A working "
                "sensor always moves a little - unplug the node and plug it back in."),
@@ -145,27 +142,19 @@ TEXT = {
                 "{where}: the {action} sent at {since} is still waiting in the master "
                 "controller's queue. Check the master's power and Wi-Fi. (A loose pump wire "
                 "cannot be seen without a current sensor - look at the pump too.)"),
-    "tray-fill": ("Tray did not fill",
-                  "{where}: after a fill the tray still reads empty. The probe, the tray pump "
-                  "or its wire, or the water supply needs checking."),
 }
-
-# Checks that need a working house (commands are sent, trays are filled).
-CARE_ONLY = ("command", "tray-fill")
 
 
 class _Section:
-    __slots__ = ("hist", "had_light", "had_soil", "good_light", "good_soil",
+    __slots__ = ("hist", "had_light", "good_light",
                  "active", "day_counts", "seen_live")
 
     def __init__(self) -> None:
-        # (ts_ms, temperature|None, humidity|None, light|None, soil|None)
+        # (ts_ms, temperature|None, humidity|None, light|None)
         self.hist: Deque[tuple] = deque()
         self.had_light = False
-        self.had_soil = False
         # The current run of fresh valid readings - see CONSECUTIVE_GOOD.
         self.good_light = 0
-        self.good_soil = 0
         self.active: Dict[str, dict] = {}            # kind -> the issue as raised
         self.day_counts: Dict[Tuple[str, str], int] = {}
         # Has this node been seen REPORTING since the server started? Only then
@@ -186,16 +175,6 @@ def reset() -> None:
     """Forget everything. For tests."""
     _SECTIONS.clear()
     _LAST_RUN.clear()
-
-
-def _soil(rec: dict) -> Optional[float]:
-    """The tray probe's percentage, or None for -999 / missing. Not in readings.py
-    because it is not one of the fields the models use."""
-    try:
-        v = float(rec.get("sampleMoisture"))
-    except (TypeError, ValueError):
-        return None
-    return None if v <= -998.0 or v != v else v
 
 
 def _local(ms: float, offset_min: int) -> str:
@@ -221,13 +200,10 @@ def observe(st: _Section, latest: Optional[dict], now_ms: Optional[float] = None
     t = rd.value(latest, "temperature")
     h = rd.value(latest, "humidity")
     lx = rd.value(latest, "light")
-    so = _soil(latest)
-    st.hist.append((ts, t, h, lx, so))
+    st.hist.append((ts, t, h, lx))
     fresh = now_ms is None or now_ms - ts < FRESH_MS
     st.good_light = st.good_light + 1 if (lx is not None and fresh) else 0
-    st.good_soil = st.good_soil + 1 if (so is not None and fresh) else 0
     st.had_light = st.had_light or st.good_light >= CONSECUTIVE_GOOD
-    st.had_soil = st.had_soil or st.good_soil >= CONSECUTIVE_GOOD
     if now_ms is not None and now_ms - ts < SEEN_LIVE_MS:
         st.seen_live = True
     while st.hist and st.hist[0][0] < ts - KEEP_MS:
@@ -257,13 +233,11 @@ def sensor_faults(st: _Section, now_ms: float) -> Dict[str, dict]:
     if len(bad) >= CONSECUTIVE_BAD and bad[-1][0] - bad[0][0] >= BAD_MIN_SPAN_MS:
         out["dht"] = {"since": bad[0][0], "n": len(bad)}
 
-    # b. a light sensor or tray probe that worked, and stopped
-    for kind, idx, had in (("light", 3, st.had_light), ("tray-probe", 4, st.had_soil)):
-        if not had:
-            continue                                   # never fitted: not a fault
-        run = _tail_bad(hist, idx)
+    # b. a light sensor that worked, and stopped (never fitted: not a fault)
+    if st.had_light:
+        run = _tail_bad(hist, 3)
         if len(run) >= CONSECUTIVE_BAD and run[-1][0] - run[0][0] >= LOST_MIN_MS:
-            out[kind] = {"since": run[0][0], "n": len(run)}
+            out["light"] = {"since": run[0][0], "n": len(run)}
 
     # c. frozen: identical values across the window
     last = hist[-1]
@@ -333,15 +307,6 @@ def overdue_commands(queue: Optional[dict], now_ms: float) -> Dict[str, dict]:
     return out
 
 
-def care_faults(section: dict, now_ms: float) -> Dict[str, dict]:
-    """The tray check, which needs the section's own node to be live."""
-    out: Dict[str, dict] = {}
-    tray = (section or {}).get("tray") or {}
-    if tray.get("trayResponds") is False:
-        out["tray-fill"] = {"since": now_ms, "n": 0}
-    return out
-
-
 def _update(st: "_Section", faults: Dict[str, dict], now_ms: float, offset_min: int,
             where: str, hid: str, sid: str, started: List[dict]) -> None:
     """Fold this pass's faults into a section's standing ones; append to
@@ -399,7 +364,7 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
     Sensor checks run for every section with a node linked, calibrating houses
     included: a dead sensor is exactly what ruins a calibration. Command checks
     run for every section of an `acting` house, node or not - every pour goes
-    through the master. Tray checks need the section's own node to be live.
+    through the master.
     """
     if not houses:
         # A failed download arrives as {} - it is not a farm with no sections.
@@ -437,8 +402,6 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
             if has_node:
                 observe(st, latest, now_ms)
                 faults.update(sensor_faults(st, now_ms))
-                if hid in acting and st.seen_live and now_ms - st.hist[-1][0] < SILENT_MS:
-                    faults.update(care_faults(s, now_ms))     # tray: needs the live node
             elif st.hist:
                 st.hist.clear()                        # node unlinked: no sensor history
             if sid in overdue:
