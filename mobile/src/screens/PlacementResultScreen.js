@@ -225,24 +225,6 @@ export default function PlacementResultScreen({ route, navigation }) {
           </Text>
         </View>
 
-        {/* The PP2 question - what data decided this, and how good is it - is
-            answered on its own screen, step by step, with these numbers. */}
-        {!!analysis && (
-          <TouchableOpacity style={[styles.card, styles.howCard, SHADOW.sm]} activeOpacity={0.8}
-            onPress={() => navigation.navigate('PlacementFlow', { houseId, analysis })}
-            accessibilityRole="button">
-            <Ionicons name="git-branch-outline" size={18} color={COLORS.primary} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.howHead}>How was this decided?</Text>
-              <Text style={styles.howTxt}>
-                The readings, cleaning, sensor bias, variation, one node's reach
-                {reachWords ? ` (${reachWords.short})` : ''} and the error scores.
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
-          </TouchableOpacity>
-        )}
-
         {keepAll ? (
           <View style={[styles.card, SHADOW.sm, { marginTop: SPACE.lg }]}>
             <Text style={styles.tnote}>
@@ -377,9 +359,6 @@ const styles = StyleSheet.create({
   tnote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
            marginTop: SPACE.md },
 
-  howCard: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md, marginTop: SPACE.lg },
-  howHead: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
-  howTxt:  { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 16, marginTop: 2 },
 
   masterRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
                paddingVertical: SPACE.md, borderTopWidth: 1,

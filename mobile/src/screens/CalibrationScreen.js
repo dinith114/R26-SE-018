@@ -527,10 +527,6 @@ export default function CalibrationScreen({ route, navigation }) {
               : 'Available once every section has enough data and a full day has '
                 + 'passed. Leave the sensors where they are until then.'}
         </Text>
-        <TouchableOpacity style={styles.coLink} activeOpacity={0.7}
-          onPress={() => navigation.navigate('PlacementFlow', { houseId })}>
-          <Text style={styles.coGhostTxt}>Open the last analysis</Text>
-        </TouchableOpacity>
       </ScrollView>
     </View>
   );
