@@ -304,7 +304,7 @@ export default function FarmDashboardScreen({ navigation }) {
      left out because this list predates the master: "a command is a document
      the node polls". After the placement decision that is most of a house, so
      the farmer could not water most of it by hand. Trays stay live-only:
-     their cooldown and fill checks read the section's own probe. */
+     their cooldown and fill checks read the section's own humidity. */
   const flowLive = flowSections.filter((x) => x.freshness?.state === 'live'
     || (!isTrayFlow && x.freshness?.state === 'estimated'));
   const flowPickable = flowLive.filter((x) => !(isTrayFlow && trayCooling(x)));
@@ -318,7 +318,7 @@ export default function FarmDashboardScreen({ navigation }) {
       sectionId: x.sectionId,
       name: x.meta?.name || x.sectionId,
       durationSec: x.plan?.durationSec || 45,
-      fillSeconds: x.tray?.fillSeconds || 15,
+      fillSeconds: x.tray?.fillSeconds || x.tray?.amountSeconds || 15,
       withFertilizer: !!x.fertilizer?.due,
     }));
     setFlow(null);
