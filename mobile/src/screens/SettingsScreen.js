@@ -16,7 +16,6 @@ import {
   getDevices, getOverview, getModelInfo, setFarmLocation,
   intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
-import { pickHouseId } from '../services/wateringCheck';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
    /prediction and /history - which nothing else in the v2 app touches. They
@@ -101,10 +100,6 @@ export default function SettingsScreen({ navigation }) {
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
-  // The house "How watering times were checked" opens on: the one the node
-  // reports into, else the first real one (see wateringCheck.pickHouseId).
-  const [checkHouse, setCheckHouse] = useState(null);
-
   const [alerts, setAlerts] = useState({
     watering:      true,
     fertilizer:    true,
@@ -166,10 +161,6 @@ export default function SettingsScreen({ navigation }) {
         });
         setSection(sec);
         setFarm(ov.farm || null);
-
-        const hid = pickHouseId(ov, dev);
-        const h = (ov.houses || []).find((x) => x && x.houseId === hid);
-        setCheckHouse(hid ? { houseId: hid, houseName: h?.meta?.name || null } : null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -205,14 +196,6 @@ export default function SettingsScreen({ navigation }) {
   const lastSeenStr  = section?.freshness?.label ?? (device ? lastSeenLabel(device.lastSeenSec) : '-');
   const intervalStr  = device ? intervalLabel(device.readIntervalMs) : '-';
 
-  const wm = models?.watering?.metrics;
-  const tm = models?.tray?.metrics;
-  const waterStr = wm
-    ? 'MAE ' + Math.round(wm.hour?.mae_minutes ?? 0) + ' min · R² ' + (wm.hour?.r2 ?? 0).toFixed(3)
-    : '…';
-  const trayStr = tm
-    ? 'MAE ' + (tm.mae_seconds ?? tm.mae ?? 0).toFixed(2) + ' s'
-    : '…';
   const planStr = section?.plan?.waterTime
     ? section.plan.waterTime + ' for ' + section.plan.durationSec + 's'
     : 'not planned yet';
@@ -318,25 +301,6 @@ export default function SettingsScreen({ navigation }) {
             <Row icon="sparkles-outline"  iconColor={COLORS.warning} label="ML Backend"       right={<StatusBadge ok={mlOK}         label={mlOK         ? 'Running' : 'No data'} />} />
             <Divider />
             <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
-            <Divider />
-            {/* Tappable: "how do we know these times are right" is the first
-                question this number raises. Opens without a house when none is
-                known yet; that screen then says the indoor check needs one. */}
-            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"
-                 hint="Random Forest regressor · decides the hour from dawn conditions"
-                 onPress={() => navigation.navigate('WateringCheck', checkHouse || {})}
-                 right={(
-                   <View style={s.rowRight}>
-                     <Text style={s.rowValue}>{waterStr}</Text>
-                     <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
-                   </View>
-                 )} />
-            <Divider />
-            <Row icon="water-outline"     iconColor={COLORS.humidity} label="Tray Model"      value={trayStr}
-                 hint="Random Forest · decides when a tray is filled; you set how long" />
-            <Divider />
-            <Row icon="flask-outline"     iconColor={COLORS.fertilizer} label="Fertilizer" value="Encoded schedule"
-                 hint="A deterministic rule, not a learned model — reported honestly" />
           </View>
 
           {/* ── ALERTS ───────────────────────────────────────────────── */}
