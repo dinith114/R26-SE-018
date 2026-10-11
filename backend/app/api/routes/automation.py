@@ -41,19 +41,28 @@ from functools import partial
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-import requests as _req
-
 from app.api.routes.smart_care_v2 import (
-    _fb_get, _fb_put, _plan_section, _tray_decision, _run_per_section,
+    _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
-    farm_auto_mode, section_acts_alone, FIREBASE_BASE_URL, _ready,
-    _record_fertilized, _log_event,
+    farm_auto_mode, section_acts_alone, _ready,
+    _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
+    _command_refusal, SETUP_HINT, settle_pending_feeds,
+)
+from app.api.deps import require_auth, require_role
+from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
+from app.services.tenant_context import (
+    NoTenantInContext, current_tenant, tenant_scope,
 )
 
 router = APIRouter()
+
+
+# _acting_houses lives in smart_care_v2 next to _house_lifecycle and is applied
+# inside _run_per_section, so the tray and plan cycles are covered there. The
+# watering link iterates houses itself, so it calls it directly below.
 
 
 # ─────────────────────────── Tunables ────────────────────────────────────────
@@ -68,6 +77,9 @@ TRAY_CHECK_MINUTES  = 15      # how often the humidity trays are assessed
 # up scheduling in UTC. 05:00 local is after the dawn reading exists (dawn is
 # 04:00-07:00) and before the earliest watering the model ever plans (06:06).
 PLAN_HOUR_LOCAL     = 5
+# A section that had no plan at 05:00 - a house activated later that morning,
+# a node that came back - is planned on the next catch-up instead of tomorrow.
+PLAN_CATCHUP_MINUTES = 10
 WATER_WINDOW_MIN    = 20      # how late a missed watering may still be started
 
 
@@ -93,7 +105,7 @@ class AutoModeIn(BaseModel):
 
 
 @router.put("/auto-mode")
-async def set_auto_mode(body: AutoModeIn):
+async def set_auto_mode(body: AutoModeIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Flip the whole farm between acting by itself and alarming the farmer."""
     meta = _fb_get("/farm/meta.json") or {}
     meta["autoMode"] = bool(body.autoMode)
@@ -103,7 +115,7 @@ async def set_auto_mode(body: AutoModeIn):
 
 
 @router.get("/auto-mode")
-async def read_auto_mode():
+async def read_auto_mode(ctx: AuthContext = Depends(require_auth)):
     return {"status": "success", "autoMode": get_auto_mode()}
 
 
@@ -113,7 +125,7 @@ class OverrideIn(BaseModel):
 
 
 @router.put("/sections/{house_id}/{section_id}/override")
-async def set_section_override(house_id: str, section_id: str, body: OverrideIn):
+async def set_section_override(house_id: str, section_id: str, body: OverrideIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Pin ONE section against the farm switch.
 
     For the case where a single tray leaks or a section is being repotted, and
@@ -207,6 +219,16 @@ ALARM_CHANNEL = "farm-alarm-v3"
 ALARM_REPEAT_MINUTES = 5
 ALARM_REPEAT_MAX = 6          # ~25 minutes of reminders, then it stays in-app only
 
+# Hardware faults (device_health.py) are told ONCE, as an ordinary notification
+# - not the full-screen alarm that wakes a locked phone, and not repeated. A
+# loose sensor wire at 3 am is not a plant going dry, and on the native alarm
+# path every alarm shares one notification slot, so a sensor-fault push would
+# REPLACE a pending "Water the plants now" on the phone. Found in review.
+QUIET_ACTIONS = ("check-device",)
+
+# How often the engine looks in each master's queue for a pour never run.
+MASTER_QUEUE_MINUTES = 5
+
 FIREBASE_KEY_DEFAULT = os.path.join(
     os.path.expanduser("~"), ".orchid-secrets", "firebase-admin.json")
 
@@ -247,7 +269,7 @@ class PushTokenIn(BaseModel):
 
 
 @router.post("/push/register")
-async def register_push_token(body: PushTokenIn):
+async def register_push_token(body: PushTokenIn, ctx: AuthContext = Depends(require_auth)):
     """Remember a phone so alarms can reach it."""
     tok = (body.token or "").strip()
     if not tok:
@@ -274,8 +296,16 @@ def _drop_push_token(token: str) -> None:
     for k, v in (raw or {}).items():
         if isinstance(v, dict) and v.get("token") == token:
             try:
-                _req.delete(f"{FIREBASE_BASE_URL}/farm/pushTokens/{k}.json", timeout=8)
+                _fb_delete(f"/farm/pushTokens/{k}.json")
                 print(f"[AUTO] dropped dead push token {k}")
+            except NoTenantInContext:
+                # Never swallowed. The chokepoint raising is the design working,
+                # and a bare `except Exception` here would turn the one loud
+                # signal we have back into the silent shared-tree write this
+                # whole stage exists to remove. Unreachable today - the _fb_get
+                # above would have raised first - but /mode-all proved that
+                # "we swept the boundaries" is a claim, not a guarantee.
+                raise
             except Exception:
                 pass
             return
@@ -391,7 +421,8 @@ def alarm_due_for_push(v: dict, now: datetime) -> bool:
         return False
 
     count = int(v.get("pushCount") or 0)
-    if count >= ALARM_REPEAT_MAX:
+    limit = 1 if v.get("action") in QUIET_ACTIONS else ALARM_REPEAT_MAX
+    if count >= limit:
         return False                      # said enough; it stays in the app
 
     last = v.get("lastPushedAt")
@@ -429,6 +460,7 @@ def _flush_pending_pushes():
     WORDING = {
         "water":     ("Water the plants now", "Water"),
         "fill-tray": ("Fill the humidity tray now", "Fill the tray in"),
+        "check-device": ("A sensor node needs checking", "Check the nodes in"),
     }
     for action, items in pending.items():
         title, verb = WORDING.get(action, ("The farm needs you", "Attend to"))
@@ -448,7 +480,7 @@ def _flush_pending_pushes():
 
         _send_push(head, body, {"action": action,
                                 "alarmIds": [k for k, _ in items]},
-                   alarm=True)                        # result logged inside
+                   alarm=action not in QUIET_ACTIONS)  # result logged inside
         for k, v in items:
             v["pushed"] = True                       # kept for older readers
             v["pushCount"] = int(v.get("pushCount") or 0) + 1
@@ -457,7 +489,7 @@ def _flush_pending_pushes():
 
 
 @router.post("/push/test")
-async def push_test(alarm: bool = False):
+async def push_test(alarm: bool = False, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Prove the phone is reachable, without waiting for a real alarm.
 
     `?alarm=true` sends it down the REAL alarm path - data-only, so the app's
@@ -485,7 +517,7 @@ async def push_test(alarm: bool = False):
 
 
 @router.get("/alarms")
-async def list_alarms(limit: int = 50):
+async def list_alarms(limit: int = 50, ctx: AuthContext = Depends(require_auth)):
     """Newest first. `action` items are the ones that need the farmer."""
     raw = _fb_get("/farm/alarms.json") or {}
     items = []
@@ -499,7 +531,7 @@ async def list_alarms(limit: int = 50):
 
 
 @router.put("/alarms/{alarm_id}/ack")
-async def ack_alarm(alarm_id: str):
+async def ack_alarm(alarm_id: str, ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))):
     a = _fb_get(f"/farm/alarms/{alarm_id}.json")
     if a:
         a["acknowledged"] = True
@@ -577,6 +609,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
     Firebase free tier. One fetch per pass now serves all three.
     """
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     master = get_auto_mode()
     day = _today(now)
     watered, alarmed = [], []
@@ -586,7 +619,12 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
             continue
         hname = (h.get("meta") or {}).get("name", hid)
         for sid, s in ((h.get("sections") or {})).items():
-            if not isinstance(s, dict) or not s.get("latest"):
+            # No watering, and no "water now", from readings over two hours
+            # old (smart_care_v2.PLAN_STALE_MS): the plan may be today's, but the
+            # node that should confirm the conditions has gone quiet.
+            # ...and a section with no sensor of its own is watered on a current
+            # kriging estimate, as its plan was made (smart_care_v2._actionable).
+            if not _actionable(s, now.timestamp() * 1000.0):
                 continue
             plan = s.get("plan") or {}
             for sess in _due_sessions(plan, now, s):
@@ -603,6 +641,28 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                     # Same cap the relay enforces, so the alarm text and the
                     # pump agree on how long the plants were watered for.
                     secs = max(10, min(sess["durationSec"], RELAY_MAX_SEC))
+                    # The scheduled watering has to reach the physical node too,
+                    # not just the simulator's control/* contract.
+                    node_cmd = _issue_node_command(hid, sid, "water", secs,
+                                                   withFertilizer=with_fert)
+                    if not node_cmd:
+                        # NOT done, NOT fed, NOT "Plants watered". This branch
+                        # used to carry on regardless: with no master or no
+                        # pump channel the day was marked watered (so nothing
+                        # retried), a feed recorded and "Plants watered" said -
+                        # every day, with nothing poured (8 Oct E2E run). Left
+                        # unmarked, the next tick tries again within the window,
+                        # so fixing the setup in time still waters today.
+                        why = _command_refusal(hid, sid, "water") or "the command could not be sent"
+                        alarmed.append(f"{hid}-{sid}-{tag}")
+                        _raise_alarm(
+                            "action", f"{hid}-{sid}-cannot-water-{day}-{tag}",
+                            "Watering could not be sent",
+                            f"{hname} · {sname} was due to be watered at {sess['time']} for "
+                            f"{secs}s, but {why}. Nothing was poured - water it by hand. "
+                            f"{SETUP_HINT}",
+                            hid, sid, action="check-device")
+                        continue
                     _fb_put(f"/farm/houses/{hid}/sections/{sid}/control/waterCommand.json", {
                         "requested": True,
                         "durationSec": secs,
@@ -610,17 +670,13 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                         "triggeredBy": "auto-schedule",
                         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
                     })
-                    # The scheduled watering has to reach the physical node too,
-                    # not just the simulator's control/* contract.
-                    node_cmd = _issue_node_command(hid, sid, "water", secs,
-                                                   withFertilizer=with_fert)
                     if with_fert:
                         # Same reason as the manual path: feeding has to be
                         # recorded or the schedule can never advance. Inside the
                         # auto branch: a section that only ALARMS has not been
                         # fed, and recording one there would silently push its
                         # next feed a week out.
-                        _record_fertilized(hid, sid, s)
+                        _record_fertilized(hid, sid, s, node_cmd)
                     _log_event(hid, sid, s,
                                action="water",
                                durationSec=secs,
@@ -659,8 +715,10 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
     """Assess every tray. _tray_decision issues the command itself when the
     section is automatic; when it is not, we alarm instead."""
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     # pass the pass's clock down, so a simulated run stays self-consistent
-    results = _run_per_section(houses, partial(_tray_decision, now=now))
+    # Measured sections only: the tray decision needs the section's own probe.
+    results = _run_per_section(houses, partial(_tray_decision, now=now), estimates=False)
     master = get_auto_mode()
     alarmed = []
 
@@ -671,9 +729,24 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
             continue                       # handled automatically, nothing to say
         hid, _, sid = key.partition("-")
         s = _fb_get(f"/farm/houses/{hid}/sections/{sid}.json") or {}
+        # With the house's name, as the watering alarm has: "Section 4" alone
+        # is ambiguous on a farm with two houses (8 Oct E2E run).
+        hname = (((houses or {}).get(hid) or {}).get("meta") or {}).get("name", hid)
+        sname = f"{hname} · {(s.get('meta') or {}).get('name', sid)}"
+        if r.get("autoRefused"):
+            # Automatic, but the fill could not be sent (no master / no tray
+            # channel). It used to start the cooldown and say nothing.
+            alarmed.append(key)
+            _raise_alarm(
+                "action", f"{hid}-{sid}-cannot-fill-{now.strftime('%Y-%m-%d')}",
+                "Tray could not be filled",
+                f"{sname}: humidity is {r.get('humidity')}% and the tray needs "
+                f"{r.get('fillSeconds')}s, but {r['autoRefused']}. Fill it by hand. "
+                f"{SETUP_HINT}",
+                hid, sid, action="check-device")
+            continue
         if section_is_auto(s, master):
             continue                       # auto but not commanded => in cooldown
-        sname = (s.get("meta") or {}).get("name", sid)
         alarmed.append(key)
         _raise_alarm(
             "action", f"{hid}-{sid}-tray-{now.strftime('%Y-%m-%d-%H')}",
@@ -693,61 +766,225 @@ def run_plan_cycle(now: Optional[datetime] = None, houses: Optional[dict] = None
     while the pass is running on a simulated one, the two never match and the
     day's watering is silently skipped."""
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
+    houses = _acting_houses(houses)
     results = _run_per_section(houses, partial(_plan_section, now=now))
     return {"planned": len(results)}
 
 
+def run_plan_catch_up(now: datetime, houses: dict) -> dict:
+    """Plan the sections that do not have a plan for today yet.
+
+    The day's plan runs once, at 05:00. A house activated after that - the
+    farm is set up in the morning - had no plan until the next dawn, and the
+    dashboard said "no plan" all day (F8, 9 Oct 2026). This plans only what is
+    missing, with the same dawn reading _plan_section always uses, so the
+    result is the plan 05:00 would have made.
+
+    It cannot pour at a wrong hour: plan times are clamped to 06:00-09:00 and a
+    session is only started within WATER_WINDOW_MIN of its time, so a plan made
+    at 14:00 for 07:10 is shown and never acted on."""
+    today = _today(now)
+    missing = {}
+    for hid, h in _acting_houses(houses or {}).items():
+        if not isinstance(h, dict):
+            continue
+        secs = {sid: sec for sid, sec in (h.get("sections") or {}).items()
+                if isinstance(sec, dict) and (sec.get("plan") or {}).get("date") != today}
+        if secs:
+            missing[hid] = {**h, "sections": secs}
+    if not missing:
+        return {"planned": 0}
+    results = _run_per_section(missing, partial(_plan_section, now=now))
+    return {"planned": len(results), "sections": sorted(results)}
+
+
 # ═══════════════════════ The clock ═══════════════════════════════════════════
 
+# Process-wide facts only: is the clock ticking, and how many passes and
+# failures has it seen. NOT lastError - that is a fact about ONE farm, it was
+# built as f"{tenant_id}: {e}", and GET /engine handed it to every signed-in
+# viewer of every other tenant. It lives in _state_by_tenant now.
 _state: Dict[str, object] = {
-    "running": False, "lastTick": None, "lastTray": None,
-    "lastPlanDay": None, "ticks": 0, "errors": 0, "lastError": None,
+    "running": False, "ticks": 0, "errors": 0,
 }
 
+# Per farm, because these are facts about a farm and not about the process.
+# Shared, the first tenant's pass would mark the day planned and every OTHER
+# farm would be skipped until tomorrow - the whole point of the engine, silently
+# not happening for everyone but one customer.
+_state_by_tenant: Dict[str, Dict[str, object]] = {}
 
-def _engine_pass(now: datetime) -> dict:
+
+def _state_for(tenant_id: Optional[str]) -> dict:
+    return _state_by_tenant.setdefault(tenant_id or "-", {
+        "lastTick": None, "lastTray": None, "lastSpatial": None,
+        "lastPlanDay": None, "lastPlanCatchUp": None, "autoMode": None,
+        "lastError": None,
+    })
+
+
+def run_one_tenant(tenant_id: str, at=None) -> dict:
+    """One engine pass for ONE farm, on that farm's own clock.
+
+    THE CLOCK IS READ INSIDE THE SCOPE, and that is not a detail. farm_now()
+    reads /farm/meta.json, so computing it outside raised before the pass ever
+    started - which is precisely how the scheduled engine came to be silently
+    dead, one caught exception per tick with nothing watered. `at` is carried
+    down as the string it arrived as and parsed here, so "06:30" means 06:30 for
+    this farm's own plants.
+
+    Raises rather than swallowing. The scheduled loop catches per tenant, because
+    one broken farm must not stop the others; run-now does not, because an admin
+    who asked for a pass deserves to be told it failed.
+    """
+    with tenant_scope(tenant_id):
+        if at:
+            now = datetime.strptime(
+                at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
+            # A PRETEND pass runs on a COPY of this farm's schedule state. On
+            # the real one, "at" = tomorrow 06:30 set lastPlanDay to tomorrow -
+            # so tomorrow's real 05:00 plan was skipped as already done - and
+            # put lastTray in the future, stopping real tray checks until then
+            # (found reading the engine for the 8 Oct E2E run).
+            return _engine_pass(now, st=dict(_state_for(tenant_id)), pretend=True)
+        return _engine_pass(farm_now())
+
+
+def run_all_tenants(at=None) -> dict:
+    """One engine pass per tenant, each on its OWN clock.
+
+    THE SCHEDULED LOOP WALKS EVERY TENANT; AN ENDPOINT MUST NOT. This exists for
+    `_engine_loop`, which has no request and therefore no tenant to inherit, so
+    it supplies one per iteration. `run_now` used to call this too, which meant
+    one customer's admin pressing "run now" opened every OTHER customer's pumps,
+    marked their day watered and regenerated their plan from a pretend hour. An
+    endpoint calls `run_one_tenant` instead.
+
+    EVERY tenant is attempted even when an earlier one raises: a farm whose data
+    is broken must not stop every other farm being watered, and an engine that
+    gives up on the first bad row stops watering everybody the first time one
+    customer's record is malformed.
+    """
+    # shallow: the ids are all this needs, and the full subtree carries every
+    # tenant's meta and users. This file already learned that lesson once - see
+    # _engine_pass's note on /farm/houses.json and the 10 GB a day it cost.
+    tenants = _fb_get("/tenants.json?shallow=true") or {}
+    out = {}
+    for tenant_id in tenants:
+        try:
+            out[tenant_id] = run_one_tenant(tenant_id, at)
+        except Exception as e:
+            _state["errors"] = int(_state["errors"]) + 1
+            # PER TENANT. An engine-wide copy was handed to every signed-in
+            # viewer by GET /engine, and it carried another customer's id.
+            _state_for(tenant_id)["lastError"] = str(e)
+            print(f"[AUTO] tenant {tenant_id} pass failed: {e}\n{traceback.format_exc()}")
+            out[tenant_id] = {"error": str(e)}
+    return out
+
+
+def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False) -> dict:
     """One pass. Kept separate from the loop so tests can call it directly.
 
     The farm is fetched ONCE here and handed to each cycle. Fetching it per
     cycle downloaded the whole document three times a minute, which is how a
     2.4 MB /farm/houses.json turned into roughly 10 GB of egress a day and
     exhausted the Firebase free tier.
+
+    `st`/`pretend` are for run-now with a pretend time: its own copy of the
+    schedule state, and no hardware health check - that compares readings with
+    the clock, and a pretend clock hours ahead calls every live node silent.
     """
     did = {}
-    houses = _fb_get("/farm/houses.json") or {}
+    st = st if st is not None else _state_for(current_tenant())
+    raw_houses = _fb_get("/farm/houses.json")
+    houses = raw_houses or {}
 
     # 1. Today's plan, once per day, after dawn so the dawn reading exists.
-    if _state["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
+    if st["lastPlanDay"] != _today(now) and now.hour >= PLAN_HOUR_LOCAL:
         did["plan"] = run_plan_cycle(now, houses)
-        _state["lastPlanDay"] = _today(now)
+        st["lastPlanDay"] = _today(now)
+        st["lastPlanCatchUp"] = now
+    elif now.hour >= PLAN_HOUR_LOCAL and (
+            st.get("lastPlanCatchUp") is None
+            or (now - st["lastPlanCatchUp"]) >= timedelta(minutes=PLAN_CATCHUP_MINUTES)):
+        # 1b. ...and anything that missed it, without waiting for tomorrow.
+        did["planCatchUp"] = run_plan_catch_up(now, houses)
+        st["lastPlanCatchUp"] = now
 
     # 2. Estimate the zones with no hardware, BEFORE anything reads them.
     #    Placed here so that by the time the tray check and the watering link
     #    look at a section, its estimate is already current. Uses the farm
     #    document this pass already fetched rather than re-reading it.
-    last_spatial = _state.get("lastSpatial")
+    last_spatial = st.get("lastSpatial")
     if last_spatial is None or (now - last_spatial) >= timedelta(minutes=SPATIAL_MINUTES):
         try:
             from app.api.routes import spatial_service as _sp
             did["spatial"] = _sp.interpolate_all(houses, now)
         except Exception as e:               # advisory only; never stop the clock
             print(f"[SPATIAL] pass skipped: {e}")
-        _state["lastSpatial"] = now
+        st["lastSpatial"] = now
 
     # 3. Humidity trays, every TRAY_CHECK_MINUTES.
-    last_tray = _state["lastTray"]
+    last_tray = st["lastTray"]
     if last_tray is None or (now - last_tray) >= timedelta(minutes=TRAY_CHECK_MINUTES):
         did["tray"] = run_tray_cycle(now, houses)
-        _state["lastTray"] = now
+        st["lastTray"] = now
 
     # 4. Watering, checked every tick because a planned minute must not be missed.
     did["water"] = run_watering_link(now, houses)
 
-    # 5. Anything the farmer must act on gets pushed to their phone, grouped so
+    # 5. Is the hardware telling the truth? Broken, frozen or jumping sensors,
+    #    silent nodes, commands never carried out, trays that did not fill.
+    #    In memory from the farm fetched above - no reads of its own - and an
+    #    alarm only when a fault STARTS. Advisory: it must never stop the clock.
+    try:
+        if pretend:
+            raise RuntimeError("pretend pass - health checks run on the real clock only")
+        from app.services import device_health as _dh
+        # The masters' queues, every MASTER_QUEUE_MINUTES: every pour goes there,
+        # and one still waiting past its time was never carried out. Usually an
+        # empty document - a few bytes - per master per check.
+        # Kept between fetches, so a standing fault is seen on every pass and
+        # not only one minute in five. A fetch that fails keeps the last copy
+        # for that master rather than reading as "nothing queued".
+        queues = st.get("masterQueues") or {}
+        last_q = st.get("lastMasterQueue")
+        if last_q is None or (now - last_q) >= timedelta(minutes=MASTER_QUEUE_MINUTES):
+            fresh = {}
+            for h in _acting_houses(houses).values():
+                mac = ((h.get("meta") or {}).get("masterMac") or "").strip()
+                if mac and mac not in fresh:
+                    got = _fb_get(f"/farm/masters/{mac}/queue.json")
+                    fresh[mac] = got if got is not None else queues.get(mac, {})
+            queues = fresh
+            st["masterQueues"] = queues
+            st["lastMasterQueue"] = now
+            # Same cadence: a fed watering the master refused is not a feed.
+            for u in settle_pending_feeds():
+                _raise_alarm("info", f"{u['houseId']}-{u['sectionId']}-feed-undone-{u['commandId']}",
+                             "Plant food was not given",
+                             f"The feed recorded at {str(u.get('fedAt'))[-5:]} did not happen: the master "
+                             f"controller did not run that watering ({u['outcome']}). The section is "
+                             f"due again and the next watering will carry it.",
+                             u["houseId"], u["sectionId"])
+        # Only on a farm that actually downloaded: a failed fetch is not an
+        # empty farm, and treating it as one wiped every standing fault.
+        if raw_houses is None:
+            raise RuntimeError("farm download failed this tick - health state kept as it was")
+        for issue in _dh.check_farm(current_tenant(), houses, now.timestamp() * 1000.0,
+                                    set(_acting_houses(houses)), master_queues=queues):
+            _raise_alarm("action", issue["key"], issue["title"], issue["message"],
+                         issue["houseId"], issue["sectionId"], action="check-device")
+    except Exception as e:
+        print(f"[HEALTH] pass skipped: {e}")
+
+    # 6. Anything the farmer must act on gets pushed to their phone, grouped so
     #    four due sections do not mean four separate buzzes.
     _flush_pending_pushes()
 
-    _state["lastTick"] = now
+    st["lastTick"] = now
+    st["autoMode"] = get_auto_mode()
     _state["ticks"] = int(_state["ticks"]) + 1
     return did
 
@@ -759,10 +996,18 @@ async def _engine_loop():
     while True:
         try:
             if _ready():
-                await asyncio.to_thread(_engine_pass, farm_now())
+                # No argument to evaluate here. farm_now() reads a farm path,
+                # and as an argument expression it ran OUTSIDE every tenant
+                # scope - raising each tick, caught below, so the pass never
+                # happened at all.
+                await asyncio.to_thread(run_all_tenants)
         except Exception as e:                      # never let one bad pass kill the clock
             _state["errors"] = int(_state["errors"]) + 1
-            _state["lastError"] = str(e)
+            # Logged, not stored. A failure here is whole-engine (the tenant
+            # list itself would not read), so it belongs to no one farm, and
+            # there is no longer an engine-wide field to put it in: GET /engine
+            # handed that string - built as f"{tenant_id}: {e}" - to every
+            # signed-in viewer of every other tenant.
             print(f"[AUTO] pass failed: {e}\n{traceback.format_exc()}")
         await asyncio.sleep(TICK_SECONDS)
 
@@ -773,8 +1018,14 @@ def start_engine():
 
 
 @router.get("/engine")
-async def engine_status():
+async def engine_status(ctx: AuthContext = Depends(require_auth)):
     """Proof the clock is alive — useful in the demo and in the report."""
+    # THE CALLER'S FARM ONLY. This used to return the whole _state_by_tenant
+    # map, so any signed-in viewer of any tenant learned every other tenant's
+    # id - and until Stage 3 closes the RTDB rules a tenant id is enough to read
+    # that customer's whole tree over REST directly. The engine-wide lastError
+    # went with it for the same reason: it was built as f"{tenant_id}: {e}".
+    mine = _state_for(ctx.tenant_id)
     return {
         "status": "success",
         "running": _state["running"],
@@ -782,16 +1033,20 @@ async def engine_status():
         "trayCheckMinutes": TRAY_CHECK_MINUTES,
         "ticks": _state["ticks"],
         "errors": _state["errors"],
-        "lastError": _state["lastError"],
-        "lastTick": str(_state["lastTick"]),
-        "lastTrayCheck": str(_state["lastTray"]),
-        "lastPlanDay": _state["lastPlanDay"],
-        "autoMode": get_auto_mode(),
+        # Per farm. lastPlanDay above all cannot be engine-wide, and autoMode is
+        # recorded during each pass rather than read here: this endpoint is
+        # polled, and reading it live would need a tenant in context that a
+        # status call does not have.
+        "tenants": {ctx.tenant_id: {"lastTick": str(mine["lastTick"]),
+                                    "lastTrayCheck": str(mine["lastTray"]),
+                                    "lastPlanDay": mine["lastPlanDay"],
+                                    "autoMode": mine["autoMode"],
+                                    "lastError": mine["lastError"]}},
     }
 
 
 @router.post("/engine/run-now")
-async def run_now(at: Optional[str] = None):
+async def run_now(at: Optional[str] = None, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
     """Run one pass immediately, instead of waiting for the next tick.
 
     `at` lets a caller say what time it should pretend it is, as
@@ -807,12 +1062,21 @@ async def run_now(at: Optional[str] = None):
     # decision is expressed in - "06:34" in a plan means 06:34 for the plants.
     if at:
         try:
-            now = datetime.strptime(at.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=farm_tz())
+            datetime.strptime(at.strip(), "%Y-%m-%d %H:%M")
         except ValueError:
             from fastapi import HTTPException
             raise HTTPException(400, "at must look like '2026-08-21 06:01'")
-    else:
-        now = farm_now()
 
-    did = await asyncio.to_thread(_engine_pass, now)
-    return {"status": "success", "at": now.strftime("%Y-%m-%d %H:%M:%S %Z"), "did": did}
+    # THE CALLER'S FARM, AND ONLY THE CALLER'S. require_role establishes that
+    # this caller is SOME tenant's admin, never that they may act on another's.
+    # Running every tenant from here opened other customers' pumps for 45 s
+    # outside their window, marked their day watered so the real schedule
+    # skipped it, and regenerated their plan from this caller's pretend hour.
+    #
+    # The string goes down, not a parsed instant: the farm interprets "06:30" in
+    # its own timezone. run_one_tenant sets the scope itself, which it must - a
+    # ContextVar does not cross the to_thread boundary, and calling _engine_pass
+    # directly from here once left this endpoint with no tenant in context at
+    # all, so every call raised and both simulators were dead.
+    did = await asyncio.to_thread(run_one_tenant, ctx.tenant_id, at)
+    return {"status": "success", "at": at or "now", "did": did}

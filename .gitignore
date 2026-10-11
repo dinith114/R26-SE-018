@@ -221,3 +221,7 @@ ml-models/hybrid_pollination/results/segmentation_check/
 # own plants, written at runtime. This repository is public, so none of it
 # belongs here - the real copy lives in Firebase.
 backend/data/pollination_log/
+
+# Subagent-driven-development scratch: ledgers, briefs, review packages.
+# Git history is the durable record; this is the controller working memory.
+.superpowers/

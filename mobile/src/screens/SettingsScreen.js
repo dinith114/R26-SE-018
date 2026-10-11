@@ -9,12 +9,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import LocationPicker from '../components/LocationPicker';
+import { useCan, useAuth, useIsAdmin } from '../config/auth';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
   getDevices, getOverview, getModelInfo, setFarmLocation,
   intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
+import { pickHouseId } from '../services/wateringCheck';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
    /prediction and /history - which nothing else in the v2 app touches. They
@@ -35,11 +37,22 @@ const SOIL_WET_ADC = 1100;   // measured with the blade in water to the printed 
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 const Divider = () => <View style={s.divider} />;
 
-const StatusBadge = ({ ok, label }) => (
-  <View style={[s.badge, { backgroundColor: ok ? COLORS.successDim : COLORS.dangerDim }]}>
-    <View style={[s.badgeDot, { backgroundColor: ok ? COLORS.success : COLORS.danger }]} />
-    <Text style={[s.badgeText, { color: ok ? COLORS.success : COLORS.danger }]}>{label}</Text>
-  </View>
+const StatusBadge = ({ ok, label, unknown }) => {
+  const fg = unknown ? COLORS.textTertiary : ok ? COLORS.success : COLORS.danger;
+  const bg = unknown ? COLORS.bgCardAlt : ok ? COLORS.successDim : COLORS.dangerDim;
+  return (
+    <View style={[s.badge, { backgroundColor: bg }]}>
+      <View style={[s.badgeDot, { backgroundColor: fg }]} />
+      <Text style={[s.badgeText, { color: fg }]}>{label}</Text>
+    </View>
+  );
+};
+
+/* A sensor's badge judges the node's LAST reading, so it only means anything
+   while the node is online. Offline for 38 days, it went on saying "OK". */
+const SensorBadge = ({ ok, live }) => (
+  live ? <StatusBadge ok={ok} label={ok ? 'OK' : 'Error'} />
+       : <StatusBadge unknown label="No recent reading" />
 );
 
 const Row = ({ icon, iconColor, label, value, hint, right, onPress }) => (
@@ -77,6 +90,12 @@ const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
+  const isAdmin = useIsAdmin();
+  const { email: authEmail, signOut } = useAuth();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
@@ -84,6 +103,9 @@ export default function SettingsScreen({ navigation }) {
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
+  // The house "How watering times were checked" opens on: the one the node
+  // reports into, else the first real one (see wateringCheck.pickHouseId).
+  const [checkHouse, setCheckHouse] = useState(null);
 
   const [alerts, setAlerts] = useState({
     watering:      true,
@@ -146,6 +168,10 @@ export default function SettingsScreen({ navigation }) {
         });
         setSection(sec);
         setFarm(ov.farm || null);
+
+        const hid = pickHouseId(ov, dev);
+        const h = (ov.houses || []).find((x) => x && x.houseId === hid);
+        setCheckHouse(hid ? { houseId: hid, houseName: h?.meta?.name || null } : null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -248,9 +274,12 @@ export default function SettingsScreen({ navigation }) {
               when it is unset belongs in setup, not here. */}
           <Text style={s.sectionLabel}>FARM LOCATION</Text>
           <View style={[s.card, SHADOW.sm]}>
+            {/* The coordinates stay readable - they explain which weather
+                forecast the models are using. Only moving the pin is admin. */}
             <TouchableOpacity
               style={s.locView}
-              onPress={() => setLocOpen(true)}
+              disabled={!can('setFarmLocation')}
+              onPress={can('setFarmLocation') ? () => setLocOpen(true) : undefined}
               activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Change where the farm is on the map">
@@ -274,11 +303,11 @@ export default function SettingsScreen({ navigation }) {
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="hardware-chip"        iconColor={COLORS.primary}     label="ESP32 Controller"      right={<StatusBadge ok={isESP32Live} label={isESP32Live ? 'Live' : 'Offline'} />} />
             <Divider />
-            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<StatusBadge ok={isDHT22OK}   label={isDHT22OK   ? 'OK'   : 'Error'}   />} />
+            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<SensorBadge ok={isDHT22OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<StatusBadge ok={isBH1750OK}  label={isBH1750OK  ? 'OK'   : 'Error'}   />} />
+            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<SensorBadge ok={isBH1750OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<StatusBadge ok={isMoisOK}    label={isMoisOK    ? 'OK'   : 'Error'}   />} />
+            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<SensorBadge ok={isMoisOK} live={isESP32Live} />} />
             <Divider />
             <Row icon="wifi-outline"         iconColor={COLORS.info}        label="Wi-Fi Signal"          value={sig.label} hint={device?.ip || undefined} />
             <Divider />
@@ -297,8 +326,18 @@ export default function SettingsScreen({ navigation }) {
             <Divider />
             <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
             <Divider />
-            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"   value={waterStr}
-                 hint="Random Forest regressor · decides the hour from dawn conditions" />
+            {/* Tappable: "how do we know these times are right" is the first
+                question this number raises. Opens without a house when none is
+                known yet; that screen then says the indoor check needs one. */}
+            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"
+                 hint="Random Forest regressor · decides the hour from dawn conditions"
+                 onPress={() => navigation.navigate('WateringCheck', checkHouse || {})}
+                 right={(
+                   <View style={s.rowRight}>
+                     <Text style={s.rowValue}>{waterStr}</Text>
+                     <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
+                   </View>
+                 )} />
             <Divider />
             <Row icon="water-outline"     iconColor={COLORS.humidity} label="Tray Model"      value={trayStr}
                  hint="Random Forest regressor · valve seconds" />
@@ -339,6 +378,43 @@ export default function SettingsScreen({ navigation }) {
           </View>
 
           {/* ── ABOUT ────────────────────────────────────────────────── */}
+          {/* ── ACCOUNT ──────────────────────────────────────────────
+              Who is signed in, and the two things they can do about it. The
+              email is shown because a farm phone gets handed around, and
+              "which account am I on" has no other answer in the app. */}
+          <Text style={s.sectionLabel}>ACCOUNT</Text>
+          <View style={[s.card, SHADOW.sm]}>
+            <Row icon="person-circle-outline" iconColor={COLORS.primary}
+              label="Signed in as" value={authEmail || '--'} />
+            {isAdmin && (<>
+              <Divider />
+              <Row
+                icon="people-outline"
+                iconColor={COLORS.info}
+                label="Team"
+                hint="Who can use this farm"
+                onPress={() => navigation.navigate('Team')}
+                right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+              />
+            </>)}
+            <Divider />
+            <Row
+              icon="log-out-outline"
+              iconColor={COLORS.danger}
+              label="Sign out"
+              /* Confirmed, because on a farm phone this is a slip that costs
+                 somebody their alarms until they remember the password. */
+              onPress={() => Alert.alert(
+                'Sign out?',
+                'You will need your email and password to sign in again, and '
+                + 'this phone will stop receiving alarms for the farm.',
+                [{ text: 'Stay signed in', style: 'cancel' },
+                 { text: 'Sign out', style: 'destructive', onPress: () => signOut() }],
+              )}
+              right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+            />
+          </View>
+
           <Text style={s.sectionLabel}>ABOUT</Text>
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="leaf"                  iconColor={COLORS.primary}   label="System"        value="Smart Orchid Care" />
@@ -411,6 +487,7 @@ const s = StyleSheet.create({
   rowLabel: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '600' },
   rowHint:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2 },
   rowValue: { color: COLORS.textTertiary, fontSize: FONT.sm, maxWidth: 160, textAlign: 'right' },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   // Badge
   badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },

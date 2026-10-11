@@ -32,8 +32,13 @@ from typing import Optional
 import numpy as np
 
 from app.api.routes.smart_care_v2 import (
-    _fb_get, _fb_put, _clean, _server_now_ms, vpd_kpa,
+    _fb_get, _fb_put, _server_now_ms, vpd_kpa,
 )
+from app.services.readings import measured
+# The estimators moved to app.services.kriging so they can be tested and reused
+# without importing the server. Re-exported under their old names: house_planner
+# and the placement analysis import _krige_field from here.
+from app.services.kriging import IDW_POWER, idw_field as _idw_field, krige_field as _krige_field  # noqa: F401
 
 # Fields worth estimating. sampleMoisture is deliberately absent: it measures
 # water in THIS section's tray, which is a property of that tray's plumbing and
@@ -85,10 +90,13 @@ def _coords(section: dict) -> Optional[tuple]:
 def _anchor_reading(section: dict) -> Optional[dict]:
     """This section's own measured reading, if it is recent enough to trust.
 
-    _clean() is used rather than the raw record so a failed sensor reads as None
-    and is excluded, instead of contributing -999 to a variogram.
+    readings.measured() and NOT _clean(). This docstring used to promise that
+    _clean() makes "a failed sensor read as None and be excluded" - it never
+    did: _clean() substitutes 28 C / 70 % / 0 lux, so a node whose DHT22 had
+    failed became an anchor reporting 28 C, and a node with no light sensor
+    became an anchor reporting darkness. measured() drops the field instead.
     """
-    latest = _clean((section or {}).get("latest") or {})
+    latest = measured((section or {}).get("latest") or {})
     if not latest:
         return None
     ts = latest.get("timestamp")
@@ -103,134 +111,26 @@ def _anchor_reading(section: dict) -> Optional[dict]:
     return latest
 
 
-# Inverse-distance weighting exponent. 2 is the standard choice and it IS a
-# choice, not a derivation: 1 spreads influence too far across a house this
-# size, and 3 makes each target almost equal to its single nearest anchor, which
-# is nearest-neighbour with extra steps.
-IDW_POWER = 2.0
-
-
-def _idw_field(xs, ys, zs, tx, ty):
-    """Distance-weighted estimate, for when a variogram cannot be fitted.
-
-    WHY THIS EXISTS. Ordinary kriging fits a variogram from the VALUES as well
-    as the positions, and with four anchors it often cannot. On house H2 the
-    temperature spread was a real 2.5 C gradient and PyKrige still refused, so
-    every unmonitored zone got NOTHING - the app showed no readings at all while
-    four sensors sat there disagreeing with each other in an orderly way.
-
-    The flat-field path does not help there. That one is for when every anchor
-    AGREES, where the mean is the honest answer. This is the opposite case:
-    there is real structure, kriging just cannot describe it.
-
-    IDW needs no variogram. Each target is the anchors weighted by 1/distance^2,
-    so a zone beside a warm corner reads warm. It is a WEAKER estimator than
-    kriging and it is labelled as one:
-
-      * it has no kriging variance, so no error bar is invented for it
-      * `method` says "idw", never "ordinary-kriging"
-
-    Returns (values, spreads). The spread is the weighted standard deviation of
-    the anchors around each estimate - a description of how much the nearby
-    anchors disagree, NOT a kriging variance. `method` is what says which kind
-    of number the caller is looking at.
-    """
-    vals, spreads = [], []
-    for x, y in zip(tx, ty):
-        d = [math.dist((x, y), (ax, ay)) for ax, ay in zip(xs, ys)]
-        # A target sitting exactly on an anchor takes that anchor's value; the
-        # weight would otherwise divide by zero.
-        if min(d) < 1e-9:
-            i = d.index(min(d))
-            vals.append(float(zs[i]))
-            spreads.append(0.0)
-            continue
-        w = [1.0 / (dist ** IDW_POWER) for dist in d]
-        tot = sum(w)
-        v = sum(wi * zi for wi, zi in zip(w, zs)) / tot
-        var = sum(wi * (zi - v) ** 2 for wi, zi in zip(w, zs)) / tot
-        vals.append(float(v))
-        spreads.append(float(math.sqrt(max(0.0, var))))
-    return vals, spreads
-
-
-def _krige_field(xs, ys, zs, tx, ty):
-    """One field, kriged onto the target points. (values, variances) or None.
-
-    A singular matrix - from collinear or near-duplicate anchors - raises, and
-    is reported rather than silently producing nonsense.
-
-    LINEAR IS TRIED FIRST WHEN ANCHORS ARE FEW, and the reason is a bug this
-    code shipped with. Spherical was tried first, with linear kept only as a
-    fallback for when spherical RAISED. Spherical does not raise on few points:
-    it fits a variogram whose range is shorter than the spacing between the
-    sensors, decides no anchor is close enough to any target to be informative,
-    and returns the plain mean of the anchors for every target - which is
-    exactly what ordinary kriging should do with that variogram, so nothing
-    anywhere reports a problem.
-
-    Measured on five anchors spanning 25.0-28.5 C with a clear gradient:
-
-        spherical   -> [26.8, 26.8, 26.8, 26.8]   range 3.03 m, anchors 5-10 m apart
-        linear      -> [28.43, 26.86, 27.08, 25.34]
-
-    26.8 is the mean of the five. The left-hand column is four estimates that
-    look measured, carry a confidence interval, and contain no information.
-    """
-    from pykrige.ok import OrdinaryKriging
-
-    zs_arr = np.asarray(zs, dtype=float)
-    z_mean = float(np.mean(zs_arr))
-    z_spread = float(np.ptp(zs_arr))
-
-    # LINEAR FIRST, ALWAYS. This used to switch to spherical at eight anchors or
-    # more, on the assumption that a fitted range becomes trustworthy once the
-    # points are dense. That assumption was never measured, and it is wrong.
-    # Held-out reconstruction error on a simulated 10 x 14 m house, same points,
-    # only the variogram differing:
-    #
-    #     anchors      linear     spherical
-    #           6       0.246         0.497
-    #           7       0.241         0.460
-    #           8       0.237         0.486
-    #          10       0.194         0.438
-    #
-    # Linear wins at every count and keeps improving as anchors are added, while
-    # spherical stalls near 0.45. The threshold did not trade accuracy for
-    # robustness - it simply made the estimate worse above eight anchors, and
-    # showed up as reconstruction error going UP when a house gained a sensor.
-    #
-    # Spherical stays as a fallback for the case where linear fails outright.
-    models = ("linear", "spherical")
-
-    for model in models:
-        try:
-            ok = OrdinaryKriging(
-                np.asarray(xs, dtype=float),
-                np.asarray(ys, dtype=float),
-                zs_arr,
-                variogram_model=model,
-                enable_plotting=False,
-                coordinates_type="euclidean",
-            )
-            z, ss = ok.execute("points",
-                               np.asarray(tx, dtype=float),
-                               np.asarray(ty, dtype=float))
-            vals = np.asarray(z, dtype=float).ravel()
-            var = np.asarray(ss, dtype=float).ravel()
-            if not np.all(np.isfinite(vals)):
-                continue
-            # Reject a collapse to the mean. The anchors disagree by z_spread,
-            # so an estimate that equals their average at every target has
-            # thrown away the only thing kriging was asked to use - where the
-            # sensors are. Checked against the mean rather than against the
-            # spread of the outputs, so it also catches a single target.
-            if z_spread > 0.5 and np.all(np.abs(vals - z_mean) < 0.02 * z_spread):
-                continue
-            return vals, var, model
-        except Exception:
-            continue
-    return None
+# ── The estimators ──────────────────────────────────────────────────────────
+# _idw_field and _krige_field now live in app/services/kriging.py (imported at
+# the top under these names). Their history stays here, next to the code that
+# depends on it:
+#
+# IDW EXISTS because ordinary kriging fits a variogram from the VALUES as well as
+# the positions, and with four anchors it often cannot. On house H2 a real 2.5 C
+# gradient made PyKrige refuse, and every unmonitored zone got NOTHING. IDW needs
+# no variogram; it is weaker, has no kriging variance, and is labelled "idw".
+#
+# LINEAR IS TRIED FIRST, ALWAYS. Spherical on few points fits a range shorter
+# than the sensor spacing and returns the plain anchor mean for every target -
+# measured on five anchors spanning 25.0-28.5 C:
+#     spherical -> [26.8, 26.8, 26.8, 26.8]  (the mean, with confidence intervals)
+#     linear    -> [28.43, 26.86, 27.08, 25.34]
+# and held-out error on a simulated 10 x 14 m house, same points:
+#     anchors   6      7      8      10
+#     linear    0.246  0.241  0.237  0.194
+#     spherical 0.497  0.460  0.486  0.438
+# A collapse to the anchor mean is rejected even when the fit "succeeds".
 
 
 def interpolate_house(house_id: str, house: Optional[dict] = None,
@@ -298,17 +198,31 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
     anchors = kept
     result["anchors"] = len(anchors)
 
-    xs = [a["x"] for a in anchors]
-    ys = [a["y"] for a in anchors]
     tx = [t["x"] for t in targets]
     ty = [t["y"] for t in targets]
 
+    def _field_anchors(f):
+        """(xs, ys, zs) from the anchors that MEASURED this field, or None.
+
+        Per field, not all-or-nothing. A node built with a DHT22 and no BH1750
+        is a perfectly good temperature anchor; skipping light for the whole
+        house because that one node has no light sensor - which is what the
+        old any(None) check did - threw away every other node's light reading.
+        Below MIN_ANCHORS measured values the field is not estimated at all.
+        """
+        have = [a for a in anchors if a["r"].get(f) is not None]
+        if len(have) < MIN_ANCHORS:
+            return None
+        return ([a["x"] for a in have], [a["y"] for a in have],
+                [a["r"][f] for a in have])
+
     fields, models = {}, {}
     for f in FIELDS:
-        zs = [a["r"].get(f) for a in anchors]
-        if any(z is None for z in zs):
-            continue                      # that sensor failed somewhere; skip the field
-        out = _krige_field(xs, ys, zs, tx, ty)
+        got = _field_anchors(f)
+        if got is None:
+            continue
+        fxs, fys, zs = got
+        out = _krige_field(fxs, fys, zs, tx, ty)
         if out is None:
             continue
         vals, var, model = out
@@ -343,9 +257,10 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
     for f in FIELDS:
         if f in fields or f not in FLAT_FIELD_SPAN:
             continue
-        zs = [a["r"].get(f) for a in anchors]
-        if any(z is None for z in zs):
+        got = _field_anchors(f)
+        if got is None:
             continue
+        zs = got[2]
         span = max(zs) - min(zs)
         if span <= FLAT_FIELD_SPAN[f]:
             mean = sum(zs) / len(zs)
@@ -365,10 +280,11 @@ def interpolate_house(house_id: str, house: Optional[dict] = None,
     for f in FIELDS:
         if f in fields or f in flat:
             continue
-        zs = [a["r"].get(f) for a in anchors]
-        if any(z is None for z in zs):
+        got = _field_anchors(f)
+        if got is None:
             continue
-        idw[f] = _idw_field(xs, ys, zs, tx, ty)
+        fxs, fys, zs = got
+        idw[f] = _idw_field(fxs, fys, zs, tx, ty)
 
     if "temperature" not in fields or "humidity" not in fields:
         missing = [f for f in ("temperature", "humidity") if f not in fields]

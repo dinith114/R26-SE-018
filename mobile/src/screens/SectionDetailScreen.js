@@ -6,6 +6,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { LIVE_MS } from '../hooks/useLiveData';
 import RenameDialog from '../components/RenameDialog';
@@ -23,11 +24,13 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
+  getHouseHealth,
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
 } from '../services/careV2';
+import { sectionIssues, farmClock } from '../services/deviceHealth';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -175,6 +178,9 @@ export default function SectionDetailScreen({ route, navigation }) {
      control, chart, forecast, plan, tray, plant food, sensor node, interval,
      Wi-Fi, rename, delete. Everything was one swipe away and nothing was
      findable. Split by what the farmer came to do. */
+  /* What this account may do. The server refuses the rest whatever happens
+     here; this only stops the screen offering a button that would 403. */
+  const can = useCan();
   const [tab,      setTab]      = useState('now');
   const [events,   setEvents]   = useState(null);
   const [evLoading, setEvLoading] = useState(false);
@@ -191,8 +197,11 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [sheet, setSheet] = useState(null);
   const [toast, setToast] = useState(null);      // { text, kind }
   const [pendingCtl, setPendingCtl] = useState(null);
+  const [health, setHealth] = useState(null);
 
   const load = useCallback(async () => {
+    // Hardware checks, on their own: never allowed to stop the screen loading.
+    getHouseHealth(houseId).then(setHealth).catch(() => setHealth(null));
     try {
       // The device lookup is allowed to fail on its own: an older backend
       // without /api/v2/devices should still render the whole screen.
@@ -1176,6 +1185,25 @@ export default function SectionDetailScreen({ route, navigation }) {
         refreshControl={<RefreshControl refreshing={refresh} tintColor={COLORS.primary}
           onRefresh={() => { setRefresh(true); load(); }} />}>
 
+        {/* Something wrong with the hardware goes first, above the tabs: the
+            push about it brings the farmer to this screen, and a reading from
+            a sensor that is not answering is not worth looking at. */}
+        {sectionIssues(health, sectionId).length > 0 && (
+          <View style={[styles.healthCard, SHADOW.sm]}>
+            {sectionIssues(health, sectionId).map((i) => (
+              <View key={i.kind} style={styles.healthRow}>
+                <Ionicons name="warning-outline" size={16} color={COLORS.danger} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.healthTitle}>
+                    {i.title}{i.sinceMs ? ` · since ${farmClock(i.sinceMs)}` : ''}
+                  </Text>
+                  <Text style={styles.healthMsg}>{i.message}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
         {/* Three jobs, not one scroll: what is happening now, what has
             happened, and how this section is set up. */}
         <View style={styles.tabs}>
@@ -1301,6 +1329,10 @@ export default function SectionDetailScreen({ route, navigation }) {
                 </>
               )}
 
+              {/* Whoever may start a pour may stop one. A run that cannot be
+                  stopped by the person watching it is worse than one that was
+                  never offered. */}
+              {can('stopSection') && (
               <TouchableOpacity
                 style={[styles.stopBtn, stopping && { opacity: 0.6 }]}
                 onPress={() => setSheet('stop')}
@@ -1313,6 +1345,7 @@ export default function SectionDetailScreen({ route, navigation }) {
                   : <Ionicons name="stop-circle-outline" size={18} color={COLORS.danger} />}
                 <Text style={styles.stopTxt}>{stopping ? 'Stopping…' : 'Stop now'}</Text>
               </TouchableOpacity>
+              )}
             </View>
           ) : (
             <>
@@ -1320,12 +1353,23 @@ export default function SectionDetailScreen({ route, navigation }) {
                 readings they decide from. They used to sit below the chart, the
                 forecast, the plan, the tray, the fertilizer and the control card -
                 far enough down that they were genuinely hard to find. */}
+            {!can('waterSection') && !can('fillTray') && (
+              /* Said once, rather than leaving a gap where the buttons were.
+                 An empty space reads as something failing to load. */
+              <Text style={styles.viewOnly}>
+                Your account has view-only access, so watering and tray fills are
+                not shown here.
+              </Text>
+            )}
             <View style={styles.btnGrid}>
               {[
                 ['water', 'Water Now',   'rainy-outline',      COLORS.primary,
-               () => { setAddFert(!!fert?.due); setSheet('water'); }],
-                ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill')],
-              ].map(([k, label, ic, c, fn]) => {
+               () => { setAddFert(!!fert?.due); setSheet('water'); }, 'waterSection'],
+                ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill'),
+                 'fillTray'],
+              /* A viewer sees the readings and the plan and none of the pumps.
+                 Both of these are admin-or-operator on the server. */
+              ].filter(([, , , , , action]) => can(action)).map(([k, label, ic, c, fn]) => {
                 // Fill Tray carries one extra block the other button does not.
                 const cooling = k === 'fill' && trayCoolingDown;
                 const off = actionsOff || cooling;
@@ -1397,11 +1441,15 @@ export default function SectionDetailScreen({ route, navigation }) {
               </View>
             </View>
 
+            {/* The VALUE is worth showing to everyone - whether this section is
+                following the farm switch is the first thing anybody asks. Only
+                the tap to change it is admin. */}
             <DropRow
               icon="options-outline"
               label="Runs"
               value={(CONTROL_OPTIONS.find((o) => o.override === override) || CONTROL_OPTIONS[0]).label}
-              onPress={() => setSheet('control')}
+              onPress={can('setSectionOverride') ? () => setSheet('control') : undefined}
+              disabled={!can('setSectionOverride')}
             />
 
             <View style={[styles.tRow, { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: SPACE.md, marginTop: SPACE.md }]}>
@@ -1409,9 +1457,16 @@ export default function SectionDetailScreen({ route, navigation }) {
                 <Text style={styles.tTitle}>Humidity tray</Text>
                 <Text style={styles.tDesc}>Keep the 3 cm tray topped up automatically</Text>
               </View>
-              <Switch value={trayOn} onValueChange={toggleTray}
-                trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
-                thumbColor={trayOn ? COLORS.info : COLORS.textTertiary} />
+              {/* Read-only for anyone who cannot change it, rather than absent:
+                  whether the tray is being kept topped up explains what the
+                  section is doing, and a missing switch explains nothing. */}
+              {can('setMode') ? (
+                <Switch value={trayOn} onValueChange={toggleTray}
+                  trackColor={{ false: COLORS.border, true: `${COLORS.info}40` }}
+                  thumbColor={trayOn ? COLORS.info : COLORS.textTertiary} />
+              ) : (
+                <Text style={styles.roState}>{trayOn ? 'On' : 'Off'}</Text>
+              )}
             </View>
           </View>
 
@@ -1711,24 +1766,34 @@ export default function SectionDetailScreen({ route, navigation }) {
                 <Text style={styles.nodeMac}>{device.mac}</Text>
 
                 <View style={styles.ivBlock}>
+                  {/* Both values stay visible - how often the board reports and
+                      which network it is on are facts about the section. Only
+                      changing them is admin. */}
                   <DropRow
                     icon="reload-outline"
                     label="Reads"
                     value={intervalLabel(device.readIntervalMs)}
-                    onPress={() => setSheet('interval')}
-                    disabled={savingIv != null}
+                    onPress={can('setDeviceInterval') ? () => setSheet('interval') : undefined}
+                    disabled={savingIv != null || !can('setDeviceInterval')}
                   />
                   <DropRow
                     icon="wifi-outline"
                     label="Wi-Fi"
-                    value={device.ssid || 'Change'}
-                    onPress={() => { setWifi({ ssid: '', pass: '', saving: false,
-                                               scanning: true, networks: [] });
-                                     scanWifi(); }}
+                    value={can('setNodeWifi') ? (device.ssid || 'Change') : (device.ssid || '--')}
+                    onPress={can('setNodeWifi')
+                      ? () => { setWifi({ ssid: '', pass: '', saving: false,
+                                          scanning: true, networks: [] });
+                                scanWifi(); }
+                      : undefined}
+                    disabled={!can('setNodeWifi')}
                   />
                 </View>
 
+                {/* Identify and Check are diagnostics, not changes, and the
+                    server allows an operator both. Kept for them. */}
+                {(can('identifyDevice') || can('pingDevice')) && (
                 <View style={styles.nodeBtns}>
+                  {can('identifyDevice') && (
                   <TouchableOpacity style={[styles.nodeBtn, blinking && styles.nodeBtnOn]}
                     onPress={blinkNode} disabled={blinking} activeOpacity={0.8}
                     accessibilityRole="button"
@@ -1739,7 +1804,9 @@ export default function SectionDetailScreen({ route, navigation }) {
                       {blinking ? 'Blinking' : 'Identify'}
                     </Text>
                   </TouchableOpacity>
+                  )}
 
+                  {can('pingDevice') && (
                   <TouchableOpacity
                     style={[styles.nodeBtn,
                             ping?.state === 'ok' && styles.nodeBtnOk,
@@ -1766,10 +1833,13 @@ export default function SectionDetailScreen({ route, navigation }) {
                        : ping?.state === 'timeout' ? 'No answer' : 'Check'}
                     </Text>
                   </TouchableOpacity>
+                  )}
                 </View>
+                )}
 
                 {/* Unlink gets its own row. Three buttons abreast clipped their
                     labels at large system font sizes. */}
+                {can('unassignDevice') && (
                 <View style={[styles.nodeBtns, { marginTop: SPACE.sm }]}>
                   <TouchableOpacity style={styles.unlinkBtn}
                     onPress={() => setSheet('unlink')} disabled={unlinking} activeOpacity={0.8}
@@ -1780,6 +1850,7 @@ export default function SectionDetailScreen({ route, navigation }) {
                     <Text style={styles.unlinkTxt}>{unlinking ? 'Unlinking…' : 'Unlink node'}</Text>
                   </TouchableOpacity>
                 </View>
+                )}
               </>
             ) : (
               <>
@@ -1791,12 +1862,16 @@ export default function SectionDetailScreen({ route, navigation }) {
                   This section has no sensor node, so it has no readings and cannot be
                   watered from the app. Power a node on, then link it here.
                 </Text>
+                {can('assignDevice') ? (
                 <TouchableOpacity style={styles.linkBtn} onPress={() => setPicking(true)}
                   activeOpacity={0.85} accessibilityRole="button"
                   accessibilityLabel="Link a sensor node to this section">
                   <Ionicons name="add-circle-outline" size={16} color="#FFF" />
                   <Text style={styles.linkBtnTxt}>Link a node</Text>
                 </TouchableOpacity>
+                ) : (
+                  <Text style={styles.viewOnly}>An admin can link one here.</Text>
+                )}
               </>
             )}
           </View>
@@ -1850,11 +1925,12 @@ export default function SectionDetailScreen({ route, navigation }) {
               </>
             ) : (
               <TouchableOpacity style={styles.durView} activeOpacity={0.7}
-                onPress={() => setPosEdit({
+                disabled={!can('setSectionPosition')}
+                onPress={can('setSectionPosition') ? () => setPosEdit({
                   x: meta.x != null ? String(meta.x) : '',
                   y: meta.y != null ? String(meta.y) : '',
-                })}
-                accessibilityRole="button"
+                }) : undefined}
+                accessibilityRole={can('setSectionPosition') ? 'button' : 'text'}
                 accessibilityLabel="Set where this section is in the house">
                 <Ionicons name="location-outline" size={22}
                   color={meta.x != null ? COLORS.primary : COLORS.textTertiary} />
@@ -1967,11 +2043,12 @@ export default function SectionDetailScreen({ route, navigation }) {
               </>
             ) : (
               <TouchableOpacity style={styles.durView} activeOpacity={0.7}
-                onPress={() => setDurEdit({
+                disabled={!can('setSectionDurations')}
+                onPress={can('setSectionDurations') ? () => setDurEdit({
                   water: plan?.durationSetBy === 'manual' ? String(plan.durationSec) : '',
                   tray:  tray?.manualSeconds != null ? String(tray.manualSeconds) : '',
-                })}
-                accessibilityRole="button"
+                }) : undefined}
+                accessibilityRole={can('setSectionDurations') ? 'button' : 'text'}
                 accessibilityLabel="Change how long watering and tray filling run">
                 <Ionicons name="timer-outline" size={22} color={COLORS.primary} />
                 <View style={{ flex: 1 }}>
@@ -2003,7 +2080,8 @@ export default function SectionDetailScreen({ route, navigation }) {
             statusTone={houseMeta?.masterMac ? COLORS.warning : COLORS.danger} />
           <View style={[styles.card, SHADOW.sm]}>
             <TouchableOpacity style={styles.durView} activeOpacity={0.7}
-              onPress={openMaster}
+              disabled={!can('setHouseMaster')}
+              onPress={can('setHouseMaster') ? openMaster : undefined}
               accessibilityRole="button"
               accessibilityLabel="Choose the master controller for this house">
               <Ionicons name="git-network-outline" size={22}
@@ -2026,18 +2104,22 @@ export default function SectionDetailScreen({ route, navigation }) {
 
           <Text style={styles.device}>Device ID: {meta.deviceId || `${houseId}-${sectionId}`}</Text>
 
+          {can('renameSection') && (
           <TouchableOpacity style={styles.renameBtn} onPress={() => setRenaming(true)}
             activeOpacity={0.7} accessibilityRole="button"
             accessibilityLabel={`Rename this section. Currently called ${meta.name || sectionId}.`}>
             <Ionicons name="create-outline" size={18} color={COLORS.primary} />
             <Text style={styles.renameTxt}>Rename this section</Text>
           </TouchableOpacity>
+          )}
 
+          {can('deleteSection') && (
           <TouchableOpacity style={styles.deleteBtn} onPress={() => setSheet('delete')} activeOpacity={0.7}
             accessibilityRole="button" accessibilityLabel="Delete this section">
             <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
             <Text style={styles.deleteTxt}>Delete this section</Text>
           </TouchableOpacity>
+          )}
         </>)}
 
         <View style={{ height: 100 }} />
@@ -2047,6 +2129,14 @@ export default function SectionDetailScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
+  /* Said where a control would have been, so the gap does not read as
+     something that failed to load. */
+  viewOnly: { fontSize: FONT.md, color: COLORS.textTertiary,
+              textAlign: 'center', paddingVertical: SPACE.md,
+              paddingHorizontal: SPACE.lg, lineHeight: 20 },
+  /* A switch's value, shown to someone who may not move it. */
+  roState:  { fontSize: FONT.lg, fontWeight: '600', color: COLORS.textSecondary },
+
   // the heading's own marginTop lives here instead, otherwise its margin box
   // is what gets centred in this row and the text sits lower than the pill
   dropRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
@@ -2311,4 +2401,9 @@ const styles = StyleSheet.create({
   lg:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
   lgDot:   { width: 8, height: 8, borderRadius: 4 },
   lgTxt:   { color: COLORS.textTertiary, fontSize: 9 },
+  healthCard:  { backgroundColor: COLORS.dangerDim, borderRadius: RADIUS.sm,
+                 padding: SPACE.md, marginBottom: SPACE.md, gap: SPACE.sm },
+  healthRow:   { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start' },
+  healthTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800' },
+  healthMsg:   { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginTop: 2 },
 });

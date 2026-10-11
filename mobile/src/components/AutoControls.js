@@ -15,11 +15,18 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, Switch, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { setAutoMode } from '../services/careV2';
+import { useCan } from '../config/auth';
 import { COLORS, SPACE, RADIUS } from '../config/theme';
 
 export default function AutoControls({ autoMode, pendingAction = 0, onChanged }) {
+  const can = useCan();
   const [busy, setBusy] = useState(false);
   const on = autoMode !== false;
+  /* The card stays for everybody. Whether the farm is running itself is the
+     single most important fact on the screen - without it a viewer cannot read
+     anything else correctly, because "nothing is happening" means one thing
+     under Auto and the opposite under Manual. Only the switch is admin. */
+  const mayFlip = can('setAutoMode');
 
   const flip = async (v) => {
     setBusy(true);
@@ -64,7 +71,7 @@ export default function AutoControls({ autoMode, pendingAction = 0, onChanged })
         <Switch
           value={on}
           onValueChange={ask}
-          disabled={busy}
+          disabled={busy || !mayFlip}
           trackColor={{ false: COLORS.border, true: `${COLORS.success}80` }}
           thumbColor={on ? COLORS.success : '#FFF'}
           accessibilityRole="switch"

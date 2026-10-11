@@ -337,3 +337,91 @@ export async function getTreatment(disease, severity) {
   );
   return body.treatment;
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Contributing an image of a disease the system does not yet recognise.       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Submit a photograph plus the contributor's own labels.
+ *
+ * Nothing about the live model changes. The image is stored as an ORIGINAL on
+ * the server and counted toward a threshold; it is never augmented on upload,
+ * because augmenting before the train/test split would put variants of the same
+ * leaf on both sides of it.
+ *
+ * `form` is { disease, plantPart, severity, verified, verifiedBy, notes }.
+ *
+ * Returns { count_verified, minimum_required, needed, ready_for_training, ... }
+ * so the screen can show "Anthracnose: 8 / 30".
+ */
+export async function contributeImage(asset, form) {
+  const uri = typeof asset === 'string' ? asset : asset?.uri;
+  if (!uri) {
+    throw new ApiError('No image selected.', { kind: 'image' });
+  }
+
+  const described = describeImage(uri, typeof asset === 'object' ? asset?.mimeType : null);
+  const name = (typeof asset === 'object' && asset?.fileName) || described.name;
+
+  // Same web/native split as detectDisease: a Blob for browsers, a
+  // { uri, name, type } object for native. See buildImageForm above.
+  const body = await buildImageForm(uri, name, described.type);
+  body.append('disease', form.disease || '');
+  body.append('plant_part', form.plantPart || '');
+  body.append('severity', form.severity || '');
+  body.append('verified', form.verified ? 'true' : 'false');
+  body.append('verified_by', form.verifiedBy || '');
+  body.append('notes', form.notes || '');
+
+  const { status, text } = await postForm(`${DISEASE_API}/contribute`, body);
+
+  if (status === 422) {
+    // The form failed the server's checks -- a missing field, an invalid
+    // severity, or the attestation ticked without naming an institute. The
+    // message is written for a person, so show it as-is.
+    throw new ApiError(
+      detailFromText(text, 'Please check the form and try again.'),
+      { kind: 'form', status }
+    );
+  }
+  if (status === 400) {
+    throw new ApiError(
+      detailFromText(text, 'That file could not be read as a photograph.'),
+      { kind: 'image', status, hint: 'Choose a JPEG or PNG photo.' }
+    );
+  }
+  if (status === 503) {
+    throw new ApiError(
+      detailFromText(text, 'The server cannot store contributions right now.'),
+      { kind: 'server', status }
+    );
+  }
+  if (status < 200 || status >= 300) {
+    throw new ApiError(
+      detailFromText(text, `Server error (HTTP ${status}).`),
+      { kind: 'server', status }
+    );
+  }
+
+  try {
+    const payload = JSON.parse(text);
+    if (!payload?.result) {
+      throw new ApiError('The server response was missing the result.', {
+        kind: 'server', status,
+      });
+    }
+    return payload.result;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError('The server sent a response the app could not read.', {
+      kind: 'server', status,
+    });
+  }
+}
+
+/** How close each contributed disease is to being trainable. */
+export async function getPendingCounts() {
+  return getJson(`${DISEASE_API}/pending-counts`);
+}
