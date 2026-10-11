@@ -304,7 +304,7 @@ export default function FarmDashboardScreen({ navigation }) {
      left out because this list predates the master: "a command is a document
      the node polls". After the placement decision that is most of a house, so
      the farmer could not water most of it by hand. Trays stay live-only:
-     their cooldown and fill checks read the section's own probe. */
+     their cooldown and fill checks read the section's own humidity. */
   const flowLive = flowSections.filter((x) => x.freshness?.state === 'live'
     || (!isTrayFlow && x.freshness?.state === 'estimated'));
   const flowPickable = flowLive.filter((x) => !(isTrayFlow && trayCooling(x)));
@@ -318,7 +318,7 @@ export default function FarmDashboardScreen({ navigation }) {
       sectionId: x.sectionId,
       name: x.meta?.name || x.sectionId,
       durationSec: x.plan?.durationSec || 45,
-      fillSeconds: x.tray?.fillSeconds || 15,
+      fillSeconds: x.tray?.fillSeconds || x.tray?.amountSeconds || 15,
       withFertilizer: !!x.fertilizer?.due,
     }));
     setFlow(null);
@@ -436,7 +436,7 @@ export default function FarmDashboardScreen({ navigation }) {
               own conditions and its own sensor device.
             </Text>
             <TouchableOpacity style={[styles.setupBtn, SHADOW.md]}
-              onPress={() => navigation.navigate('FarmSetup')} activeOpacity={0.85}>
+              onPress={() => setAdding(true)} activeOpacity={0.85}>
               <Ionicons name="add-circle-outline" size={20} color="#FFF" />
               <Text style={styles.setupBtnText}>Set Up My Farm</Text>
             </TouchableOpacity>
@@ -879,33 +879,6 @@ export default function FarmDashboardScreen({ navigation }) {
             </TouchableOpacity>
             )}
 
-            {/* Two genuinely different ways to add a house, and the difference is
-                not cosmetic: one ends with sensors already placed and a calibration
-                window running, the other with an empty house the farmer fills in by
-                hand. Sending everyone down one path would either force a three-day
-                wait on somebody who already knows their layout, or hide the whole
-                placement feature from somebody who does not. */}
-            <SelectSheet
-              visible={adding}
-              title="How do you want to set this house up?"
-              subtitle="Both create a real house. They differ in who decides where the sensors go."
-              options={[
-                { key: 'plan',
-                  label: 'Work out the best sensor positions',
-                  sub: 'Sections are spread evenly, you run them for three days, then '
-                     + 'the app says which positions matter and which sensors you can '
-                     + 'take out. Needs a sensor in every section to start.' },
-                { key: 'manual',
-                  label: 'I know my layout — set it up myself',
-                  sub: 'Name the sections yourself and place nodes by hand. No '
-                     + 'calibration window, and no placement suggestion.' },
-              ]}
-              confirmOnSelect
-              onCancel={() => setAdding(false)}
-              onConfirm={(k) => {
-                setAdding(false);
-                navigation.navigate(k === 'plan' ? 'HousePlanner' : 'FarmSetup');
-              }} />
 
             {/* the farm name was previously fixed at setup, a typo was permanent */}
             {can('renameFarm') && (
@@ -921,6 +894,39 @@ export default function FarmDashboardScreen({ navigation }) {
         )}
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Rendered outside the house list so the FIRST house gets this choice too.
+          The empty farm's "Set Up My Farm" went straight to the manual setup, so a
+          new farm - or one whose houses were all deleted - could not start a
+          calibration at all. Found 10 Oct 2026, setting up the farm for real.
+
+          Two genuinely different ways to add a house, and the difference is
+          not cosmetic: one ends with sensors already placed and a calibration
+          window running, the other with an empty house the farmer fills in by
+          hand. Sending everyone down one path would either force a three-day
+          wait on somebody who already knows their layout, or hide the whole
+          placement feature from somebody who does not. */}
+      <SelectSheet
+        visible={adding}
+        title="How do you want to set this house up?"
+        subtitle="Both create a real house. They differ in who decides where the sensors go."
+        options={[
+          { key: 'plan',
+            label: 'Work out the best sensor positions',
+            sub: 'Sections are spread evenly, you run them for three days, then '
+               + 'the app says which positions matter and which sensors you can '
+               + 'take out. Needs a sensor in every section to start.' },
+          { key: 'manual',
+            label: 'I know my layout — set it up myself',
+            sub: 'Name the sections yourself and place nodes by hand. No '
+               + 'calibration window, and no placement suggestion.' },
+        ]}
+        confirmOnSelect
+        onCancel={() => setAdding(false)}
+        onConfirm={(k) => {
+          setAdding(false);
+          navigation.navigate(k === 'plan' ? 'HousePlanner' : 'FarmSetup');
+        }} />
 
       {/* The house's own menu, in the app's shape rather than Android's. */}
       <SelectSheet

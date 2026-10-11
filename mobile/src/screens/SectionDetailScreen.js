@@ -129,11 +129,12 @@ export default function SectionDetailScreen({ route, navigation }) {
      into a 4.61 litre tray. The confirm sheet read the same expression, so it
      truthfully promised 15 s and was ignored as a typo.
   
-     The 15 s fallback stays for the case where nobody has expressed a
-     preference and the model wants nothing: pressing Fill Tray then means
-     "fill it", and 15 s is one tray. */
-  const trayFillSecs = sec?.tray?.manualSeconds
-    ?? (sec?.tray?.fillSeconds || sec?.tray?.maxSeconds || 15);
+     Since the tray probe was removed (10 Oct 2026) every fill, automatic or
+     pressed, pours the same amount: the grower's setting, or one full tray
+     (amountSeconds, from the server). The 15 s fallback is one tray, for a
+     server that has not reported an amount yet. */
+  const trayFillSecs = sec?.tray?.amountSeconds
+    ?? sec?.tray?.manualSeconds ?? sec?.tray?.maxSeconds ?? 15;
 
   const est    = sec?.estimated || null;
   const plan   = sec?.plan   || {};
@@ -412,7 +413,7 @@ export default function SectionDetailScreen({ route, navigation }) {
     if (!auto) {
       setDurEdit({
         water: String(sec?.plan?.modelDurationSec ?? sec?.plan?.durationSec ?? ''),
-        tray:  sec?.tray?.modelSeconds ? String(sec.tray.modelSeconds) : '',
+        tray:  sec?.tray?.manualSeconds != null ? String(sec.tray.manualSeconds) : '',
       });
       return;
     }
@@ -1951,9 +1952,9 @@ export default function SectionDetailScreen({ route, navigation }) {
 
           {/* ── POUR LENGTHS ─────────────────────────────────────────────
               How long the pump runs, not when. The models keep deciding the
-              time of day and whether the tray needs anything; these only
-              replace the length once that decision is made, which is why a
-              blank box means "automatic" rather than "never". */}
+              time of day and when the tray needs filling; these set the length
+              once that decision is made. A blank watering box means the
+              model's length; a blank tray box means one full tray. */}
           <SectionHead icon="timer-outline" title="Pour lengths"
             tint={COLORS.primary} tintDim={COLORS.primaryDim}
             status={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
@@ -1969,8 +1970,8 @@ export default function SectionDetailScreen({ route, navigation }) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.durAutoTitle}>Let the system choose</Text>
                 <Text style={styles.durSub}>
-                  {durAuto ? 'The model sets both lengths each day.'
-                           : 'You set the lengths. The model still picks the time.'}
+                  {durAuto ? 'The model sets the watering length; each tray fill is one full tray.'
+                           : 'You set the lengths. The models still pick the time.'}
                 </Text>
               </View>
               <Switch
@@ -1988,7 +1989,7 @@ export default function SectionDetailScreen({ route, navigation }) {
               <Ionicons name="sparkles-outline" size={14} color={COLORS.estimated} />
               <Text style={styles.durAiTxt}>
                 AI suggestion — watering {plan?.modelDurationSec ?? plan?.durationSec ?? '--'}s
-                {tray?.modelSeconds ? `  ·  tray ${tray.modelSeconds}s` : '  ·  tray not needed now'}
+                {tray?.modelWantsFill ? '  ·  tray fill needed now' : '  ·  tray not needed now'}
               </Text>
             </View>
 
@@ -2056,7 +2057,9 @@ export default function SectionDetailScreen({ route, navigation }) {
                     Watering {plan?.durationSetBy === 'manual'
                       ? `${plan.durationSec}s` : `${plan?.durationSec ?? '--'}s`}
                     {'   ·   '}
-                    Tray {tray?.manualSeconds != null ? `${tray.manualSeconds}s` : 'auto'}
+                    Tray {tray?.manualSeconds != null
+                      ? `${tray.manualSeconds}s`
+                      : `${tray?.amountSeconds ?? tray?.maxSeconds ?? 15}s (full tray)`}
                   </Text>
                   <Text style={styles.durSub}>
                     {plan?.litres != null

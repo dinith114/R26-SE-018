@@ -64,6 +64,7 @@ jobs:
             tests/test_calibrating_house_is_left_alone.py \
             tests/test_device_liveness.py \
             tests/test_device_health.py \
+            tests/test_tray_amount.py \
             tests/test_ci_workflow_is_runnable.py
 
   mobile:

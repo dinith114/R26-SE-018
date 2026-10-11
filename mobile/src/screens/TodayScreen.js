@@ -137,7 +137,7 @@ export default function TodayScreen({ navigation }) {
           + 'the humidity around the plants, it does not touch the roots.',
     onConfirm: () => run(
       `Filling ${dry.length} tray${dry.length !== 1 ? 's' : ''}`,
-      () => Promise.all(dry.map(s => fillTray(s.houseId, s.sectionId, s.tray?.fillSeconds || 15))),
+      () => Promise.all(dry.map(s => fillTray(s.houseId, s.sectionId, s.tray?.fillSeconds || s.tray?.amountSeconds || 15))),
     ),
   });
 

@@ -599,17 +599,13 @@ function readingAt(g, sid, tMs) {
   const hour = d.getHours() + d.getMinutes() / 60;
   const r = g.field.at(p.x, p.y, hour, w.cloud, w.ambient, w.wind, nr, tMs / 60000);
 
-  // The probe. Raw counts drift slowly with the tray; the percentage is the
-  // firmware's mapping of that raw value, not an independent number.
-  const raw = Math.round(1750 + 260 * Math.sin(tMs / 36e5) + gauss(nr, 0, 40));
+  // Shaped as firmware 2.7 writes it: no tray probe since 10 Oct 2026.
   return {
     temperature: r.temperature,
     humidity: r.humidity,
     light: r.light,
     vpd: r.vpd,
     timestamp: tMs,
-    sampleMoisture: Math.round(Math.max(0, Math.min(100, (2600 - raw) / 12)) * 10) / 10,
-    soilRaw: raw,
     sensorFault: false,
     node: 'validation'
   };

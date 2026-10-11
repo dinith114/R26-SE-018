@@ -42,7 +42,7 @@ import contextvars
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
@@ -233,13 +233,15 @@ def second_session_due(section: dict, now: Optional[datetime] = None) -> Optiona
 
 COOLDOWN_HOURS = 6.0
 
-# The dose that actually fills the tray, and so earns the FULL cooldown.
-# Reactive doses land around 30-40 s; an anticipatory top-up is 6-15 s.
-TRAY_FULL_FILL_SEC = 30.0
-# Even a splash needs a moment before the next assessment means anything. This
-# one is never waived, including for a refill, so a probe stuck at "dry" cannot
-# make the valve open every fifteen minutes for ever.
+# Even a splash needs a moment before the next assessment means anything.
 TRAY_MIN_HOLD_HOURS = 0.5
+
+# Fields the firmware sent while a capacitive probe sat in the humidity tray.
+# The probe was removed on 10 Oct 2026: the grower sets how much water a tray
+# fill pours (in seconds, in the app) and the models decide when, so nothing
+# needs the tray's level. Boards still on firmware <= 2.6 keep sending these
+# until they are reflashed; they are dropped, never shown or acted on.
+RETIRED_FIELDS = ("sampleMoisture", "soilRaw")
 
 # ── MEASURED HARDWARE, 28 August 2026 ────────────────────────────────────────
 # Until this was measured, "seconds" was an arbitrary unit. The duration labels
@@ -318,50 +320,23 @@ def _sec_for_depth(cm: float) -> int:
 # numbers changed, not a retrained model.
 TRAY_MAX_SEC = _sec_for_depth(TRAY_MAX_DEPTH_CM)          # ~15 s
 
-# Below this the tray cannot buffer anything - there is nothing left to
-# evaporate - and it is refilled regardless of what the air is doing.
-TRAY_LOW_PCT = 20.0
-# And ABOVE this there is nothing useful left to add: the water is already
-# there, and what limits humidity is how fast it evaporates, not how much of it
-# is sitting in the notch.
-#
-# The probe was only ever read in the direction that ADDS water. On 31 Aug a
-# section reporting an impossible 0 % humidity had its valve opened while the
-# probe said the tray was 88.3 % full, and nothing anywhere objected. A tray
-# that is full and humidity that is still low is the definition of trayAtLimit,
-# which is what justifies a second watering - so this is flagged, not silently
-# dropped.
-TRAY_FULL_PCT = 80.0
-# Refilling an empty tray means filling it, so it is the ceiling by definition.
-TRAY_REFILL_SEC = TRAY_MAX_SEC
-
-# How long after a real fill the tray should be showing water. Anything longer
-# and a still-dry reading is not evidence about the tray.
-TRAY_RESPONSE_HOURS = 1.0
+# The pour that fills the tray, and so earns the FULL cooldown. Every automatic
+# fill pours the grower's own amount, or this when none is set.
+TRAY_FULL_FILL_SEC = TRAY_MAX_SEC
 
 
-def _tray_level(latest: dict):
-    """Measured water level in the tray, or None when there is no usable probe.
+def _tray_amount(section: dict) -> Tuple[int, str]:
+    """How many seconds a tray fill pours in this section, and who chose it.
 
-    The capacitive probe sits IN the humidity tray - Vanda grow bare-root, so
-    there is no medium to measure and the probe was repurposed to report the
-    tray. The firmware maps it to a percentage against a calibration measured on
-    this exact probe: 2600 counts in open air, 1100 with the blade in water.
-
-    None rather than a guess when the probe is absent or faulty. A section
-    without one keeps the older air-humidity behaviour instead of being told its
-    tray is empty on no evidence.
+    The grower's setting (Pour lengths in the app) when there is one; otherwise
+    one full tray. The models decide WHEN a tray is filled, never how much: the
+    amount is a property of the tray and the pump, which the grower knows.
+    Always capped at the tray's capacity - a setting cannot overflow it.
     """
-    v = (latest or {}).get("sampleMoisture")
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    if f < -5.0 or f > 105.0:          # outside anything the mapping can produce
-        return None
-    return max(0.0, min(100.0, f))
+    manual = _manual_durations(section).get("tray")
+    if manual:
+        return max(1, min(TRAY_MAX_SEC, int(manual))), "you"
+    return TRAY_MAX_SEC, "full tray"
 
 
 def _effective_cooldown(last_secs) -> float:
@@ -369,14 +344,9 @@ def _effective_cooldown(last_secs) -> float:
 
     The cooldown exists for a physical reason: a 3 cm tray cannot dry out within
     six hours, so low humidity soon after a fill means the AIR is dry, not the
-    tray. That reasoning holds for a fill that filled the tray. It does not hold
-    for a 6 second anticipatory top-up, which does not.
-
-    Charging both the same six hours was a real regression. Traced on a real
-    Jaffna morning: a 6 s top-up at 08:00 blocked the 35 s fill the model asked
-    for at 10:00, and the section then went through the whole dry spell - 53 to
-    57 % humidity - on six seconds of water, where the old reactive-only model
-    would have given it thirty-five.
+    tray. That holds for a pour that filled the tray. A grower who sets a small
+    amount gets a proportionally shorter rest, so a part-filled tray is topped
+    up again sooner rather than left to run dry through a hot afternoon.
 
     Missing seconds means old data written before this existed; assume a full
     fill, because under-watering is the safer way to be wrong about a tray.
@@ -441,7 +411,9 @@ def _display(reading: dict) -> dict:
         return {}
     out = {}
     for k, v in raw.items():
-        if k in ("temperature", "humidity", "light", "vpd", "sampleMoisture"):
+        if k in RETIRED_FIELDS:
+            continue                     # the tray probe is gone; old firmware still sends these
+        if k in ("temperature", "humidity", "light", "vpd"):
             try:
                 fv = float(v)
             except (TypeError, ValueError):
@@ -1783,7 +1755,7 @@ def _actionable(section: dict, now_ms: float, estimates: bool = True) -> bool:
     sections kriging exists to cover - was never planned, never watered and
     never alarmed: _reading_for_plan's estimate fallback was unreachable from
     the engine. Found reading the engine in the 8 Oct E2E run. `estimates=False`
-    is for the tray cycle, which needs the section's own probe.
+    is for the tray cycle, which needs the section's own humidity reading.
     """
     if not isinstance(section, dict):
         return False
@@ -1933,26 +1905,18 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
 
     Xs = _tray["scaler"].transform(np.array([[
         latest["temperature"], latest["humidity"], latest["light"], v, float(hour)]]))
-    secs = int(round(float(_tray["model"].predict(Xs)[0])))
-    secs = max(0, min(60, secs))
-    model_secs = secs          # the model's own call, kept for the UI and report
+    model_secs = max(0, min(60, int(round(float(_tray["model"].predict(Xs)[0])))))
 
-    # A length set by the grower replaces the model's - but only when the model
-    # has already decided a fill is warranted. Applying it to a zero would turn
-    # a manual preference into a standing instruction to keep filling.
-    manual = _manual_durations(section)
-    if secs > 0 and manual.get("tray"):
-        secs = int(manual["tray"])
-
-    # PHYSICAL CEILING. The model was trained on a synthetic seconds scale that
-    # no pump was ever measured against; at 300 ml/s its typical 25 s dose is
-    # 7.5 L into a 4.6 L tray. Clamp to what the tray can actually hold. This
-    # applies to a manual length too - the tray's size is not a preference.
-    if secs > TRAY_MAX_SEC:
-        secs = TRAY_MAX_SEC
+    # THE MODEL DECIDES WHEN, THE GROWER DECIDES HOW MUCH. The regressor's
+    # output is used only as its fill / no-fill call (`> 0`); every fill pours
+    # the section's own amount - the grower's setting, or one full tray - which
+    # is already capped at what the tray holds. A model trained on a synthetic
+    # seconds scale has no business choosing litres for a tray it cannot see.
+    amount, amount_by = _tray_amount(section)
+    secs = amount if model_secs > 0 else 0
 
     # NOT IN THE DARK. TRAY_DAY_START/END states it, and the model was trained
-    # on daylight hours only - but just the prefill and refill paths applied it.
+    # on daylight hours only - but just the prefill path applied it.
     # At 02:00 on 9 Oct (E2E run) the model, extrapolating, asked for a fill and
     # one was sent: water that cannot evaporate overnight, and on a farm with
     # Auto off, an alarm to wake the farmer for it.
@@ -1995,11 +1959,11 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                    f"model does not call for a fill yet.")
     elif rh >= lo:
         status = "topup"
-        msg = (f"Humidity {rh}% is inside the band, but it is hot and bright, so a "
-               f"small {secs}s top-up keeps it there.")
+        msg = (f"Humidity {rh}% is inside the band, but it is hot and bright, so the "
+               f"tray gets its {secs}s fill to keep it there.")
     else:
         status = "fill"
-        msg = f"Humidity {rh}% is below {lo:.0f}%, open the valve {secs}s to raise it."
+        msg = f"Humidity {rh}% is below {lo:.0f}%, filling the tray for {secs}s to raise it."
 
     # ── ANTICIPATORY TOP-UP ──────────────────────────────────────────────────
     # Nothing is needed right now, but the section's own trajectory says the
@@ -2020,7 +1984,7 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
         risk = _drop_risk(house_id, section_id, latest, now)
         thr = float((_tray or {}).get("drop_threshold") or 0.70)
         if risk is not None and risk >= thr:
-            secs = max(6, min(15, int(round((hi - rh) * 0.6))))
+            secs = amount
             status = "prefill"
             prefill = {"risk": round(risk, 3), "threshold": thr,
                        "horizon": (_tray or {}).get("drop_horizon_hours", 3)}
@@ -2028,89 +1992,12 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                    f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
                    f"while there is still heat to evaporate it.")
 
-    # ── KEEP THE RESERVOIR CHARGED ───────────────────────────────────────────
-    # A humidity tray raises humidity by evaporating. An empty one cannot, so
-    # waiting for the air to dry before filling charges the buffer exactly when
-    # it is already too late.
-    #
-    # Every other rule here infers the tray's state - from air humidity, or from
-    # a clock. The probe MEASURES it, and a measurement beats an inference. On
-    # the live farm this was found reading 0 % for thirty hours while the system
-    # reported "ok, no fill needed", because the air happened to be humid at the
-    # time it was asked.
-    level = _tray_level(latest)
-
-    # ── DOES THE TRAY ANSWER WHEN IT IS FILLED? ──────────────────────────────
-    # A level reading is only worth acting on if it responds to water. Three
-    # things produce a permanent, entirely plausible 0%:
-    #
-    #   * the probe is unplugged - a floating ADC pin sits near the dry end,
-    #     which reads as a perfectly ordinary "empty tray", not as a fault
-    #   * the probe is mounted above the water line
-    #   * the fill never arrives - the tray pump is not wired on this rig yet,
-    #     so the command reaches a relay channel with nothing on the end of it
-    #
-    # None of those is distinguishable from a genuinely empty tray by looking at
-    # one reading. What IS distinguishable: fill it, and see whether anything
-    # changes. If a real dose went in within the last hour and the tray still
-    # reads empty, then whatever this number is, it is not measuring water - so
-    # stop letting it open the valve, and fall back to the air-humidity
-    # behaviour that needs no probe at all.
-    #
-    # This is deliberately about the whole path rather than the probe alone. A
-    # dead pump, a kinked tube and an empty water butt all look the same from
-    # here, and all three mean the same thing: do not keep commanding fills that
-    # achieve nothing.
-    responds = prev.get("trayResponds")
-    if level is not None and level >= TRAY_LOW_PCT:
-        responds = True                      # it has shown water: it works
-    elif (level is not None and since is not None
-          and since <= TRAY_RESPONSE_HOURS
-          and float(prev.get("lastFillSeconds") or 0) >= TRAY_REFILL_SEC):
-        responds = False                     # filled, and nothing moved
-
-    dry = (level is not None and level < TRAY_LOW_PCT and responds is not False)
-    if dry and TRAY_DAY_START <= hour <= TRAY_DAY_END and secs < TRAY_REFILL_SEC:
-        secs = TRAY_REFILL_SEC
-        status = "refill"
-        msg = (f"The tray is empty (level {level:.0f}%). Refilling {secs}s so there is "
-               f"water to evaporate when humidity falls. An empty tray cannot hold "
-               f"humidity up, however good the air looks right now.")
-
-    # A tray that does not answer is worth saying out loud: it is a bench fault,
-    # not a plant one, and the farmer can do something about it.
-    if responds is False and level is not None and level < TRAY_LOW_PCT:
-        msg += (" The tray still reads empty after a fill, so the probe, the tray "
-                "pump or the water supply needs checking - humidity is being "
-                "managed from the air reading alone until it does.")
-
-    # THE PROBE OVERRULES THE MODEL WHEN THE TRAY IS ALREADY FULL.
-    # Placed before the humidity ceiling below because it answers a different
-    # question: that one asks whether the AIR needs more moisture, this one asks
-    # whether the tray can hold any. `responds is not False` for the same reason
-    # the refill path uses it - a probe that has been shown not to track water
-    # must not be allowed to decide anything.
-    if (secs > 0 and level is not None and level >= TRAY_FULL_PCT
-            and responds is not False):
-        msg = (f"The tray is already {level:.0f}% full, so there is nothing useful "
-               f"to add - humidity is limited by how fast it evaporates, not by "
-               f"how much water is in the notch.")
-        if rh < lo:
-            msg += " The tray is at its limit - extra watering may be needed."
-        secs, status, cooling_at_limit = 0, "ok", rh < lo
-    else:
-        cooling_at_limit = False
-
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
     # this only catches a bad prediction (retrained model, corrupt pickle).
     # Overfilling a 3 cm tray into already damp air risks mould on the roots,
     # so this one stays hard.
-    # `not dry` matters: this ceiling exists to stop water being added to a tray
-    # that already has some, into air that is already damp. Putting water into an
-    # EMPTY tray is not over-humidifying - it is stocking a reservoir, and
-    # evaporation self-limits at high humidity anyway.
-    if secs > 0 and rh >= hi and not dry:
-        msg = (f"Model asked for {secs}s but humidity is {rh}%, at or above the "
+    if secs > 0 and rh >= hi:
+        msg = (f"The model called for a fill but humidity is {rh}%, at or above the "
                f"{hi:.0f}% ceiling. Fill blocked to avoid over-humidifying.")
         secs, status = 0, "ok"
 
@@ -2124,13 +2011,8 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # "prefill" belongs in this list. It was missing, so the anticipatory path
     # skipped the cooldown entirely and could refill a tray filled minutes
     # earlier - the exact overflow the guard exists to prevent.
-    # The cooldown answers "does the tray still have water?" by inference. When
-    # the probe answers it directly, believe the probe - but never drop below the
-    # minimum hold, so a probe stuck at dry cannot cycle the valve for ever.
     hold = _effective_cooldown(prev.get("lastFillSeconds"))
-    if dry:
-        hold = TRAY_MIN_HOLD_HOURS
-    if status in ("fill", "topup", "prefill", "refill") and since is not None and since < hold:
+    if status in ("fill", "topup", "prefill") and since is not None and since < hold:
         cooling  = True
         wait     = round(hold - since, 1)
         at_limit = status == "fill"
@@ -2150,11 +2032,10 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     # trayEnabled is a separate per-section opt-out and still applies on top.
     auto      = section_acts_alone(section) and ctrl.get("trayEnabled", True)
     commanded = False
-    # Acts on ANY dose the model asks for, not just a full "fill". Top-ups were
-    # previously computed and then silently dropped, so the small maintenance
-    # doses the model is best at never actually reached the valve.
+    # Acts on every fill the model calls for, not just a "fill" below the band.
+    # Top-ups were once computed and then silently dropped.
     refused = None
-    if auto and status in ("fill", "topup", "prefill", "refill") and secs > 0:
+    if auto and status in ("fill", "topup", "prefill") and secs > 0:
         node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
         if node_cmd:
             cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
@@ -2173,14 +2054,16 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
                        or "the command could not be sent")
             msg += f" Auto mode could not fill it: {refused}."
 
+    manual = _manual_durations(section).get("tray")
     out = {"fillSeconds": secs, "status": status, "message": msg,
-           # what the model asked for before any safety override, so the app and
-           # the report can show the model's own decision rather than the result
+           # the model's own call before any safety rule: > 0 means "fill now"
            "modelSeconds": model_secs,
+           "modelWantsFill": model_secs > 0 or prefill is not None,
            "prefill": prefill,
-           "decidedBy": ("manual" if manual.get("tray") and secs > 0
-                         else "model" if secs == model_secs else "safety-override"),
-           "manualSeconds": manual.get("tray"),
+           # How much every fill pours here, and whether the grower chose it.
+           "amountSeconds": amount,
+           "amountSetBy": amount_by,
+           "manualSeconds": manual,
            "autoCommanded": commanded,
            # Why an automatic fill could not be sent, for run_tray_cycle to say.
            "autoRefused": refused,
@@ -2188,28 +2071,22 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            # Remembered so the NEXT check can size the hold to what actually
            # went in, rather than charging a splash the same six hours as a fill.
            "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
-           # What the probe actually reads, so the app can show an empty tray
-           # instead of only ever showing the air.
            # Seconds meant nothing physical until the pump was measured. Volume
            # is what a grower can sanity-check, and what the tray's own capacity
            # is expressed in. Per-section rate: see _ml_per_sec.
            "litres": round(secs * _ml_per_sec(section) / 1000.0, 2),
+           "amountLitres": round(amount * _ml_per_sec(section) / 1000.0, 2),
            "trayCapacityL": round(TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000.0, 2),
            "maxSeconds": TRAY_MAX_SEC,
-           "trayLevel": level,
-           "trayEmpty": bool(dry),
-           # None until it has been put to the test either way.
-           "trayResponds": responds,
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
            "cooldownHours": round(hold, 1),
            "hoursSinceFill": round(since, 1) if since is not None else None,
            "hoursUntilNextFill": round(max(0.0, hold - since), 1) if cooling else 0,
-           # True either because the cooldown held a fill off, or because the
-           # tray is physically full and humidity is still under the band. Both
-           # mean the same thing to the watering rule: the tray has done all it
-           # can.
-           "trayAtLimit": bool((cooling and rh < lo) or cooling_at_limit),
+           # The tray was filled within its rest period and humidity is still
+           # under the band: the tray has done all it can, which is what the
+           # second-watering rule waits for.
+           "trayAtLimit": bool(cooling and rh < lo),
            "checkedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", out)
     return out
@@ -4100,20 +3977,21 @@ async def set_section_durations(house_id: str, section_id: str, body: DurationsI
 
     tray = _fb_get(f"{base}/tray.json") or {}
     if tray:
-        model_secs = int(tray.get("modelSeconds") or 0)
-        # Only when the model already wants a fill, matching the tray path: a
-        # length applied to a zero would turn a preference into a standing
-        # instruction to keep filling.
-        secs = int(out["tray"]) if (model_secs > 0 and out.get("tray")) else model_secs
-        secs = min(secs, TRAY_MAX_SEC)
-        tray["fillSeconds"] = secs
+        # The amount every fill pours is the grower's (or one full tray). A fill
+        # already pending takes the new amount; nothing pending stays nothing -
+        # a length is never an instruction to fill.
+        amount = max(1, min(TRAY_MAX_SEC, int(out["tray"]))) if out.get("tray") else TRAY_MAX_SEC
+        if int(tray.get("fillSeconds") or 0) > 0:
+            tray["fillSeconds"] = amount
+            tray["litres"] = round(amount * rate / 1000.0, 2)
         # Written even when no fill is due, because this is the grower's setting
         # rather than a property of the current decision - it is what the card
         # shows when the tray is perfectly happy.
         tray["manualSeconds"] = out.get("tray")
-        tray["decidedBy"] = ("manual" if out.get("tray") and secs > 0
-                             else "model" if secs == model_secs else "safety-override")
-        tray["litres"] = round(secs * rate / 1000.0, 2)
+        tray["amountSeconds"] = amount
+        tray["amountSetBy"] = "you" if out.get("tray") else "full tray"
+        tray["amountLitres"] = round(amount * rate / 1000.0, 2)
+        tray.pop("decidedBy", None)
         _fb_put(f"{base}/tray.json", tray)
 
     return {"status": "success", "durations": out,

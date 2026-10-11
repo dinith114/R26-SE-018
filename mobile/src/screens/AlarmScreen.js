@@ -175,7 +175,7 @@ export default function AlarmScreen({ route, navigation }) {
         await waterSection(a.houseId, a.sectionId,
           section?.plan?.durationSec || 45, !!section?.fertilizer?.due);
       } else if (a.action === 'fill-tray') {
-        await fillTray(a.houseId, a.sectionId, section?.tray?.fillSeconds || 15);
+        await fillTray(a.houseId, a.sectionId, section?.tray?.fillSeconds || section?.tray?.amountSeconds || 15);
       }
       // Doing the thing is the strongest possible acknowledgement.
       await ackAlarm(a.id);
@@ -339,7 +339,7 @@ export default function AlarmScreen({ route, navigation }) {
         title={`${sheetCfg.button} in ${sheet?.alarm?.sectionId || ''}?`}
         body={sheet?.alarm?.action === 'water'
           ? `The pump runs for ${section?.plan?.durationSec || 45} seconds.`
-          : `The valve opens for ${section?.tray?.fillSeconds || 15} seconds.`}
+          : `The valve opens for ${section?.tray?.fillSeconds || section?.tray?.amountSeconds || 15} seconds.`}
         confirmLabel={sheetCfg.button || 'Confirm'}
         onCancel={() => setSheet(null)}
         onConfirm={() => doAct(sheet.alarm)}

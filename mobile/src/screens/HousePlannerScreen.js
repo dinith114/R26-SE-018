@@ -33,7 +33,7 @@ const HOUSE_TYPES = ['shade-net', 'greenhouse', 'open'];
 // EVERY section, so a section with no board would hold the analysis back for good.
 // Three is the analysis minimum (placement_analysis.analyse).
 const SECTION_CHOICES = [3, 4, 5, 6, 8, 9, 12, 16, 20];
-const NODE_COST_LKR = 2350;
+const NODE_COST_LKR = 2140;
 
 /* Sections on an even grid, kept clear of the walls.
  *

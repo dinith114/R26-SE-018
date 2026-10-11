@@ -717,7 +717,7 @@ def run_tray_cycle(now: datetime, houses: Optional[dict] = None) -> dict:
     houses = houses if houses is not None else (_fb_get("/farm/houses.json") or {})
     houses = _acting_houses(houses)
     # pass the pass's clock down, so a simulated run stays self-consistent
-    # Measured sections only: the tray decision needs the section's own probe.
+    # Measured sections only: the tray decision needs the section's own humidity reading.
     results = _run_per_section(houses, partial(_tray_decision, now=now), estimates=False)
     master = get_auto_mode()
     alarmed = []

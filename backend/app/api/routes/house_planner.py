@@ -85,9 +85,10 @@ MIN_SENSORS = _MIN_ANCHORS
 # changes nothing.
 MAX_SENSORS_CAP = 10
 
-# One node: NodeMCU ESP32 + DHT22 + BH1750 + capacitive probe, from the
-# project's own receipts.
-NODE_COST_LKR = 2350
+# One node: NodeMCU ESP32 (1,400) + DHT22 (340) + BH1750 (400), from the
+# project's own receipts. The tray probe it once carried was removed on
+# 10 Oct 2026.
+NODE_COST_LKR = 2140
 
 # Everything random in here is seeded, so a farmer who plans the same house
 # twice gets the same answer and a reviewer can reproduce the table.
@@ -831,7 +832,7 @@ async def plan_house(body: PlanIn, ctx: AuthContext = Depends(require_role(ROLE_
     """Best sensor positions for a house, with the evidence for the choice.
 
     Returns a curve rather than a single number because the farmer is the one
-    spending the money. Every extra node costs LKR 2,350 and buys less accuracy
+    spending the money. Every extra node costs LKR 2,140 and buys less accuracy
     than the one before it; where that stops being worth it is their call, and
     they can only make it if they can see it.
     """
