@@ -206,6 +206,22 @@ ml-models/hybrid_pollination/results/segmentation_check/
 
 # 
 
+# Submission documents. Written for the university, not part of the system:
+# posters, the group report, individual dissertations, and the templates they
+# were built from. Root level only, so research material inside the repo is
+# unaffected, and the Peradeniya guide stays because the knowledge base cites it.
+/*.docx
+/*.pdf
+!/Peradeniya_Collection_Guide.pdf
+
+# Word's lock files
+~$*
+
+# The grower's crossing logbook: records they entered and photographs of their
+# own plants, written at runtime. This repository is public, so none of it
+# belongs here - the real copy lives in Firebase.
+backend/data/pollination_log/
+
 # Subagent-driven-development scratch: ledgers, briefs, review packages.
 # Git history is the durable record; this is the controller working memory.
 .superpowers/

@@ -39,7 +39,10 @@ import sys
 from dataclasses import dataclass, field, asdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cross_notation import parse_cross, normalise_name, GENUS_ABBREV
+from cross_notation import (
+    parse_cross, normalise_name, expand_genus, suggest_genus,
+    genus_alliance, GENUS_ABBREV, VANDA_ALLIANCE,
+)
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +107,12 @@ class CompatibilityResult:
 
     health_used: bool = False
 
+    # How each name was understood, so the app can show it rather than leaving
+    # the grower to discover after the fact that the engine read "Catliya" as
+    # a Vanda. Keys "pod" and "pollen", each: genus, genus_source
+    # (stated|matched|assumed), recognised, did_you_mean.
+    name_check: dict = field(default_factory=dict)
+
     @property
     def tier_label(self) -> str:
         return TIER_LABEL.get(self.tier, self.tier)
@@ -146,11 +155,69 @@ class KnowledgeBase:
                 self.genus_pairs.add((a, b))
                 self.genus_combos.add(frozenset((a, b)))
 
+        # What each nothogenus is a hybrid OF. Used to expand a hybrid genus
+        # back into the natural genera it contains.
+        self.nothogenus_parents = {}
+
         for n in self.nothogenera:
             genera = [g.strip() for g in n.get("parent_genera", "").split("|") if g.strip()]
+            if n.get("nothogenus") and genera:
+                self.nothogenus_parents[n["nothogenus"]] = set(genera)
             for i in range(len(genera)):
                 for j in range(i + 1, len(genera)):
                     self.genus_combos.add(frozenset((genera[i], genera[j])))
+
+        # Name -> genus, so a grex written without its genus prefix can still be
+        # placed. Tags in the collection usually read "Kulwadee Maron", not
+        # "Vanda Kulwadee Maron", and looking the bare name up is a fact where
+        # assuming the collection's genus is only a guess.
+        self.name_genus = {}
+        for c in self.crosses:
+            for side in ("seed", "pollen"):
+                name, genus = c.get(f"{side}_parent"), c.get(f"{side}_genus")
+                if name and genus:
+                    self.name_genus.setdefault(self._key(name), genus)
+            if c.get("grex"):
+                g, _ = expand_genus(c["grex"])
+                if g:
+                    self.name_genus.setdefault(self._key(c["grex"]), g)
+        for species in self.traits.values():
+            g, _ = expand_genus(species.get("species", ""))
+            if g:
+                self.name_genus.setdefault(self._key(species["species"]), g)
+
+    def constituent_genera(self, genus: str) -> set:
+        """
+        The natural genera a genus name stands for.
+
+        A nothogenus is not an atomic genus - it is the recorded name for a
+        cross between several. `Aeridovanda` IS `Aerides x Vanda`, so a plant
+        called an Aeridovanda carries both. Treating the name as opaque makes
+        the engine blind to the commonest thing a breeder actually does:
+        crossing a hybrid back into one of its own parent genera.
+        """
+        return set(self.nothogenus_parents.get(genus, {genus}))
+
+    def nothogenus_covering(self, genera: set) -> str:
+        """
+        The registered nothogenus whose parent genera are exactly this set.
+
+        Matching is exact, not by subset: a nothogenus name is registered for
+        one specific combination of genera, and a cross that brings in a genus
+        outside that set produces a different (and here unregistered) one.
+        """
+        for name, parents in self.nothogenus_parents.items():
+            if parents == genera:
+                return name
+        return ""
+
+    def genus_for_name(self, name: str) -> str:
+        """The genus recorded against this exact parent name, or ""."""
+        return self.name_genus.get(self._key(name), "")
+
+    def knows_name(self, name: str) -> bool:
+        """True when this exact parent appears somewhere in the knowledge base."""
+        return self._key(name) in self.name_genus
 
     @staticmethod
     def _load_csv(path: str) -> list:
@@ -236,11 +303,19 @@ class CompatibilityEngine:
         Returns:
             CompatibilityResult. Order is meaningful and never sorted.
         """
-        pod_parsed = parse_cross(pod_parent)
-        pollen_parsed = parse_cross(pollen_parent)
+        # How the two names were understood. This used to be one line -
+        #   pod_genus = parse_cross(pod)["genus"] or "Vanda"
+        # - and that "or Vanda" was wrong in a way nothing downstream could
+        # detect. A name the parser could not place became a Vanda, so
+        # "Catliya x Aeridovanda Frank Johnston" was reported as the
+        # established Vanda x Aeridovanda combination: a confident verdict on
+        # a plant the grower never named.
+        pod_name = self._resolve_name(pod_parent, default_genus="Vanda")
+        pollen_name = self._resolve_name(pollen_parent,
+                                         default_genus=pod_name["genus"])
 
-        pod_genus = pod_parsed["genus"] or "Vanda"
-        pollen_genus = pollen_parsed["genus"] or pod_genus
+        pod_genus = pod_name["genus"]
+        pollen_genus = pollen_name["genus"]
 
         result = CompatibilityResult(
             pod_parent=normalise_name(pod_parent),
@@ -251,7 +326,10 @@ class CompatibilityEngine:
             pollen_genus=pollen_genus,
             cross_type="interspecific" if pod_genus == pollen_genus else "intergeneric",
             health_used=bool(pod_health or pollen_health),
+            name_check={"pod": pod_name, "pollen": pollen_name},
         )
+
+        self._warn_about_names(result, pod_name, pollen_name)
 
         # ── Health gate ───────────────────────
         # Stated as a rule from the breeder interview and horticultural
@@ -300,16 +378,64 @@ class CompatibilityEngine:
             genus_precedents = self.kb.genus_precedents(pod_genus, pollen_genus)
             combo_known = frozenset((pod_genus, pollen_genus)) in self.kb.genus_combos
 
-            if genus_precedents or combo_known:
+            # Expand both sides into the natural genera they contain, and ask
+            # whether a registered nothogenus already names that combination.
+            #
+            # Without this the engine could not see a BACKCROSS. Aeridovanda
+            # is Aerides x Vanda, so Aerides x Aeridovanda brings in no genus
+            # the Aeridovanda name does not already record - yet it came back
+            # "no registered precedent", while Aeridovanda x V. tessellata in
+            # the same knowledge base is a registered cross. The engine was
+            # contradicting its own data because it read a nothogenus as an
+            # atomic genus unrelated to its parents.
+            pod_set = self.kb.constituent_genera(pod_genus)
+            pollen_set = self.kb.constituent_genera(pollen_genus)
+            combined = pod_set | pollen_set
+            notho_cover = self.kb.nothogenus_covering(combined)
+            is_backcross = bool(notho_cover) and (
+                pod_set != pollen_set and (pod_set <= pollen_set or pollen_set <= pod_set)
+            )
+
+            if genus_precedents or combo_known or notho_cover:
                 result.tier = TIER_GENUS_PROVEN
                 result.precedents = genus_precedents[:5]
 
-                notho = self.kb.nothogenus_for(pod_genus, pollen_genus)
+                notho = self.kb.nothogenus_for(pod_genus, pollen_genus) or notho_cover
                 if pod_genus == pollen_genus:
                     result.headline = f"{pod_genus} x {pod_genus} - the standard, most reliable cross"
                     result.reasoning.append(
                         "Same-genus crosses are routine practice. The Peradeniya "
                         "breeder reports Vanda x Vanda as the most successful type."
+                    )
+                elif is_backcross:
+                    # One parent already contains the other's genus, so this
+                    # adds nothing new - the offspring stay inside the same
+                    # registered nothogenus. Worth saying plainly: a breeder
+                    # reads "intergeneric" as "long odds", and this is the one
+                    # kind of intergeneric cross that is not.
+                    hybrid, parent = (
+                        (pod_genus, pollen_genus) if pollen_set <= pod_set
+                        else (pollen_genus, pod_genus)
+                    )
+                    result.headline = (
+                        f"{pod_genus} x {pollen_genus} stays within {notho_cover}"
+                    )
+                    result.reasoning.append(
+                        f"{hybrid} is itself a hybrid of "
+                        + " and ".join(sorted(self.kb.constituent_genera(hybrid)))
+                        + f", so crossing it with {parent} introduces no genus it does "
+                        f"not already carry. The offspring are still {notho_cover}."
+                    )
+                    result.reasoning.append(
+                        f"This is a backcross into a parent genus, not a new "
+                        f"intergeneric combination. The {notho_cover} name is "
+                        f"registered, which means this genus combination has been "
+                        f"made successfully."
+                    )
+                    result.warnings.append(
+                        "No registered cross with these two exact parents was found, "
+                        "so the evidence here is at genus level. The register records "
+                        "only successes and cannot say how often an attempt fails."
                     )
                 else:
                     result.headline = (
@@ -333,16 +459,45 @@ class CompatibilityEngine:
                     )
             else:
                 result.tier = TIER_UNDEMONSTRATED
-                result.headline = f"No registered precedent for {pod_genus} x {pollen_genus}"
-                result.reasoning.append(
-                    "No hybrid joining these genera was found in the knowledge base. "
-                    "This is weak evidence against, not proof of impossibility - the "
-                    "knowledge base is a small extract, not the full register."
-                )
-                result.warnings.append(
-                    "Absence from the register is not the same as a recorded failure. "
-                    "Check the full RHS register before concluding."
-                )
+                pod_alliance = genus_alliance(pod_genus)
+                pollen_alliance = genus_alliance(pollen_genus)
+
+                # Two recognised genera from different alliances is a stronger
+                # statement than "nothing found". Orchid hybrids are made
+                # within an alliance; Vanda x Cattleya is not an unexplored
+                # pairing, it is a wall. Saying "no precedent" there reads as a
+                # gap in a small knowledge base and invites the grower to try.
+                if (pod_alliance and pollen_alliance
+                        and pod_alliance != pollen_alliance):
+                    result.headline = (
+                        f"{pod_genus} and {pollen_genus} are in different "
+                        "orchid alliances - this cross is not viable"
+                    )
+                    result.reasoning.append(
+                        f"{pod_genus} belongs to the {pod_alliance} alliance and "
+                        f"{pollen_genus} to the {pollen_alliance} alliance. Orchid "
+                        "hybrids are made within an alliance; no registered "
+                        "hybrid joins these two."
+                    )
+                    result.warnings.append(
+                        "This is not a gap in the knowledge base. The two genera "
+                        "are too distantly related to produce a viable capsule, "
+                        "so there is nothing to attempt here."
+                    )
+                else:
+                    result.headline = (
+                        f"No registered precedent for {pod_genus} x {pollen_genus}"
+                    )
+                    result.reasoning.append(
+                        "No hybrid joining these genera was found in the knowledge "
+                        "base. This is weak evidence against, not proof of "
+                        "impossibility - the knowledge base is a small extract, not "
+                        "the full register."
+                    )
+                    result.warnings.append(
+                        "Absence from the register is not the same as a recorded "
+                        "failure. Check the full RHS register before concluding."
+                    )
 
         # ── Offspring expectation ─────────────
         result.expected_offspring = self._expected_offspring(
@@ -355,22 +510,137 @@ class CompatibilityEngine:
         return result
 
     # ── Helpers ───────────────────────────────
+    def _resolve_name(self, name: str, default_genus: str) -> dict:
+        """
+        Work out which genus a typed name belongs to, and say how confident
+        that is.
+
+        Three routes, in descending order of trust:
+
+          stated   the name carries its genus - "V. tessellata", "Cattleya
+                   Bowringiana". Nothing is being inferred.
+          matched  the name has no genus prefix but IS in the knowledge base,
+                   which records one - "Kulwadee Maron" is a Vanda because the
+                   register says so, not because we guessed.
+          assumed  neither. The collection is Vandaceous so the genus of the
+                   other parent (or Vanda) is the best available guess - but it
+                   IS a guess, and the caller must be told.
+
+        The third case is the one that produced the Catliya bug. It still
+        returns a genus, because refusing to assess every unlisted hybrid name
+        would make the screen useless, but it now returns it labelled.
+        """
+        clean = normalise_name(name)
+        parsed = parse_cross(clean)
+
+        out = {
+            "name": clean,
+            "genus": "",
+            "genus_source": "",
+            "recognised": self.kb.knows_name(clean),
+            "did_you_mean": "",
+        }
+
+        if parsed["genus"]:
+            out["genus"] = parsed["genus"]
+            out["genus_source"] = "stated"
+            return out
+
+        recorded = self.kb.genus_for_name(clean)
+        if recorded:
+            out["genus"] = recorded
+            out["genus_source"] = "matched"
+            return out
+
+        out["genus"] = default_genus
+        out["genus_source"] = "assumed"
+
+        # A near-miss on the first word is worth offering: a grower copying a
+        # hand-written tag types Catliya far more often than they invent a new
+        # grex whose first word happens to be two edits from a genus name.
+        first = clean.split()[0] if clean.split() else ""
+        hint = suggest_genus(first)
+        if hint and hint != default_genus:
+            out["did_you_mean"] = hint
+
+        return out
+
+    @staticmethod
+    def _warn_about_names(result, pod_name: dict, pollen_name: dict) -> None:
+        """
+        Surface any name the engine had to guess at.
+
+        These go in first so they sit above the evidence warnings: if the
+        genus was guessed, everything after it is conditional on that guess.
+        """
+        for label, info in (("pod parent", pod_name), ("pollen parent", pollen_name)):
+            if info["genus_source"] != "assumed":
+                continue
+
+            if info["did_you_mean"]:
+                meant = info["did_you_mean"]
+                message = (
+                    f"The {label} \"{info['name']}\" is not a name this system "
+                    f"recognises. Did you mean {meant}? It has been read as a "
+                    f"{info['genus']} for this check."
+                )
+                if genus_alliance(meant) != VANDA_ALLIANCE:
+                    message += (
+                        f" If you did mean {meant}, the verdict below does not "
+                        f"apply - {meant} is in a different alliance and cannot "
+                        f"be crossed with this collection at all."
+                    )
+                result.warnings.append(message)
+            else:
+                result.warnings.append(
+                    f"The {label} \"{info['name']}\" carries no genus and is not "
+                    f"in the knowledge base. It has been read as a "
+                    f"{info['genus']}, which is the collection's genus - write "
+                    f"the genus on the name (for example \"V. {info['name']}\") "
+                    f"if that is wrong."
+                )
+
     def _health_block(self, pod_health, pollen_health, result) -> str:
-        """Return a reason string if either parent's condition rules out the cross."""
+        """
+        Return a reason string if either parent's condition rules out the cross.
+
+        A Moderate verdict means different things in the two roles, so the two
+        roles get different advice. The pod parent carries the capsule for
+        around nine months and a compromised plant should not be asked to; the
+        pollen parent only has to donate pollinia, so Moderate is acceptable
+        there and saying otherwise would be noise.
+
+        Until the application began sending pollen_health this loop only ever
+        ran on the pod side, and the single shared message told a Moderate
+        pollen parent to "consider using it as the pollen donor" - which it
+        already was.
+        """
         blockers = []
 
-        for label, health in (("pod parent", pod_health), ("pollen parent", pollen_health)):
+        for role, health in (("pod", pod_health), ("pollen", pollen_health)):
             if not health:
                 continue
 
+            label = "pod parent" if role == "pod" else "pollen parent"
             suitability = str(health.get("suitability", "")).strip().lower()
+
             if suitability == "not suitable":
                 blockers.append(f"the {label} was assessed Not Suitable")
-            elif suitability == "moderate":
+
+            elif suitability == "moderate" and role == "pod":
                 result.warnings.append(
-                    f"The {label} was assessed only Moderate. The cross can proceed, "
-                    "but consider using it as the pollen donor rather than carrying "
-                    "the pod, which costs the plant more."
+                    "The pod parent was assessed only Moderate. The cross can "
+                    "proceed, but consider reversing it and using this plant as "
+                    "the pollen donor instead: carrying a capsule for nine months "
+                    "costs the plant far more than donating pollinia."
+                )
+
+            elif suitability == "moderate" and role == "pollen":
+                result.warnings.append(
+                    "The pollen parent was assessed only Moderate. That is "
+                    "acceptable in this role - a pollen donor needs viable "
+                    "pollinia rather than the vigour to carry a capsule - so the "
+                    "cross is not blocked on that account."
                 )
 
         return " and ".join(blockers)
