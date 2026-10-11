@@ -250,6 +250,8 @@ void masterRunOne(const String& payload) {
   // "watered for 90 s" and "stopped after 12 s" are different outcomes and
   // the ledger must not record one as the other.
   masterAck(id, section, (int)channel, ran, stopped ? "stopped" : "done");
+  // Watered today, by the cloud: the offline fallback must not water it again.
+  if (action == "water" && ran > 0) fallbackNoteWatered(section);
 }
 
 /* Take the oldest outstanding command, if there is one.
@@ -283,6 +285,7 @@ void masterPollQueue() {
   int code = http.GET();
   String body = (code == 200) ? http.getString() : "";
   http.end();
+  if (code == 200) fallbackNoteCloudOk();     // the database answers (queue_fallback.ino)
   if (code != 200 || body.length() < 8 || body == "null") return;
 
   // Firebase returns { "<id>": { ... } }. The inner object is what runs.

@@ -36,6 +36,7 @@ either way; only the hands change.
 
 import asyncio
 import os
+import time
 import traceback
 from functools import partial
 from datetime import datetime, timezone, timedelta
@@ -49,8 +50,9 @@ from app.api.routes.smart_care_v2 import (
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
-    _command_refusal, SETUP_HINT, settle_pending_feeds,
+    _command_refusal, SETUP_HINT, settle_pending_feeds, _relay_channel,
 )
+from app.services import fallback as _fallback
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
 from app.services.tenant_context import (
@@ -798,6 +800,91 @@ def run_plan_catch_up(now: datetime, houses: dict) -> dict:
     return {"planned": len(results), "sections": sorted(results)}
 
 
+# ═══════════════════════ Offline fallback ════════════════════════════════════
+# A master waters from its own copy of today's plan when the cloud is gone; see
+# app/services/fallback.py for the rules and queue_fallback.ino for the master.
+
+FALLBACK_REPORT_MINUTES = 5     # how often the masters' offline reports are collected
+
+
+def export_fallback_plans(now: datetime, houses: dict, st: dict) -> dict:
+    """Give every master the plan it would need if the cloud went quiet.
+
+    Rebuilt only when something it depends on changes, judged from the farm this
+    pass already holds - so an ordinary minute costs nothing, and the channel
+    lookups (which read the database) run at 05:00, after a catch-up, or when the
+    grower changes a mode or a channel."""
+    today = _today(now)
+    master = get_auto_mode()
+    acting = _acting_houses(houses)
+    is_auto = lambda s: section_is_auto(s, master)          # noqa: E731
+    sig = _fallback.signature(acting, today, is_auto)
+    if st.get("fallbackSig") == sig:
+        return {"written": 0}
+    plans = _fallback.build_plans(acting, today, farm_tz(), is_auto,
+                                  lambda hid, sid: _relay_channel(hid, sid, "water"),
+                                  int(now.timestamp()))
+    for mac, doc in plans.items():
+        _fb_put(f"/farm/masters/{mac}/fallbackPlan.json", doc)
+    st["fallbackSig"] = sig
+    return {"written": len(plans), "masters": sorted(plans)}
+
+
+def record_fallback_reports(now: datetime, houses: dict) -> dict:
+    """A master that watered on its own reports it under fallbackDone/{id}.
+
+    Recorded like any other watering - the morning counts as watered, the
+    history shows it, the grower is told - and then the report is deleted, so
+    it is never counted twice. A report that cannot be read, or names a house
+    this master does not serve, is deleted too: kept, it would be read again
+    every five minutes for ever."""
+    by_mac: Dict[str, List[str]] = {}
+    for hid, h in (houses or {}).items():
+        mac = (((h or {}).get("meta") or {}).get("masterMac") or "").strip() if isinstance(h, dict) else ""
+        if mac:
+            by_mac.setdefault(mac, []).append(hid)
+    recorded, tz = [], None
+    for mac, hids in by_mac.items():
+        got = _fb_get(f"/farm/masters/{mac}/fallbackDone.json")
+        if not isinstance(got, dict):
+            continue
+        for rid, raw in got.items():
+            r = _fallback.read_report(raw)
+            if r is None or r["house"] not in hids:
+                print(f"[FALLBACK] unusable report {mac}/{rid}: {raw}")
+                _fb_delete(f"/farm/masters/{mac}/fallbackDone/{rid}.json")
+                continue
+            hid, sid = r["house"], r["section"]
+            h = houses.get(hid) or {}
+            s = (h.get("sections") or {}).get(sid) or {}
+            tz = tz or farm_tz()
+            when = datetime.fromtimestamp(r["at"], tz)
+            day = when.strftime("%Y-%m-%d")
+            if r["ranSec"] > 0:
+                _mark_done(hid, sid, day, "first", "fallback")
+            _log_event(hid, sid, s, action="water", durationSec=r["ranSec"], by="fallback",
+                       commandId=rid, confirmed=True, outcome=r["outcome"],
+                       wateredAt=when.strftime("%Y-%m-%d %H:%M"))
+            hname = (h.get("meta") or {}).get("name", hid)
+            sname = (s.get("meta") or {}).get("name", sid)
+            yesterday = " It used yesterday's plan, because today's had not reached it." if r["fromYesterday"] else ""
+            _raise_alarm(
+                "info", f"{hid}-{sid}-fallback-{rid}", "Watered without the cloud",
+                f"{hname} · {sname} was watered by its master controller on its own at "
+                f"{when.strftime('%H:%M')} for {r['ranSec']}s, because the cloud service could "
+                f"not be reached.{yesterday}",
+                hid, sid)
+            _fb_delete(f"/farm/masters/{mac}/fallbackDone/{rid}.json")
+            recorded.append(f"{hid}-{sid}")
+    return {"recorded": recorded}
+
+
+def _beat() -> None:
+    """The engine is alive. A master that stops seeing this treats the cloud as
+    gone, even when the database itself still answers."""
+    _fb_put("/farm/engineBeat.json", int(time.time()))
+
+
 # ═══════════════════════ The clock ═══════════════════════════════════════════
 
 # Process-wide facts only: is the clock ticking, and how many passes and
@@ -933,6 +1020,25 @@ def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False
 
     # 4. Watering, checked every tick because a planned minute must not be missed.
     did["water"] = run_watering_link(now, houses)
+
+    # 4b. Offline fallback: each master's copy of today's plan, what any master
+    #     watered on its own, and the beat that tells the masters the engine is
+    #     alive. Real passes only - a pretend clock must not hand a master a plan
+    #     for a pretend day, and a farm download that failed is not an empty farm.
+    if not pretend:
+        try:
+            if raw_houses is not None:
+                did["fallbackPlans"] = export_fallback_plans(now, houses, st)
+                last_fb = st.get("lastFallbackReports")
+                if last_fb is None or (now - last_fb) >= timedelta(minutes=FALLBACK_REPORT_MINUTES):
+                    did["fallbackReports"] = record_fallback_reports(now, houses)
+                    st["lastFallbackReports"] = now
+        except Exception as e:               # advisory: never stop the clock
+            print(f"[FALLBACK] pass skipped: {e}")
+        try:
+            _beat()
+        except Exception as e:
+            print(f"[FALLBACK] beat not written: {e}")
 
     # 5. Is the hardware telling the truth? Broken, frozen or jumping sensors,
     #    silent nodes, commands never carried out, trays that did not fill.

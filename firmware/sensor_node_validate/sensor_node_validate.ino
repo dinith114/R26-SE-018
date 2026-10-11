@@ -66,7 +66,7 @@
 
 /* Reported in the device record, and printed in the boot banner so the serial
    monitor alone shows which build is on the board. */
-#define FW_VERSION "validation-2.7"
+#define FW_VERSION "validation-2.8"
 
 /* ═══════════ QUIET_NODE: battery boards that only record ═══════════
    0 (the default) changes nothing. Set it to 1 for a board that runs from a
@@ -1639,6 +1639,11 @@ void loop() {
      anybody else. Harmless until a master is named for the house - the queue
      path is keyed by this board's MAC and simply reads back empty. */
   if (!firstCycle) masterPollQueue();
+
+  /* Then the offline fallback (queue_fallback.ino): while online, keep the
+     engine's plan and beat; online or not, water from that plan if the cloud
+     has gone quiet past a section's planned minute. */
+  if (!firstCycle) { fallbackSync(); fallbackTick(); }
 #else
   (void)lastCmdAt;   // a QUIET board never polls for commands - see QUIET_NODE
 #endif
