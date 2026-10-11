@@ -355,6 +355,32 @@ class CrossLogService:
         except Exception:
             pass
 
+    def _unmirror(self, path: str) -> None:
+        """
+        Remove the mirrored copy, through the shared helper.
+
+        This used to build the URL itself. It worked, and it was still wrong:
+        every Firebase path in this backend goes through `scoped()`, which
+        rewrites farm paths onto the current tenant, and a hand-built URL
+        silently skips it. The repository asserts that property in
+        tests/test_scoping_chokepoint.py and the assertion caught this one.
+
+        `/pollination` is not a farm path, so `scoped()` passes it through
+        untouched and the address is the same either way - but a deletion that
+        reaches Firebase by its own private route is exactly the line nobody
+        notices when the prefix does change. Going through the helper costs
+        nothing and keeps the single exit single.
+
+        Swallows its errors for the same reason the mirror does: the local
+        record is already gone, and a Firebase outage must not turn a
+        successful delete into a failed one.
+        """
+        try:
+            from app.api.routes.devices import _fb_delete
+            _fb_delete(f"{FB_ROOT}{path}.json")
+        except Exception:
+            pass
+
     # ── ids ───────────────────────────────────
     def _next_id(self, kind: str, prefix: str) -> str:
         self._store["seq"][kind] = self._store["seq"].get(kind, 0) + 1
@@ -517,12 +543,7 @@ class CrossLogService:
             self._store["deleted"] = self._store.get("deleted", 0) + 1
             self._write()
 
-        try:
-            import requests as _req
-            from app.api.routes.smart_watering import FIREBASE_BASE_URL
-            _req.delete(f"{FIREBASE_BASE_URL}{FB_ROOT}/crosses/{cross_id}.json", timeout=8)
-        except Exception:
-            pass
+        self._unmirror(f"/crosses/{cross_id}")
         return record
 
     def crosses(self) -> list:
