@@ -17,6 +17,11 @@ import { Platform } from 'react-native';
      LAN      →  'http://192.168.1.129:8000'
      hosted   →  'https://api.example.com'      (port implied by https)
      USB      →  'http://localhost:8000'        (needs: adb reverse tcp:8000 tcp:8000) */
+/* To test against a laptop instead, put its LAN address here - but remember it
+   is a DHCP lease, not a fixed one. During the two-photo work this machine was
+   handed .6 and then .2 on the next reconnect, and in the app that shows up
+   only as "Network request failed". `node preflight.js` prints the current
+   one, and this line goes back to the hostname below before anything ships. */
 const HOST = 'https://orchidfarm.duckdns.org';
 
 /* localhost on a phone means the phone, so it is only ever right for the web
