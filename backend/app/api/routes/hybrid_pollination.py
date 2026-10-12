@@ -1,6 +1,6 @@
 """
 Hybrid Pollination & Compatibility Analysis - API Routes
-Component 4: IT22065230 – Wickramasinghe D.P
+Component 1: IT22065230 – Wickramasinghe D.P
 
 Level 1: Pollination Readiness / Suitability Assessment
 """
@@ -14,6 +14,7 @@ from typing import Optional
 from app.models.schemas import (
     PlantTraitsInput, SuitabilityResponse, HealthResponse, ErrorResponse,
     CompatibilityRequest, CompatibilityResponse, PartnerRankRequest,
+    CrossLogRequest, CrossStageRequest,
 )
 from app.services.hybrid_pollination_service import pollination_service
 from app.services.compatibility_service import compatibility_service
@@ -301,3 +302,155 @@ async def list_known_parents():
         "parents": compatibility_service.known_parents(),
         "info": compatibility_service.info(),
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+#  GROWER CROSS LOGBOOK
+#
+#  The compatibility engine answers from the RHS register, which records
+#  only crosses that succeeded. These endpoints collect the other half:
+#  what a grower actually attempted and what actually happened, failures
+#  included. That is the denominator the register structurally cannot have.
+#
+#  Nothing here predicts. It is a record, and on day one it is an empty one.
+# ══════════════════════════════════════════════════════════════════
+
+from fastapi.responses import FileResponse
+from app.services.cross_log_service import cross_log_service
+
+
+@router.get("/log/reference")
+async def log_reference():
+    """The stage pipeline and exit vocabulary, so the app never hardcodes it."""
+    return {"status": "success", **cross_log_service.reference()}
+
+
+@router.post("/log/photo")
+async def log_upload_photo(image: UploadFile = File(...)):
+    """
+    Store a parent photograph and return the id the record will carry.
+
+    Photos go to disk rather than into the record: a logbook entry is a few
+    hundred bytes and should stay that way, and the grower will take two
+    photographs for every cross for years.
+    """
+    validate_image(image)
+    try:
+        photo_id = cross_log_service.save_photo(image)
+        return {"status": "success", "photoId": photo_id,
+                "url": f"/api/v1/pollination/log/photo/{photo_id}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not store photo: {e}")
+
+
+@router.get("/log/photo/{photo_id}")
+async def log_get_photo(photo_id: str):
+    """Serve a stored photograph back."""
+    path = cross_log_service.photo_path(photo_id)
+    if not path:
+        raise HTTPException(status_code=404, detail="No such photo")
+    return FileResponse(path)
+
+
+@router.get("/log/plants")
+async def log_list_plants():
+    """Every plant the grower has registered, newest first."""
+    return {"status": "success", "plants": cross_log_service.plants()}
+
+
+@router.post("/log/plants")
+async def log_register_plant(
+    name: str = Form(""),
+    photo: str = Form(""),
+    genus: str = Form(""),
+    location: str = Form(""),
+):
+    """
+    Register one plant.
+
+    `name` is optional. A plant whose tag is lost or unreadable still gets an
+    id it can be labelled with, and the name can be added later - every cross
+    that references the id picks it up.
+    """
+    return {"status": "success",
+            "plant": cross_log_service.register_plant(name, photo, genus, location)}
+
+
+@router.post("/log/crosses")
+async def log_create_cross(request: CrossLogRequest):
+    """
+    Record one attempted cross. Pod parent first, never sorted.
+
+    The two health readings are copied in as snapshots of the day the
+    pollinia were moved, not linked to the plants - a plant re-assessed six
+    months later must not rewrite what was true at pollination.
+    """
+    try:
+        cross = cross_log_service.log_cross(
+            request.pod_plant_id, request.pollen_plant_id,
+            pod_health=request.pod_health.model_dump() if request.pod_health else None,
+            pollen_health=request.pollen_health.model_dump() if request.pollen_health else None,
+            flower_age_days=request.flower_age_days,
+            pollen_source=request.pollen_source,
+            pollen_stored_days=request.pollen_stored_days,
+            logged_by=request.logged_by,
+            notes=request.notes,
+            conditions=request.conditions,
+        )
+        return {"status": "success", "cross": cross}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not log the cross: {e}")
+
+
+@router.get("/log/crosses")
+async def log_list_crosses():
+    """Every logged cross, newest first, with day count and whether it is due."""
+    return {"status": "success", "crosses": cross_log_service.crosses()}
+
+
+@router.post("/log/crosses/{cross_id}/stage")
+async def log_update_stage(cross_id: str, request: CrossStageRequest):
+    """
+    Advance a cross to the next stage, or close it at the gate it failed.
+
+    Closing records WHICH gate it stopped at, because that is the whole
+    signal: no pod set is usually technique, an aborted capsule is usually
+    the pod parent's condition, and an empty capsule is where genetic
+    incompatibility actually shows.
+    """
+    try:
+        return {"status": "success",
+                "cross": cross_log_service.update_stage(
+                    cross_id, request.stage, request.outcome, request.note)}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No cross {cross_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/log/stats")
+async def log_stats():
+    """
+    Counts per gate, with denominators. A rate appears only once a gate has
+    enough completed attempts behind it to support one.
+    """
+    return {"status": "success", **cross_log_service.stats()}
+
+
+@router.delete("/log/crosses/{cross_id}")
+async def log_delete_cross(cross_id: str):
+    """
+    Remove a record.
+
+    Needed for the test entries and duplicates a grower makes while learning
+    the app. It is also the one button here that can quietly undo the point of
+    the whole logbook: delete every cross that failed and what is left is a
+    book of successes, which is exactly the bias the RHS register already has
+    and this file exists to correct. The app asks a differently worded
+    question before removing a recorded failure.
+    """
+    try:
+        removed = cross_log_service.delete_cross(cross_id)
+        return {"status": "success", "removed": removed["crossId"]}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No cross {cross_id}")

@@ -70,7 +70,7 @@ def reading(ts_ms=None, **over):
     """A reading shaped exactly as sensor_node_validate.ino writes it."""
     r = {
         "temperature": 30.2, "humidity": 68.0, "light": 8400.0,
-        "vpd": 1.36, "sampleMoisture": 52.0, "sensorFault": False,
+        "vpd": 1.36, "sensorFault": False,
         "timestamp": int(ts_ms if ts_ms is not None else time.time() * 1000),
     }
     r.update(over)

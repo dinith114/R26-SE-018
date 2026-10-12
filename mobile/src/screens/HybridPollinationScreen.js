@@ -7,6 +7,8 @@ import { database } from '../config/firebase';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import CompatibilityTab from '../components/CompatibilityTab';
+import CrossLogTab from '../components/CrossLogTab';
+import AppDialog from '../components/AppDialog';
 import { assessSuitability, getGuidance, getKnownParents, getApiBaseUrl } from '../services/api';
 
 const HybridPollinationScreen = ({ navigation }) => {
@@ -29,6 +31,21 @@ const HybridPollinationScreen = ({ navigation }) => {
   // Corrections start folded: the photograph answers all four traits,
   // so showing empty inputs first is what made the system look input-driven.
   const [showCorrections, setShowCorrections] = useState(false);
+  /* The leaf close-up is optional and folded away by default, for the same
+     reason the corrections are: an open card the size of the main photo one
+     reads as a second required step. */
+  const [showCloseup, setShowCloseup] = useState(false);
+
+  /* Detail that used to be printed under every trait now opens here instead.
+     Keeping the raw confidence figure on screen filled the card with numbers
+     a grower cannot act on; one tap away it is still there for anyone who
+     wants it. */
+  const [dialog, setDialog] = useState(null);
+  const say = (d) => setDialog(d);
+  // Optional close-up of ONE leaf. Disease cannot be read from a whole-plant
+  // frame - measured at AUC 0.51 - so this is the image that actually goes to
+  // Component 1's disease model.
+  const [closeupImage, setCloseupImage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [guidanceData, setGuidanceData] = useState(null);
   const [activeTab, setActiveTab] = useState('assess'); // 'assess' | 'cross' | 'varieties'
@@ -64,7 +81,7 @@ const HybridPollinationScreen = ({ navigation }) => {
     }
 
     const pickerResult = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.8,
       allowsEditing: true,
     });
@@ -79,6 +96,40 @@ const HybridPollinationScreen = ({ navigation }) => {
         disease_visible: null,
         flower_condition: null,
       });
+    }
+  };
+
+  const pickCloseup = async () => {
+    const permResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permResult.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your photo library.');
+      return;
+    }
+    const pickerResult = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: true,
+    });
+    if (!pickerResult.canceled && pickerResult.assets?.[0]) {
+      setCloseupImage(pickerResult.assets[0].uri);
+      setResult(null);
+      setRejection(null);
+    }
+  };
+
+  const captureCloseup = async () => {
+    const permResult = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permResult.granted) {
+      Alert.alert('Permission needed', 'Please allow access to your camera.');
+      return;
+    }
+    const pickerResult = await ImagePicker.launchCameraAsync({
+      quality: 0.8, allowsEditing: true,
+    });
+    if (!pickerResult.canceled && pickerResult.assets?.[0]) {
+      setCloseupImage(pickerResult.assets[0].uri);
+      setResult(null);
+      setRejection(null);
     }
   };
 
@@ -119,7 +170,7 @@ const HybridPollinationScreen = ({ navigation }) => {
     setRejection(null);
 
     try {
-      const response = await assessSuitability(selectedImage, traits);
+      const response = await assessSuitability(selectedImage, traits, closeupImage);
       setResult(response);
 
       // Auto-fetch guidance
@@ -213,7 +264,11 @@ const HybridPollinationScreen = ({ navigation }) => {
   const renderAssessTab = () => (
     <>
       {/* Image Selection */}
-      <Text style={styles.sectionTitle}>Plant Image</Text>
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionRule} />
+        <Ionicons name="image-outline" size={16} color={COLORS.primary} />
+        <Text style={styles.sectionTitle}>Plant Image</Text>
+      </View>
       <View style={[styles.imageCard, SHADOW.sm]}>
         {selectedImage ? (
           <Image source={{ uri: selectedImage }} style={styles.previewImage} />
@@ -236,6 +291,72 @@ const HybridPollinationScreen = ({ navigation }) => {
       </View>
 
       {/* Trait Selection */}
+      {/* Optional leaf close-up.
+          Disease was measured at AUC 0.51 from a whole-plant frame - lesions
+          span 1-3 px at that distance. Component 1's model is trained on
+          leaves, so this is the image that actually reaches it. Optional
+          because the rest of the assessment works without it. */}
+      {/* Folded away, like the corrections below it.
+          It has to stay - disease measured AUC 0.51 from a whole-plant frame,
+          so without this image the disease half of the reading is not
+          evidence. But it is optional, and an open photo card the size of the
+          main one read as a second required step. One line, opened by whoever
+          wants it. */}
+      <TouchableOpacity
+        style={styles.correctionsToggle}
+        onPress={() => setShowCloseup((v) => !v)}
+        activeOpacity={0.7}
+      >
+        <Ionicons
+          name={showCloseup ? 'chevron-down' : 'chevron-forward'}
+          size={16}
+          color={COLORS.primary}
+        />
+        <Text style={styles.correctionsToggleText}>
+          {closeupImage ? 'Leaf close-up added' : 'Checking for disease? Add a leaf close-up'}
+        </Text>
+        <Text style={styles.correctionsOptional}>
+          {closeupImage ? 'added' : 'optional'}
+        </Text>
+      </TouchableOpacity>
+
+      {showCloseup && (
+        <>
+          <Text style={styles.traitsIntro}>
+            Disease cannot be read from a whole-plant photo — a leaf spot is a
+            millimetre or two across, which is one or two pixels from a metre
+            away. A close-up of a single leaf goes to the disease model
+            instead. Everything else works without it.
+          </Text>
+          <View style={[styles.imageCard, SHADOW.sm]}>
+            {closeupImage ? (
+              <Image source={{ uri: closeupImage }} style={styles.previewImage} />
+            ) : (
+              <View style={styles.imagePlaceholder}>
+                <Ionicons name="leaf-outline" size={30} color={COLORS.textTertiary} />
+                <Text style={styles.placeholderText}>No close-up added</Text>
+              </View>
+            )}
+            <View style={styles.imageActions}>
+              <TouchableOpacity style={styles.imageBtn} onPress={pickCloseup}>
+                <Ionicons name="images-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.imageBtnText}>Gallery</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.imageBtn} onPress={captureCloseup}>
+                <Ionicons name="camera-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.imageBtnText}>Camera</Text>
+              </TouchableOpacity>
+              {closeupImage && (
+                <TouchableOpacity style={styles.imageBtn} onPress={() => setCloseupImage(null)}>
+                  <Ionicons name="close-outline" size={16} color={COLORS.textTertiary} />
+                  <Text style={[styles.imageBtnText, { color: COLORS.textTertiary }]}>Remove</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </>
+      )}
+
       {/* Collapsed by default, and that is the point.
           The review asked whether user input was necessary. It is not - all
           four traits are read from the photograph. Keeping the fields visible
@@ -391,10 +512,17 @@ const HybridPollinationScreen = ({ navigation }) => {
           <Text style={styles.traitReadIntro}>
             {Object.values(result.trait_resolution.traits || {})
               .some((t) => t.source === 'user')
-              ? 'Values you chose are marked below; the rest were measured from the image.'
-              : 'You entered nothing. Every value below came from the photograph alone.'}
+              ? 'Your values are marked. Tap any row for detail.'
+              : 'You typed nothing — all four came from the photo. Tap a row for detail.'}
           </Text>
 
+          {/* Two lines per trait, not five.
+              Every one of these used to print its own paragraph plus a raw
+              confidence figure - "26% confidence", "model accuracy on unseen
+              plants was 56% (baseline 50%)". All of it true, none of it what a
+              grower standing over the plant needs: they need to know whether
+              to trust the reading. The number means something to an examiner,
+              so it is kept, one tap away, rather than thrown out. */}
           {Object.entries(result.trait_resolution.traits || {}).map(([key, t]) => {
             const measured = t.source === 'measured';
             const known = t.value && t.value !== 'unknown';
@@ -402,35 +530,55 @@ const HybridPollinationScreen = ({ navigation }) => {
               ? COLORS.primary
               : (measured ? COLORS.success : COLORS.textTertiary);
 
+            // A percentage is not an instruction. These words are.
+            const c = t.confidence || 0;
+            const summary = t.source === 'user' ? 'you entered this'
+              : !measured ? 'could not be measured from this photo'
+              : c >= 0.7 ? 'read clearly from the photo'
+              : c >= 0.4 ? 'fairly confident — worth a glance'
+              : 'low confidence — please check this one';
+
             return (
-              <View key={key} style={styles.traitReadRow}>
+              <TouchableOpacity
+                key={key}
+                style={styles.traitReadRow}
+                onPress={() => say({
+                  tone: measured && c >= 0.7 ? 'info' : 'warn',
+                  title: traitLabels[key] || key,
+                  message: t.explanation || summary,
+                  sections: [
+                    measured && {
+                      label: 'How sure the model is',
+                      text: `${(c * 100).toFixed(0)}% confident in this reading.`,
+                    },
+                    t.needs_user_input && {
+                      label: 'Worth confirming',
+                      text: 'Open "Disagree with a reading? Correct it" above the '
+                          + 'button to set this yourself.',
+                    },
+                  ].filter(Boolean),
+                })}
+                activeOpacity={0.6}
+              >
                 <View style={styles.traitReadHead}>
-                  <Ionicons name={traitIcons[key] || 'ellipse-outline'} size={13} color={COLORS.textSecondary} />
+                  <Ionicons name={traitIcons[key] || 'ellipse-outline'} size={14}
+                    color={COLORS.textSecondary} />
                   <Text style={styles.traitReadName}>{traitLabels[key] || key}</Text>
                   <Text style={[styles.traitReadValue, { color: tone }]}>
                     {known ? t.value : 'not determined'}
                   </Text>
+                  <Ionicons name="information-circle-outline" size={14}
+                    color={COLORS.textTertiary} />
                 </View>
-
-                <Text style={styles.traitReadSource}>
-                  {t.source === 'user' ? 'you entered this'
-                    : measured ? `measured from image · ${(t.confidence * 100).toFixed(0)}% confidence`
-                    : 'could not be measured'}
-                  {t.needs_user_input ? ' · please confirm' : ''}
-                </Text>
-
-                {t.explanation ? (
-                  <Text style={styles.traitReadWhy}>{t.explanation}</Text>
-                ) : null}
-              </View>
+                <Text style={styles.traitReadSource}>{summary}</Text>
+              </TouchableOpacity>
             );
           })}
 
           {result.trait_resolution.asked_for?.length > 0 && (
             <Text style={styles.traitReadAsk}>
               Still unknown: {result.trait_resolution.asked_for
-                .map((k) => traitLabels[k] || k).join(', ')}.
-              A close-up photo of one leaf improves the disease reading.
+                .map((k) => traitLabels[k] || k).join(', ')}
             </Text>
           )}
         </View>
@@ -461,7 +609,11 @@ const HybridPollinationScreen = ({ navigation }) => {
 
   const renderVarietiesTab = () => (
     <>
-      <Text style={styles.sectionTitle}>Parent Varieties</Text>
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionRule} />
+        <Ionicons name="flower-outline" size={16} color={COLORS.primary} />
+        <Text style={styles.sectionTitle}>Parent Varieties</Text>
+      </View>
       <Text style={styles.varietyIntro}>
         Every parent the compatibility engine has evidence for: {parentNames.length} names
         taken from the registered crosses in the RHS orchid register plus the species
@@ -535,6 +687,7 @@ const HybridPollinationScreen = ({ navigation }) => {
           { key: 'assess', label: 'Assess', icon: 'scan-outline' },
           { key: 'cross', label: 'Cross', icon: 'git-compare-outline' },
           { key: 'varieties', label: 'Varieties', icon: 'flower-outline' },
+          { key: 'log', label: 'Log', icon: 'book-outline' },
         ].map(tab => (
           <TouchableOpacity
             key={tab.key}
@@ -554,14 +707,41 @@ const HybridPollinationScreen = ({ navigation }) => {
       >
         <Animated.View style={{ opacity: fadeAnim }}>
           {activeTab === 'assess' && renderAssessTab()}
-          {activeTab === 'cross' && (
+
+          {/* Hidden rather than unmounted.
+              The cross tab holds two photographs, two assessments and two
+              typed names - several minutes of a grower's work. Unmounting it
+              on a tab switch threw all of that away, so stepping back to
+              Assess to re-check one plant silently cleared the other one's
+              photo. The other two tabs keep nothing worth preserving and stay
+              conditional. */}
+          <View style={activeTab === 'cross' ? null : styles.tabHidden}>
             <CompatibilityTab
               level1Result={result}
               level1Image={selectedImage}
               prefill={crossPrefill}
             />
-          )}
+          </View>
+
           {activeTab === 'varieties' && renderVarietiesTab()}
+
+          {/* One dialog for the whole screen, in the app's own styling. */}
+          <AppDialog
+            visible={Boolean(dialog)}
+            tone={dialog?.tone}
+            title={dialog?.title}
+            message={dialog?.message}
+            sections={dialog?.sections || []}
+            actions={dialog?.actions}
+            onDismiss={() => setDialog(null)}
+          />
+
+          {/* The grower's own record of what they attempted and what
+              happened. The register holds successes only; this is where
+              the failures go, which is the half nothing else collects. */}
+          {activeTab === 'log' && (
+            <CrossLogTab level1Result={result} level1Image={selectedImage} />
+          )}
         </Animated.View>
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -572,7 +752,15 @@ const HybridPollinationScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   scroll: { padding: SPACE.xl },
-  sectionTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.md, marginTop: SPACE.md },
+  tabHidden: { display: 'none' },
+  sectionHead: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    marginTop: SPACE.lg, marginBottom: SPACE.md,
+  },
+  sectionRule: {
+    width: 3, height: 16, borderRadius: 2, backgroundColor: COLORS.primary,
+  },
+  sectionTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
 
   // Tab Bar
   tabBar: { flexDirection: 'row', paddingHorizontal: SPACE.xl, paddingTop: SPACE.sm, gap: SPACE.xs, backgroundColor: COLORS.bg },
@@ -598,7 +786,7 @@ const styles = StyleSheet.create({
   traitChips: { flexDirection: 'row', gap: SPACE.xs, flexWrap: 'wrap' },
   traitChip: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: RADIUS.full, backgroundColor: COLORS.bgCardAlt, borderWidth: 1, borderColor: COLORS.border },
   traitChipActive: { backgroundColor: COLORS.primaryDim, borderColor: COLORS.primary },
-  traitChipText: { color: COLORS.textSecondary, fontSize: FONT.xs, fontWeight: '600', textTransform: 'capitalize' },
+  traitChipText: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600', textTransform: 'capitalize' },
   traitChipTextActive: { color: COLORS.primary },
 
   // Assess Button
@@ -610,38 +798,38 @@ const styles = StyleSheet.create({
   resultCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.md, borderLeftWidth: 4 },
   correctionsToggle: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, paddingVertical: SPACE.md, marginBottom: SPACE.sm },
   correctionsToggleText: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
-  correctionsOptional: { color: COLORS.textTertiary, fontSize: FONT.xs },
-  traitsIntro: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginBottom: SPACE.sm, marginTop: -SPACE.xs },
+  correctionsOptional: { color: COLORS.textTertiary, fontSize: FONT.sm },
+  traitsIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 17, marginBottom: SPACE.sm, marginTop: -SPACE.xs },
   traitReadCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.md },
   traitReadTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: SPACE.sm },
-  traitReadIntro: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginBottom: SPACE.md },
+  traitReadIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 17, marginBottom: SPACE.md },
   traitReadRow: { marginBottom: SPACE.md, paddingBottom: SPACE.sm, borderBottomWidth: 1, borderBottomColor: COLORS.bgCardAlt },
   traitReadHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
   traitReadName: { flex: 1, color: COLORS.text, fontSize: FONT.sm, fontWeight: '600' },
   traitReadValue: { fontSize: FONT.sm, fontWeight: '800' },
-  traitReadSource: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 3, fontVariant: ['tabular-nums'] },
-  traitReadWhy: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 16, marginTop: 4 },
-  traitReadAsk: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, fontStyle: 'italic' },
-  varietyIntro: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 18, marginBottom: SPACE.md },
-  varietyEmpty: { color: COLORS.textTertiary, fontSize: FONT.xs, fontStyle: 'italic', marginBottom: SPACE.md },
+  traitReadSource: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 3, fontVariant: ['tabular-nums'] },
+  traitReadWhy: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 16, marginTop: 4 },
+  traitReadAsk: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 17, fontStyle: 'italic' },
+  varietyIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: SPACE.md },
+  varietyEmpty: { color: COLORS.textTertiary, fontSize: FONT.sm, fontStyle: 'italic', marginBottom: SPACE.md },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, marginBottom: SPACE.md },
   searchInput: { flex: 1, color: COLORS.text, fontSize: FONT.sm, paddingVertical: 4 },
   useRow: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.sm, flexWrap: 'wrap' },
   useBtn: { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: 6 },
-  useBtnText: { color: COLORS.primary, fontSize: FONT.xs, fontWeight: '600' },
+  useBtnText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '600' },
   rejectCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.md, borderLeftWidth: 4, borderLeftColor: COLORS.danger },
-  rejectDetail: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
-  rejectHint: { color: COLORS.textSecondary, fontSize: FONT.xs, marginTop: SPACE.sm, fontStyle: 'italic' },
+  rejectDetail: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
+  rejectHint: { color: COLORS.textSecondary, fontSize: FONT.sm, marginTop: SPACE.sm, fontStyle: 'italic' },
   resultHeader: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md, marginBottom: SPACE.lg },
   resultHeaderText: { flex: 1 },
   resultLabel: { fontSize: FONT.xl, fontWeight: '800' },
   resultConf: { color: COLORS.textSecondary, fontSize: FONT.sm },
   probSection: { marginBottom: SPACE.lg },
   probRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACE.sm },
-  probLabel: { width: 90, color: COLORS.textSecondary, fontSize: FONT.xs, fontWeight: '600' },
+  probLabel: { width: 90, color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
   probBarBg: { flex: 1, height: 6, backgroundColor: COLORS.bgCardAlt, borderRadius: 3, marginHorizontal: SPACE.sm, overflow: 'hidden' },
   probBar: { height: '100%', borderRadius: 3 },
-  probVal: { width: 36, color: COLORS.text, fontSize: FONT.xs, fontWeight: '700', textAlign: 'right' },
+  probVal: { width: 36, color: COLORS.text, fontSize: FONT.sm, fontWeight: '700', textAlign: 'right' },
   resultRec: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 20 },
 
   // Guidance
@@ -651,15 +839,15 @@ const styles = StyleSheet.create({
   guideStep: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 20, marginBottom: SPACE.xs },
   tipsBox: { marginTop: SPACE.md, backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.sm, padding: SPACE.md },
   tipsTitle: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '700', marginBottom: SPACE.xs },
-  tipText: { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 18, marginBottom: 2 },
+  tipText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: 2 },
 
   // Varieties
   varietyCardFull: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.sm, flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   varietyLine: { width: 4, height: 40, borderRadius: 2 },
   varietyName: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: 2 },
-  varietyTrait: { color: COLORS.textTertiary, fontSize: FONT.xs, marginBottom: SPACE.xs },
+  varietyTrait: { color: COLORS.textTertiary, fontSize: FONT.sm, marginBottom: SPACE.xs },
   originRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  varietyOrigin: { color: COLORS.textTertiary, fontSize: 9 },
+  varietyOrigin: { color: COLORS.textTertiary, fontSize: FONT.xs },
 });
 
 export default HybridPollinationScreen;

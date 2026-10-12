@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { waterSection, fillTray, getCommandStatus, stopSection } from '../services/careV2';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -48,6 +49,10 @@ const STATE = {
 };
 
 export default function RunScreen({ route, navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
   const { action = 'water', targets = [] } = route.params || {};
   const isWater = action === 'water';
 
@@ -55,7 +60,10 @@ export default function RunScreen({ route, navigation }) {
     targets.map((t) => ({ ...t, state: 'queued', note: null })),
   );
   const [running, setRunning] = useState(true);
-  // The section pouring RIGHT NOW: { i, houseId, sectionId, id, secs, remaining }
+  // The section pouring RIGHT NOW:
+  //   { i, houseId, sectionId, id, secs, remaining, started, queued }
+  // `started` only once the master says the valve is open; until then there is
+  // nothing to count down.
   // Named `live` because each row already has its own local `active` flag.
   const [live,     setLive]     = useState(null);
   const [stopping, setStopping] = useState(false);
@@ -79,11 +87,19 @@ export default function RunScreen({ route, navigation }) {
         if (!alive.current) return { ok: false };
         try {
           const st = await getCommandStatus(houseId, sectionId, cmdId);
-          if (st.ack?.id !== cmdId) continue;
+          if (st.ack?.id !== cmdId) {
+            // Accepted by the master, not yet poured: it runs its queue one
+            // entry at a time, and an offline master holds it until it is back.
+            if (st.queuedAtController) {
+              setLive((a) => (a && a.id === cmdId ? { ...a, queued: true } : a));
+            }
+            continue;
+          }
           if (st.ack.done) return { ok: true, stopped: !!st.ack.stopped };
           if (st.ack.started) {
             setLive((a) => (a && a.id === cmdId
-              ? { ...a, remaining: st.remainingSec != null ? st.remainingSec : a.remaining }
+              ? { ...a, started: true, queued: false,
+                  remaining: st.remainingSec != null ? st.remainingSec : a.remaining }
               : a));
           }
         } catch (_) {
@@ -92,6 +108,26 @@ export default function RunScreen({ route, navigation }) {
       }
       return { ok: false };
     };
+
+    /* This screen ACTS on mount - it does not wait for a button. So the
+       check has to be here and not only on the two doors that lead here: a
+       screen that starts a pour the moment it renders must refuse to render
+       for somebody who may not pour, however they arrived.
+
+       The server would refuse it anyway. The point is not to send it. */
+    /* Both action names written out rather than computed into one can() call.
+       An audit that greps for can('waterSection') has to be able to see it
+       here, and a check it cannot see is a check the next person removes. */
+    const mayRun = isWater ? can('waterSection') : can('fillTray');
+    if (!mayRun) {
+      /* 'failed' rather than a new 'blocked' state: the screen already renders
+         failed rows with their note, and inventing a state nothing draws would
+         leave a blank list, which reads as the screen being broken. */
+      setRows(targets.map(() => ({
+        state: 'failed', note: 'Your account cannot start this.',
+      })));
+      return;
+    }
 
     (async () => {
       for (let i = 0; i < targets.length; i++) {
@@ -108,7 +144,7 @@ export default function RunScreen({ route, navigation }) {
           if (!alive.current) return;
           setRow(i, { state: 'confirming', note: `${secs}s` });
           setLive({ i, houseId: t.houseId, sectionId: t.sectionId,
-                    id: cmdId, secs, remaining: secs });
+                    id: cmdId, secs, remaining: secs, started: false, queued: false });
 
           const res = await watch(t.houseId, t.sectionId, cmdId, secs);
           if (!alive.current) return;
@@ -131,11 +167,14 @@ export default function RunScreen({ route, navigation }) {
     return () => { alive.current = false; };
   }, []);
 
-  // Ticks between server polls so the number moves smoothly.
+  /* Ticks between server polls so the number moves smoothly - but only once
+     the valve is open. It used to tick from the moment the command was sent,
+     so with the master offline (9 Oct E2E run) it counted 88 s down to "0s"
+     and filled the bar while not a drop had moved. */
   useEffect(() => {
     if (!live) return undefined;
     const id = setInterval(() => {
-      setLive((a) => (a && a.remaining > 0 ? { ...a, remaining: a.remaining - 1 } : a));
+      setLive((a) => (a && a.started && a.remaining > 0 ? { ...a, remaining: a.remaining - 1 } : a));
     }, 1000);
     return () => clearInterval(id);
   }, [live?.id]);
@@ -183,10 +222,14 @@ export default function RunScreen({ route, navigation }) {
         visible={askStop}
         icon="stop-circle-outline"
         title={isWater ? 'Stop watering this section?' : 'Stop filling this tray?'}
-        body={`${rows[live?.i]?.name || 'This section'} has about `
+        body={live?.started
+          ? `${rows[live?.i]?.name || 'This section'} has about `
             + `${Math.max(0, live?.remaining || 0)} seconds left. Stopping leaves it `
             + 'part-way through, and the node takes a few seconds to react. The '
-            + 'remaining sections still run.'}
+            + 'remaining sections still run.'
+          : `${rows[live?.i]?.name || 'This section'} has not started yet. Stopping `
+            + 'asks the master to cut it short, and it takes a few seconds to react. '
+            + 'The remaining sections still run.'}
         confirmLabel="Stop now"
         cancelLabel="Keep going"
         destructive
@@ -227,18 +270,27 @@ export default function RunScreen({ route, navigation }) {
                     and gave no way to stop water already moving. */}
                 {live && live.i === i && (
                   <>
-                    <View style={s.liveRow}>
-                      <Text style={s.liveCount}>{Math.max(0, live.remaining)}s</Text>
-                      <View style={s.liveTrack}>
-                        <View style={[s.liveFill, {
-                          width: `${Math.max(0, Math.min(100,
-                            ((live.secs - Math.max(0, live.remaining)) / Math.max(1, live.secs)) * 100))}%`,
-                        }]} />
+                    {live.started ? (
+                      <View style={s.liveRow}>
+                        <Text style={s.liveCount}>{Math.max(0, live.remaining)}s</Text>
+                        <View style={s.liveTrack}>
+                          <View style={[s.liveFill, {
+                            width: `${Math.max(0, Math.min(100,
+                              ((live.secs - Math.max(0, live.remaining)) / Math.max(1, live.secs)) * 100))}%`,
+                          }]} />
+                        </View>
                       </View>
-                    </View>
+                    ) : (
+                      <Text style={s.liveWait}>
+                        {live.queued
+                          ? 'Queued at the master controller. The countdown starts when it opens the valve.'
+                          : 'Sent. The countdown starts when the master opens the valve.'}
+                      </Text>
+                    )}
                     <TouchableOpacity
                       style={[s.stopBtn, stopping && { opacity: 0.6 }]}
-                      onPress={() => setAskStop(true)}
+                      disabled={!can('stopSection')}
+                      onPress={can('stopSection') ? () => setAskStop(true) : undefined}
                       disabled={stopping}
                       activeOpacity={0.85}
                       accessibilityRole="button"
@@ -309,6 +361,7 @@ const s = StyleSheet.create({
   liveTrack: { flex: 1, height: 5, borderRadius: 3,
                backgroundColor: COLORS.border, overflow: 'hidden' },
   liveFill:  { height: '100%', borderRadius: 3, backgroundColor: COLORS.info },
+  liveWait:  { color: COLORS.textSecondary, fontSize: FONT.xs, marginTop: SPACE.sm, lineHeight: 16 },
   stopBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
                gap: 5, borderRadius: RADIUS.sm, paddingVertical: SPACE.sm,
                borderWidth: 1.5, borderColor: COLORS.danger,

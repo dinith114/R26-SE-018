@@ -218,9 +218,68 @@ class CompatibilityResponse(BaseModel):
     health_used: bool = Field(
         False, description="Whether a Level 1 assessment was factored in"
     )
+    name_check: Dict = Field(
+        {}, description="How each typed name was understood — keys 'pod' and "
+                        "'pollen', each with genus, genus_source "
+                        "(stated|matched|assumed), recognised and did_you_mean. "
+                        "An assumed genus means the engine fell back to the "
+                        "collection's genus because the name carried none and "
+                        "was not in the knowledge base."
+    )
 
 
 class PartnerRankRequest(BaseModel):
     """Rank several candidate pollen donors against one pod parent."""
     pod_parent: str = Field(..., min_length=1)
     candidates: list = Field(..., description="Candidate pollen donor names")
+
+
+# ──────────────────────────────────────────────
+#  Grower cross logbook
+# ──────────────────────────────────────────────
+class CrossLogRequest(BaseModel):
+    """
+    One attempted cross, as the grower performed it.
+
+    Order is meaningful here for the same reason it is in CompatibilityRequest:
+    the pod parent carries the capsule and the pollen parent donates, so a
+    record that sorted the pair would be recording a different attempt from
+    the one that was made.
+
+    The covariates are optional but they are the difference between a usable
+    record and a useless one. A cross can fail because two plants are
+    incompatible, or because the flower was too old, or because stored pollen
+    had died. Logging only the outcome makes those indistinguishable forever.
+    """
+    pod_plant_id: str = Field(..., min_length=1, description="Registered plant carrying the pod")
+    pollen_plant_id: str = Field(..., min_length=1, description="Registered plant donating pollen")
+    pod_health: Optional[ParentHealth] = Field(
+        None, description="Level 1 assessment of the pod parent ON THE DAY, copied "
+                          "in as a snapshot rather than linked"
+    )
+    pollen_health: Optional[ParentHealth] = None
+    flower_age_days: Optional[int] = Field(
+        None, description="Days since the pollinated flower opened — the largest "
+                          "single technique variable"
+    )
+    pollen_source: str = Field("fresh", description="fresh | stored")
+    pollen_stored_days: Optional[int] = None
+    logged_by: str = ""
+    notes: str = ""
+    conditions: Dict = Field(
+        {}, description="Temperature / humidity at pollination, from the farm sensors"
+    )
+
+
+class CrossStageRequest(BaseModel):
+    """
+    Move a cross forward, or close it where it failed.
+
+    Exactly one of `stage` or `outcome` is expected. `outcome` names the gate
+    it stopped at — no_pod_set, capsule_aborted, capsule_empty,
+    no_germination — or `lost`, which is censored data and is deliberately
+    NOT a failure.
+    """
+    stage: str = ""
+    outcome: str = ""
+    note: str = ""

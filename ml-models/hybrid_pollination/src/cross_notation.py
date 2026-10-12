@@ -68,7 +68,96 @@ GENUS_ABBREV = {
     "renanopsis": "Renanopsis",
     "renvanvanda": "Renvanvanda",
     "taprobanea": "Taprobanea",
+    # Genera OUTSIDE the Vanda alliance.
+    #
+    # The collection is entirely Vandaceous, so none of these can be crossed
+    # with it. They are listed anyway, and that is the point: a name this
+    # parser cannot place used to fall through to a blanket "assume Vanda",
+    # which silently reported `Cattleya x Aeridovanda` as a Vanda cross. A
+    # genus that is recognised and then ruled out is an answer; a genus that
+    # is quietly replaced is a wrong answer wearing a right one's clothes.
+    "cattleya": "Cattleya",
+    "c": "Cattleya",
+    "catt": "Cattleya",
+    "laelia": "Laelia",
+    "lc": "Laeliocattleya",
+    "laeliocattleya": "Laeliocattleya",
+    "brassavola": "Brassavola",
+    "epidendrum": "Epidendrum",
+    "epi": "Epidendrum",
+    "dendrobium": "Dendrobium",
+    "den": "Dendrobium",
+    "oncidium": "Oncidium",
+    "onc": "Oncidium",
+    "cymbidium": "Cymbidium",
+    "cym": "Cymbidium",
+    "paphiopedilum": "Paphiopedilum",
+    "paph": "Paphiopedilum",
+    "miltonia": "Miltonia",
+    "bulbophyllum": "Bulbophyllum",
+    "coelogyne": "Coelogyne",
+    "spathoglottis": "Spathoglottis",
+    "arundina": "Arundina",
+    "eria": "Eria",
 }
+
+# Which breeding alliance each genus sits in.
+#
+# Hybrids are made within an alliance, essentially never across one. The Vanda
+# (Aeridinae) alliance is what this project's collection and knowledge base
+# cover; everything else is listed so that a cross reaching outside it can be
+# named as such instead of being reported as "no precedent found", which reads
+# like a gap in the data rather than a botanical wall.
+VANDA_ALLIANCE = "Vanda"
+
+GENUS_ALLIANCE = {
+    # Vandaceous - interbreedable, and the nothogenera prove it
+    "Vanda": VANDA_ALLIANCE, "Ascocentrum": VANDA_ALLIANCE,
+    "Ascocenda": VANDA_ALLIANCE, "Aerides": VANDA_ALLIANCE,
+    "Arachnis": VANDA_ALLIANCE, "Renanthera": VANDA_ALLIANCE,
+    "Rhynchostylis": VANDA_ALLIANCE, "Papilionanthe": VANDA_ALLIANCE,
+    "Luisia": VANDA_ALLIANCE, "Vandopsis": VANDA_ALLIANCE,
+    "Trichoglottis": VANDA_ALLIANCE, "Sarcochilus": VANDA_ALLIANCE,
+    "Paraphalaenopsis": VANDA_ALLIANCE, "Phalaenopsis": VANDA_ALLIANCE,
+    "Aranda": VANDA_ALLIANCE, "Mokara": VANDA_ALLIANCE,
+    "Renantanda": VANDA_ALLIANCE, "Kagawara": VANDA_ALLIANCE,
+    "Aeridovanda": VANDA_ALLIANCE, "Papilionanda": VANDA_ALLIANCE,
+    "Luisanda": VANDA_ALLIANCE, "Paravanda": VANDA_ALLIANCE,
+    "Renanopsis": VANDA_ALLIANCE, "Renvanvanda": VANDA_ALLIANCE,
+    "Taprobanea": VANDA_ALLIANCE,
+    # Other alliances - cannot be crossed into the above
+    "Cattleya": "Cattleya", "Laelia": "Cattleya",
+    "Laeliocattleya": "Cattleya", "Brassavola": "Cattleya",
+    "Epidendrum": "Cattleya",
+    "Dendrobium": "Dendrobium", "Eria": "Dendrobium",
+    "Oncidium": "Oncidium", "Miltonia": "Oncidium",
+    "Cymbidium": "Cymbidium", "Coelogyne": "Cymbidium",
+    "Paphiopedilum": "Slipper",
+    "Bulbophyllum": "Bulbophyllum",
+    "Spathoglottis": "Terrestrial", "Arundina": "Terrestrial",
+}
+
+
+def genus_alliance(genus: str) -> str:
+    """The breeding alliance a genus belongs to, or "" if unplaced."""
+    return GENUS_ALLIANCE.get(genus, "")
+
+
+def suggest_genus(token: str, cutoff: float = 0.72) -> str:
+    """
+    The genus a misspelt token most likely meant, or "".
+
+    Growers type what is on a hand-written tag, so `Catliya` for Cattleya and
+    `Vandah` for Vanda are routine. Offering the correction is better than
+    either rejecting the name or guessing silently.
+    """
+    import difflib
+
+    t = str(token).strip().lower().strip(".")
+    if len(t) < 3:
+        return ""
+    hits = difflib.get_close_matches(t, GENUS_ABBREV.keys(), n=1, cutoff=cutoff)
+    return GENUS_ABBREV[hits[0]] if hits else ""
 
 # Multiplication sign in any of the ways a tag or keyboard may produce it
 CROSS_SEPARATOR = re.compile(r"\s+(?:[x×✕✖X])\s+")
@@ -133,6 +222,14 @@ def expand_genus(token: str) -> tuple:
         # First prefix wins; later ones are refinements of the same plant
         genus = genus or GENUS_ABBREV[head]
         token = rest
+
+    # A name that is nothing but a genus - "Cattleya", "Dendrobium", "Vanda".
+    # The loop above cannot catch these: its pattern needs a remainder after
+    # the prefix, so a bare genus fell through as an unrecognised grex name.
+    if not genus:
+        bare = token.strip().strip(".").lower()
+        if bare in GENUS_ABBREV:
+            return GENUS_ABBREV[bare], ""
 
     return genus, token
 

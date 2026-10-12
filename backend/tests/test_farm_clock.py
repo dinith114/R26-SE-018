@@ -17,8 +17,20 @@ import pytest
 
 from app.api.routes.smart_care_v2 import farm_now, farm_tz, _dawn_reading
 from app.api.routes.automation import _due_sessions
+from app.services.tenant_context import set_tenant, reset_tenant
 
 SL_OFFSET_MIN = 330          # UTC+5:30, and Sri Lanka has no DST
+
+
+@pytest.fixture(autouse=True)
+def _a_tenant_to_read_the_clock_from():
+    """farm_tz() reads /farm/meta.json, and every farm path now belongs to a
+    tenant. These tests are about the CLOCK, not about tenancy, so they just
+    need to be somebody - but they cannot be nobody, because a farm path with no
+    tenant raises rather than quietly reading the old shared tree."""
+    tok = set_tenant("t_test")
+    yield
+    reset_tenant(tok)
 
 
 def _reading(ts_ms, temp):

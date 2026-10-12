@@ -89,14 +89,14 @@ void masterAck(const String& id, const String& section, int channel,
 
   HTTPClient a;
   a.setTimeout(6000);
-  a.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/acks/" + id + ".json");
+  a.begin(FARM + "/masters/" + macKey() + "/acks/" + id + ".json");
   a.addHeader("Content-Type", "application/json");
   a.PUT(body);
   a.end();
 
   HTTPClient d;
   d.setTimeout(6000);
-  d.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/queue/" + id + ".json");
+  d.begin(FARM + "/masters/" + macKey() + "/queue/" + id + ".json");
   d.sendRequest("DELETE");
   d.end();
 }
@@ -112,7 +112,7 @@ void masterRunning(const String& id, const String& section, int channel, int sec
   body += "}";
   HTTPClient h;
   h.setTimeout(6000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.begin(FARM + "/masters/" + macKey() + "/running.json");
   h.addHeader("Content-Type", "application/json");
   h.PUT(body);
   h.end();
@@ -122,7 +122,7 @@ void masterClearRunning() {
   if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient h;
   h.setTimeout(6000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/running.json");
+  h.begin(FARM + "/masters/" + macKey() + "/running.json");
   h.sendRequest("DELETE");
   h.end();
 }
@@ -137,7 +137,7 @@ bool masterStopRequested(const String& id) {
   if (WiFi.status() != WL_CONNECTED) return false;
   HTTPClient h;
   h.setTimeout(4000);
-  h.begin(String(FB_HOST) + "/farm/masters/" + macKey() + "/stop.json");
+  h.begin(FARM + "/masters/" + macKey() + "/stop.json");
   int code = h.GET();
   String body = (code == 200) ? h.getString() : "";
   h.end();
@@ -170,7 +170,21 @@ void masterRunOne(const String& payload) {
     masterAck(id, section, (int)channel, 0, "unsupported");
     return;
   }
-  if (issued > 0 && clockOK) {
+  /* NO CLOCK, NO POUR. The age check below needs the time, and it used to be
+   * skipped when the time was unknown - so the command was OBEYED. A master
+   * that booted and failed syncClock() would have poured every entry left in
+   * its queue, however old. On 8 Oct 2026 that queue held ten pours from
+   * 3-6 Sep, some with fertilizer, left there while this board was offline.
+   *
+   * Held, not acked: the entry stays, and the first poll after the clock is
+   * set judges it by its age like any other. masterPollQueue() already waits
+   * for the clock; this is the same rule where the valve would open. */
+  if (!clockOK) {
+    Serial.printf("[MASTER] %s held: the time is not known, so its age cannot be checked\n",
+                  section.c_str());
+    return;
+  }
+  if (issued > 0) {
     long age = (long)(nowMs() / 1000ULL) - issued;
     if (age > MASTER_MAX_AGE_SEC) {
       Serial.printf("[MASTER] %s issued %lds ago - too old to obey\n",
@@ -236,6 +250,8 @@ void masterRunOne(const String& payload) {
   // "watered for 90 s" and "stopped after 12 s" are different outcomes and
   // the ledger must not record one as the other.
   masterAck(id, section, (int)channel, ran, stopped ? "stopped" : "done");
+  // Watered today, by the cloud: the offline fallback must not water it again.
+  if (action == "water" && ran > 0) fallbackNoteWatered(section);
 }
 
 /* Take the oldest outstanding command, if there is one.
@@ -250,13 +266,26 @@ void masterPollQueue() {
   if (millis() - lastQueuePoll < QUEUE_POLL_MS) return;
   lastQueuePoll = millis();
 
+  /* The queue is not even read until the time is known: every entry would be
+   * held anyway (see masterRunOne), and this keeps the log to one line a
+   * minute. takeReading() retries syncClock() on every reading cycle. */
+  if (!clockOK) {
+    static unsigned long lastSaid = 0;
+    if (lastSaid == 0 || millis() - lastSaid >= 60000UL) {
+      lastSaid = millis();
+      Serial.println("[MASTER] queue not read: the time is not known yet");
+    }
+    return;
+  }
+
   HTTPClient http;
   http.setTimeout(6000);
-  http.begin(String(FB_HOST) + "/farm/masters/" + macKey() +
+  http.begin(FARM + "/masters/" + macKey() +
              "/queue.json?orderBy=%22$key%22&limitToFirst=1");
   int code = http.GET();
   String body = (code == 200) ? http.getString() : "";
   http.end();
+  if (code == 200) fallbackNoteCloudOk();     // the database answers (queue_fallback.ino)
   if (code != 200 || body.length() < 8 || body == "null") return;
 
   // Firebase returns { "<id>": { ... } }. The inner object is what runs.

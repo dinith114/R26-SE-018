@@ -27,10 +27,9 @@
  *      GND      ------->  GND
  *      (the red breakout has its own pull-up resistor - none needed)
  *
- *    Soil probe          ESP32     (capacitive v1.2)
- *      AOUT     ------->  D34     (GPIO34 - ADC1, input-only)
- *      VCC      ------->  3V3     <-- 3V3, NOT VIN. Powered at 5 V this probe
- *      GND      ------->  GND         puts >3.3 V on AOUT and damages the ADC.
+ *    D34 is unused. A capacitive probe sat there until 2.7, reporting the
+ *    humidity tray's water level; it was removed on 10 Oct 2026 because the
+ *    grower sets the tray fill in the app. Nothing needs to be tied to it.
  *
  *    BH1750 module       ESP32
  *      VCC      ------->  3V3
@@ -44,6 +43,8 @@
  *    "Adafruit Unified Sensor"
  *    "BH1750" by Christopher Laws
  *    "ArduinoJson" by Benoit Blanchon
+ *    (LittleFS, used to keep readings through a Wi-Fi outage, ships with the
+ *     ESP32 core - nothing to install. See store_forward.ino.)
  *
  *  BOARD: Tools -> Board -> esp32 -> "ESP32 Dev Module"
  *         Tools -> Port  -> the COM port that appears when you plug it in
@@ -57,8 +58,63 @@
 #include <BH1750.h>
 #include <ArduinoJson.h>
 #include <time.h>
+// Here and not in store_forward.ino: Arduino puts the prototypes it generates
+// at the top of the merged sketch, and those for the buffer code name File and
+// BufRec - which must therefore be declared before them, not in a later tab.
+#include <LittleFS.h>
+#include "store_forward.h"
+
+/* Reported in the device record, and printed in the boot banner so the serial
+   monitor alone shows which build is on the board. */
+#define FW_VERSION "validation-2.8"
+
+/* ═══════════ QUIET_NODE: battery boards that only record ═══════════
+   0 (the default) changes nothing. Set it to 1 for a board that runs from a
+   small battery and only records - the placement-study nodes:
+       #define QUIET_NODE 1        here, or
+       --build-property "compiler.cpp.extra_flags=-DQUIET_NODE=1"
+
+   It exists to make a small battery last. It turns off the board's chatter,
+   not its readings:
+     - no command polling and no master queue. The normal build asks Firebase
+       for a command every 2 s, each a fresh HTTPS request with a TLS handshake
+       measured at seconds on this chip - the most radio time the board spends
+       on anything.
+     - the device record (Identify, Wi-Fi scan, ping) checked every 30 s, not
+       5 s. Identify still works; it can take half a minute to start blinking.
+     - heartbeat every 60 s, not 30 s.
+     - default reading every 60 s, not 15 s. An interval set in the app still
+       wins, as on any board - set 60 s there too, or this default never applies.
+     - Wi-Fi power save at its deepest (WIFI_PS_MAX_MODEM). The normal build
+       already uses the lighter modem sleep; this one sleeps through more
+       beacons, at the cost of slower replies.
+
+   THE SAVING HAS NOT BEEN MEASURED. Nobody has put a meter on a QUIET board.
+   That it draws less is an expectation from removing the 2-second poll, not a
+   number - measure both builds before sizing a battery on either.
+
+   NEVER USE A QUIET BOARD WHERE IT SHOULD RUN PUMPS. It does not refuse a
+   command, it never hears one: the app would send Water Now, wait, and report
+   the node silent while the plants go dry. The device record carries
+   "quiet": true so the backend can learn to tell; today nothing reads it.
+
+   The backend calls a heartbeating node offline after 90 s of silence
+   (devices.py ONLINE_WINDOW_SEC). At 60 s a QUIET board has room for one LATE
+   beat, not one missed beat, so expect an occasional brief "stopped answering"
+   in the app. */
+#ifndef QUIET_NODE
+#define QUIET_NODE 0
+#endif
+
+/* The store-and-forward buffer, in store_forward.ino. Declared here so the
+   calls below do not depend on the Arduino preprocessor finding them. */
+bool bufBegin();
+void bufStore(JsonDocument& d, const char* why);
+void bufNoteUpload(bool ok);
+void bufFlushStep();
 
 // ═══════════ 1. SET THESE ═══════════
+#define TENANT_ID  "t_REPLACE_ME"   // the farm this board belongs to
 #define HOUSE_ID   "H1"
 #define SECTION_ID "S1"          // must match a section that exists in the app
 
@@ -74,7 +130,6 @@ const char* WIFI_PASSWORD = "EF4282A7";
 // short enough that a farmer who reconnects a wire sees it return while still
 // standing there, and long enough to cost a healthy node nothing.
 #define LIGHT_RETRY_MS 300000UL
-#define SOIL_PIN  34          // GPIO34: ADC1, input-only, safe for an analogue sensor
 
 /* Relay outputs.
    The 4-channel SONGLE module is opto-isolated and ACTIVE LOW: pulling an IN
@@ -169,8 +224,9 @@ const uint32_t COMMAND_POLL_MS = 2000UL;
    the command poll: a human-initiated action was tied to the sensor clock.
 
    Slower than COMMAND_POLL_MS because nothing here moves water. The record is
-   ~250 bytes, so 5 s is roughly 8 MB of egress a day per node. */
-const uint32_t DEVICE_POLL_MS = 5000UL;
+   ~250 bytes, so 5 s is roughly 8 MB of egress a day per node.
+   A QUIET board checks every 30 s: Identify slower, battery spared. */
+const uint32_t DEVICE_POLL_MS = QUIET_NODE ? 30000UL : 5000UL;
 
 /* How often the node says "I am here", independent of any reading.
 
@@ -178,8 +234,10 @@ const uint32_t DEVICE_POLL_MS = 5000UL;
    the backend could not call a node offline until it had missed two of them -
    ten minutes at a 5-minute interval. The node was in fact talking to Firebase
    every 2 seconds the whole time to poll for commands; it simply never said so.
-   At 30 s the backend can decide after three missed beats instead. */
-const uint32_t HEARTBEAT_MS = 30000UL;
+   At 30 s the backend can decide after three missed beats instead.
+   A QUIET board beats every 60 s - see the QUIET_NODE note on what that costs
+   against the backend's 90 s window. */
+const uint32_t HEARTBEAT_MS = QUIET_NODE ? 60000UL : 30000UL;
 
 // While a pour is running: checked so a second command cannot start one on top
 // of it, and so a stop can be recognised as belonging to this run.
@@ -289,7 +347,12 @@ void relaySelfTest() {
 // ═══════════ 3. TIMING ═══════════
 // 5 minutes matches the production node. Use 30000 while you are watching the
 // serial monitor, then put it back before leaving it in the house.
+// A QUIET board starts at 60 s; the app's readIntervalMs overrides either.
+#if QUIET_NODE
+#define READ_INTERVAL_MS 60000UL
+#else
 #define READ_INTERVAL_MS 15000UL
+#endif
 
 /* The interval the board is ACTUALLY using, settable from the app.
 
@@ -320,16 +383,36 @@ const char* FB_HOST = "https://orchid-smart-care-default-rtdb.firebaseio.com";
    HOUSE_ID/SECTION_ID above survive as the fallback for an unassigned board, so
    a node that has never been claimed still reports somewhere sensible instead of
    going silent. */
-String BASE = String(FB_HOST) + "/farm/houses/" HOUSE_ID "/sections/" SECTION_ID;
-String HIST = String(FB_HOST) + "/farm/history/" HOUSE_ID "/" SECTION_ID;
+
+/* Every farm path this board writes hangs off ONE base, the firmware's version
+   of the chokepoint the backend uses. Built once here so a path cannot be
+   assembled from FB_HOST by hand and quietly miss the tenant - which is exactly
+   how a board would end up writing to the old shared tree with nothing to show
+   for it but readings nobody reads.
+
+   /devices/... deliberately does NOT hang off this. That registry is global: a
+   board belongs to no tenant until it is flashed with one, and the app's
+   Link-a-node list has to see boards before they are anybody's. */
+// KEEP THIS IN THE MAIN SKETCH. Arduino concatenates the .ino files into one
+// translation unit with the main sketch first and the other tabs after it, in
+// alphabetical order - which is the only reason master_queue.ino can see FARM
+// at all. Moved into a tab that sorts after it, this stops compiling.
+const String FARM = String(FB_HOST) + "/tenants/" TENANT_ID "/farm";
+
+String BASE = FARM + "/houses/" HOUSE_ID "/sections/" SECTION_ID;
+String HIST = FARM + "/history/" HOUSE_ID "/" SECTION_ID;
 
 String assignedHouse   = HOUSE_ID;
 String assignedSection = SECTION_ID;
 bool   isClaimed       = false;      // false = no farmer has assigned this board
+// Has this boot read its device record even once? Until it has, isClaimed=false
+// means "do not know yet", not "unlinked" - which is what a board restarted
+// while the router is down has to say instead of telling the farmer to link it.
+bool   assignmentKnown = false;
 
 static void rebuildPaths() {
-  BASE = String(FB_HOST) + "/farm/houses/" + assignedHouse + "/sections/" + assignedSection;
-  HIST = String(FB_HOST) + "/farm/history/" + assignedHouse + "/" + assignedSection;
+  BASE = FARM + "/houses/" + assignedHouse + "/sections/" + assignedSection;
+  HIST = FARM + "/history/" + assignedHouse + "/" + assignedSection;
 }
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -373,6 +456,7 @@ void reduceCurrentDraw() {
    and Preferences all ship with the core, and one less dependency is one less
    thing to break at 2am before a demo. */
 #include <Preferences.h>
+#include <esp_mac.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 
@@ -382,11 +466,27 @@ DNSServer  dnsServer;
 bool  portalRunning = false;
 String provSsid, provPass;
 
+/* How long the setup hotspot is left alone once it is up. The farmer has to
+   notice the node needs Wi-Fi, find the phone's Wi-Fi settings, join
+   OrchidNode-XXXX and type a password: minutes, not seconds. Until 2.6 the
+   next reading cycle (60 s on a QUIET board) called connectWiFi(), whose
+   WiFi.mode(WIFI_STA) switched the hotspot off - and portalRunning stayed true,
+   so it never came back. A forced (BOOT-held) portal was switched off even
+   sooner, by the connectWiFi() straight after it in setup(). Found testing the
+   farm move on the bench, 9 Oct 2026. */
+const uint32_t PORTAL_HOLD_MS = 10UL * 60UL * 1000UL;
+uint32_t portalStartedAt = 0;
+
 static String apName() {
   // Last two bytes of the MAC make each node distinguishable on a bench where
   // four identical boxes are advertising at once.
+  // Read from the chip's eFuse, not WiFi.macAddress(): startPortal() calls this
+  // with the radio just switched off, when the Wi-Fi driver reports
+  // 00:00:00:00:00:00 - every node's hotspot came up as "OrchidNode-0000"
+  // while the serial log, printed a moment later, named the right one.
+  // Seen on the bench, 9 Oct 2026.
   uint8_t m[6];
-  WiFi.macAddress(m);
+  esp_read_mac(m, ESP_MAC_WIFI_STA);
   char buf[24];
   snprintf(buf, sizeof(buf), "OrchidNode-%02X%02X", m[4], m[5]);
   return String(buf);
@@ -521,9 +621,27 @@ static String portalPage(const String& msg) {
 void startPortal() {
   WiFi.disconnect(true, true);
   delay(200);
+  /* From a clean radio. connectWiFi() leaves the deepest modem sleep and an
+     11 dBm transmitter on, and the station half-way through a failed join;
+     on the bench (9 Oct 2026) the hotspot then never appeared at all - another
+     ESP32 a metre away scanned 6-16 networks every 18 s for 5 minutes and
+     never saw OrchidNode-5F10, while the node logged "SETUP MODE". softAP()'s
+     result was not checked, so nothing said so. */
+  WiFi.mode(WIFI_OFF);
+  delay(300);
   WiFi.mode(WIFI_AP_STA);                   // AP for the phone, STA so we can scan
-  WiFi.softAP(apName().c_str());            // open network: the farmer has no password yet
+  WiFi.setSleep(false);                     // beacons must go out on time
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);      // the phone may be across the shade house
+  bool apUp = WiFi.softAP(apName().c_str(), nullptr, 1);   // open network, channel 1
+  if (!apUp) {                              // one more try from scratch
+    WiFi.mode(WIFI_OFF);
+    delay(500);
+    WiFi.mode(WIFI_AP);
+    apUp = WiFi.softAP(apName().c_str(), nullptr, 1);
+  }
   delay(400);
+  Serial.printf("[PROV] hotspot %s: mode=%d ip=%s channel=%d\n", apUp ? "UP" : "FAILED TO START",
+                (int)WiFi.getMode(), WiFi.softAPIP().toString().c_str(), WiFi.channel());
 
   dnsServer.start(53, "*", WiFi.softAPIP());  // any hostname resolves here -> captive portal
 
@@ -550,6 +668,7 @@ void startPortal() {
   portalServer.begin();
 
   portalRunning = true;
+  portalStartedAt = millis();
   Serial.printf("\n[PROV] ===== SETUP MODE =====\n");
   Serial.printf("[PROV] join WiFi network '%s' on your phone\n", apName().c_str());
   Serial.printf("[PROV] then open http://192.168.4.1\n\n");
@@ -561,7 +680,51 @@ void servePortal() {
   portalServer.handleClient();
 }
 
+void stopPortal() {
+  portalServer.stop();
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  portalRunning = false;
+  Serial.println("[PROV] network is back - setup hotspot closed");
+}
+
+/* While the hotspot is up: leave it alone for PORTAL_HOLD_MS, then try the
+   saved network once in the background WITHOUT taking the hotspot down (a
+   router that was only rebooting brings the node back here). The portal page
+   keeps being served through the attempt. */
+void retryWiFiUnderPortal() {
+  if (millis() - portalStartedAt < PORTAL_HOLD_MS) return;
+  loadCreds();
+  Serial.printf("\n[WIFI] hotspot still up; retrying %s in the background", provSsid.c_str());
+  WiFi.begin(provSsid.c_str(), provPass.c_str());
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(100);
+    servePortal();
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    confirmCreds();
+    stopPortal();
+    WiFi.mode(WIFI_STA);
+    Serial.printf("[WIFI] connected, ip=%s rssi=%d dBm\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  } else {
+    WiFi.disconnect(false, false);          // stop the station only; the hotspot stays
+    Serial.println(" - not yet, hotspot kept");
+    portalStartedAt = millis();             // a full window again before the next try
+  }
+}
+
 void connectWiFi() {
+  /* CONSECUTIVE failed joins. It lived inside the failure branch and was never
+     reset, so it counted every failure since boot: three short router drops
+     spread over a day "were" three in a row, and a board whose network was on
+     trial (a remote Wi-Fi change) rolled back and RESTARTED mid-outage - losing
+     the clock, and with it everything store-and-forward could have kept.
+     Found in review, 8 Oct 2026. */
+  static uint8_t failures = 0;
+  // The hotspot must not be switched off under a farmer typing a password.
+  if (portalRunning) { retryWiFiUnderPortal(); return; }
   loadCreds();
   Serial.printf("\n[WIFI] joining %s", provSsid.c_str());
   // Tear the previous attempt down first. Calling begin() while the station is
@@ -579,7 +742,12 @@ void connectWiFi() {
 
   // Modem sleep lets the radio idle between beacons. This node only posts
   // outward and never waits on inbound traffic, so nothing is lost.
+  // A QUIET board goes to the deepest setting (see QUIET_NODE) - unmeasured.
+#if QUIET_NODE
+  WiFi.setSleep(WIFI_PS_MAX_MODEM);
+#else
   WiFi.setSleep(true);
+#endif
 
   // Let the supply settle after the mode change before drawing the surge.
   delay(200);
@@ -591,6 +759,11 @@ void connectWiFi() {
     Serial.print(".");
   }
   if (WiFi.status() == WL_CONNECTED) {
+    failures = 0;
+    // A network that has carried us is no longer on trial. confirmCreds() was
+    // written for exactly this and never called, so the trial flag - and the
+    // roll-back-and-restart it arms - survived for ever.
+    confirmCreds();
     Serial.printf("\n[WIFI] connected, ip=%s rssi=%d dBm\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI());
   } else {
@@ -609,7 +782,6 @@ void connectWiFi() {
        portal is the only way back without a laptop.
        Three, not one: a router rebooting should not drop a working node into
        setup mode and stop it reporting. */
-    static uint8_t failures = 0;
     if (++failures >= 3 && !portalRunning) {
       // A failed REMOTE change is recoverable: restore what worked and restart.
       // Only raise the portal when there is nothing left to fall back to.
@@ -732,7 +904,18 @@ void announceDevice() {
   String body = "{\"mac\":\"" + macKey() +
                 "\",\"ip\":\"" + WiFi.localIP().toString() +
                 "\",\"rssi\":" + String(WiFi.RSSI()) +
-                ",\"fw\":\"validation-1.9\"" +
+                ",\"fw\":\"" FW_VERSION "\"" +
+                // Whether this board listens for commands at all, and how often
+                // it promises to beat. Sent by EVERY build, false/30 included:
+                // this is a merge, so a board reflashed from QUIET back to normal
+                // would otherwise carry "quiet":true in its record forever.
+                ",\"quiet\":" + String(QUIET_NODE ? "true" : "false") +
+                ",\"heartbeatSec\":" + String(HEARTBEAT_MS / 1000) +
+                // Which farm this board was flashed for. The backend filters
+                // the global registry on it, so an unflashed board carries no
+                // tenant and stays claimable by anyone - which is right: it
+                // belongs to nobody yet.
+                ",\"tenantId\":\"" TENANT_ID "\"" +
                 // The network it is ACTUALLY on. Without this the app can offer
                 // to change the Wi-Fi but cannot show what it is changing from,
                 // and a farmer has no way to confirm the change took - the node
@@ -773,6 +956,7 @@ void fetchAssignment() {
   String body = (code == 200) ? http.getString() : "";
   http.end();
   if (code != 200) return;
+  assignmentKnown = true;
 
   // ---- read interval, when the app has set one ----
   long want = jsonNum(body, "readIntervalMs", 0);
@@ -1049,6 +1233,23 @@ void pollCommand() {
      overflows it. Commands without the field are obeyed, so an older backend
      keeps working. */
   const long COMMAND_MAX_AGE_SEC = 900;             // 15 minutes
+
+  /* Without the time there is no age check, and skipping the check used to
+     mean OBEYING - the same hole as the master queue (see masterRunOne). Water
+     and tray are held until the clock is set. lastCmdId is NOT stamped, so the
+     first poll after syncClock() succeeds judges the command by its age like
+     any other. Wi-Fi credentials move no water and are still taken: they may
+     be what puts this board on a network that has the time. */
+  if (!clockOK && (action == "water" || action == "tray")) {
+    static String heldId;                           // one log line per command
+    if (heldId != id) {
+      heldId = id;
+      Serial.printf("[CMD] %s held: the time is not known, so its age cannot be checked\n",
+                    action.c_str());
+    }
+    return;
+  }
+
   long issuedAtSec = jsonNum(body, "issuedAtSec", 0);
   if (issuedAtSec > 0 && clockOK) {
     long age = (long)(nowMs() / 1000ULL) - issuedAtSec;
@@ -1165,7 +1366,12 @@ bool beginLightMeter() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\n\n=== SENSOR NODE (validation build) " HOUSE_ID "-" SECTION_ID " ===");
+  Serial.printf("\n\n=== SENSOR NODE %s%s " HOUSE_ID "-" SECTION_ID " ===\n",
+                FW_VERSION, QUIET_NODE ? " QUIET (recording only)" : "");
+#if QUIET_NODE
+  Serial.println("[QUIET] battery build: watering commands and the master queue are"
+                 " DISABLED on this board - never use it where it should run pumps");
+#endif
 
   // Do this before anything touches the radio, so the clock is already down
   // when the first surge arrives.
@@ -1202,6 +1408,10 @@ void setup() {
   // floating pin reads as ON, which is a valve opening at power-up.
   masterSetupRelays();
 
+  // Before Wi-Fi, so a board that boots into an outage can already store - and
+  // so readings kept before a restart are counted and announced up front.
+  bufBegin();
+
   connectWiFi();
   syncClock();
 }
@@ -1213,43 +1423,6 @@ void takeReading() {
   float t  = dht.readTemperature();
   float rh = dht.readHumidity();
   float lx = lightOK ? lightMeter.readLightLevel() : SENTINEL;
-
-  // Capacitive probe: raw ADC counts fall as moisture rises.
-  //
-  // These are MEASURED on this physical probe, 23 Aug 2026, not datasheet
-  // guesses: 2596-2607 counts held in open air, 1095-1103 with the blade in
-  // water to the printed line. Both ends repeated within ~11 counts, and the
-  // 1500-count span between them is the usable range.
-  //
-  // On a Vanda there is no growing medium to measure, so this probe sits in the
-  // humidity tray and reports its water level: 0% is an empty tray, 100% is
-  // full. A different probe, or a move to a different medium, needs these two
-  // numbers re-measured the same way.
-  const int SOIL_DRY = 2600, SOIL_WET = 1100;
-  int raw = analogRead(SOIL_PIN);
-
-  /* A count outside the calibrated span is a DISCONNECTED PROBE, not a very wet
-     or very dry one, and must not be clamped into a confident answer.
-
-     Clamping is what this did, and it turned a floating ADC pin into a
-     measurement: raw 3015 - drier than open air, which is physically impossible
-     - clamped to 0% "empty tray", and raw 111 - wetter than water - clamped to
-     100% "full tray". Both were sent with sensorFault false and both were
-     believed. A false empty makes the system fill a tray it cannot see; a false
-     full stops it filling one that needs it. -999 is safe because the backend
-     already knows to distrust it; a clamped 0 or 100 is not.
-
-     The margin lets a healthy probe drift past either end without being called
-     faulty. */
-  const int SOIL_MARGIN = 150;
-  bool soilOK = (raw >= SOIL_WET - SOIL_MARGIN) && (raw <= SOIL_DRY + SOIL_MARGIN);
-  float soil = 100.0 * (SOIL_DRY - raw) / (float)(SOIL_DRY - SOIL_WET);
-  if (soil < 0) soil = 0; if (soil > 100) soil = 100;
-  if (!soilOK) {
-    Serial.printf("[SOIL] raw %d outside %d-%d - probe disconnected\n",
-                  raw, SOIL_WET - SOIL_MARGIN, SOIL_DRY + SOIL_MARGIN);
-    soil = SENTINEL;
-  }
 
   bool tempOK  = !isnan(t) && !isnan(rh);
   bool lightIsOK = lightOK && lx >= 0;
@@ -1265,22 +1438,31 @@ void takeReading() {
   d["light"]        = lightIsOK ? roundf(lx) : SENTINEL;
   d["vpd"]          = tempOK ? roundf(vpdKpa(t, rh) * 1000) / 1000.0 : SENTINEL;
   d["timestamp"]    = ms;
-  d["sampleMoisture"] = roundf(soil * 10) / 10.0;
-  d["soilRaw"]        = raw;
-  d["sensorFault"]    = (!tempOK || !lightIsOK);
+  d["sensorFault"]  = (!tempOK || !lightIsOK);
   d["node"]         = "validation";
 
   String body;
   serializeJson(d, body);
 
-  // soilRaw is printed so the probe can be calibrated: note the value in open
-  // air (dry end) and in a glass of water (wet end), then correct SOIL_DRY and
-  // SOIL_WET above. Until then the percentage is indicative only.
-  Serial.printf("[READ] %.1fC  %.1f%%  %.0f lux  soil=%.0f%% (raw %d)  vpd=%.3f%s\n",
-                t, rh, lx, soil, raw, tempOK ? vpdKpa(t, rh) : 0.0,
+  Serial.printf("[READ] %.1fC  %.1f%%  %.0f lux  vpd=%.3f%s\n",
+                t, rh, lx, tempOK ? vpdKpa(t, rh) : 0.0,
                 (!tempOK || !lightIsOK) ? "   <-- SENSOR FAULT" : "");
 
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
+
+  /* Taken before the clock was ever set (a restart with no Wi-Fi), this reading
+     carries timestamp 0 - and the reconnect just above would post it as 1970.
+     Set the clock now and stamp it with now: the reading is seconds old, which
+     is closer than any alternative. Found in review, 8 Oct 2026. */
+  if (ms == 0 && WiFi.status() == WL_CONNECTED) {
+    if (!clockOK) syncClock();
+    if (clockOK) {
+      ms = nowMs();
+      d["timestamp"] = ms;
+      body = "";
+      serializeJson(d, body);
+    }
+  }
 
   // Announce presence and pick up any assignment change before posting, so a
   // reading always lands in whatever section the board currently belongs to.
@@ -1294,9 +1476,30 @@ void takeReading() {
     handleIdentify();
   }
 
+  /* An unlinked board uploads nothing.
+
+     It used to post to the compiled-in fallback, H1/S1, so it was never silent.
+     That was safe with one board. With four new boards switched on before they
+     are linked, every one of them wrote bench readings into the REAL S1's
+     history - the archive the placement analysis and the models read - and
+     polled S1's command document as if it were S1. The registry entry that
+     announceDevice() and the heartbeat keep fresh is all the app's Link-a-node
+     list needs, so nothing is lost by waiting. */
+  if (!isClaimed) {
+    if (!assignmentKnown && WiFi.status() != WL_CONNECTED)
+      Serial.println("[DEV] no Wi-Fi since this restart, so the board does not know"
+                     " its section yet - reading NOT stored");
+    else
+      Serial.println("[DEV] not linked to a section yet - reading NOT uploaded."
+                     " Link this board in the app.");
+    return;
+  }
+
+  bool archived = false;
   if (WiFi.status() == WL_CONNECTED) {
     bool a = postJson(BASE + "/latest.json", body, true);   // current state
     bool b = postJson(HIST + ".json",        body, false);  // archive
+    archived = b;
     Serial.printf("[CLOUD] latest=%s history=%s\n", a ? "ok" : "FAIL", b ? "ok" : "FAIL");
     if (!a || !b) {
       Serial.println("[CLOUD] if WiFi is connected but this keeps failing, the");
@@ -1304,6 +1507,17 @@ void takeReading() {
     }
   }
 
+  /* A reading the ARCHIVE did not get is kept on flash and sent later (see
+     store_forward.ino). Keyed on history alone: a missed latest is replaced by
+     the next reading anyway, and latest must never be written from the buffer.
+
+     A POST that timed out AFTER Firebase stored it is counted as failed here
+     and will arrive a second time later, under a different key - a duplicate
+     reading, rare and visible by its "buffered" flag. Losing a reading was the
+     worse of the two outcomes on offer. */
+  bufNoteUpload(archived);
+  if (!archived)
+    bufStore(d, WiFi.status() == WL_CONNECTED ? "history upload failed" : "no Wi-Fi");
 }
 
 
@@ -1409,7 +1623,10 @@ void loop() {
     lastReadAt = millis();
   }
 
-  if (!firstCycle && WiFi.status() == WL_CONNECTED
+#if !QUIET_NODE
+  // Only a linked board has a command document of its own; an unlinked one
+  // would be reading the fallback section's (see takeReading).
+  if (!firstCycle && isClaimed && WiFi.status() == WL_CONNECTED
       && millis() - lastCmdAt >= COMMAND_POLL_MS) {
     lastCmdAt = millis();
     pollCommand();
@@ -1422,6 +1639,14 @@ void loop() {
      anybody else. Harmless until a master is named for the house - the queue
      path is keyed by this board's MAC and simply reads back empty. */
   if (!firstCycle) masterPollQueue();
+
+  /* Then the offline fallback (queue_fallback.ino): while online, keep the
+     engine's plan and beat; online or not, water from that plan if the cloud
+     has gone quiet past a section's planned minute. */
+  if (!firstCycle) { fallbackSync(); fallbackTick(); }
+#else
+  (void)lastCmdAt;   // a QUIET board never polls for commands - see QUIET_NODE
+#endif
 
   // Identify and scan work whether or not this node is assigned to a section,
   // so unlike pollCommand they are not gated on the first reading cycle - the
@@ -1464,6 +1689,12 @@ void loop() {
     lastBeatAt = millis();
     sendHeartbeat();
   }
+
+  /* Readings kept during an outage go up last, ONE batch per pass, so a
+     day's backlog never holds Stop, Identify or the setup page hostage. After
+     the first cycle, because only takeReading() learns which section this
+     board is in - and a backlog is only ever sent to that section. */
+  if (!firstCycle) bufFlushStep();
 
   delay(50);
 }

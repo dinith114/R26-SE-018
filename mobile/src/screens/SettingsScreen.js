@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import LocationPicker from '../components/LocationPicker';
+import { useCan, useAuth, useIsAdmin } from '../config/auth';
 import { LIVE_MS } from '../hooks/useLiveData';
 import { usePrefs } from '../config/prefs';
 import {
@@ -27,19 +28,28 @@ import {
    Everything here now comes from the same v2 API the rest of the app uses, so a
    status shown on this page is a status the hardware really has.
 
-   The probe calibration below is likewise the MEASURED pair from
-   sensor_node_validate.ino, not the datasheet numbers that used to be here. */
-const SOIL_DRY_ADC = 2600;   // measured in open air, 23 Aug 2026
-const SOIL_WET_ADC = 1100;   // measured with the blade in water to the printed line
+   There is no tray probe: it was removed on 10 Oct 2026. The grower sets how
+   long a tray fill runs (a section's Pour lengths) and the models decide when. */
 
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 const Divider = () => <View style={s.divider} />;
 
-const StatusBadge = ({ ok, label }) => (
-  <View style={[s.badge, { backgroundColor: ok ? COLORS.successDim : COLORS.dangerDim }]}>
-    <View style={[s.badgeDot, { backgroundColor: ok ? COLORS.success : COLORS.danger }]} />
-    <Text style={[s.badgeText, { color: ok ? COLORS.success : COLORS.danger }]}>{label}</Text>
-  </View>
+const StatusBadge = ({ ok, label, unknown }) => {
+  const fg = unknown ? COLORS.textTertiary : ok ? COLORS.success : COLORS.danger;
+  const bg = unknown ? COLORS.bgCardAlt : ok ? COLORS.successDim : COLORS.dangerDim;
+  return (
+    <View style={[s.badge, { backgroundColor: bg }]}>
+      <View style={[s.badgeDot, { backgroundColor: fg }]} />
+      <Text style={[s.badgeText, { color: fg }]}>{label}</Text>
+    </View>
+  );
+};
+
+/* A sensor's badge judges the node's LAST reading, so it only means anything
+   while the node is online. Offline for 38 days, it went on saying "OK". */
+const SensorBadge = ({ ok, live }) => (
+  live ? <StatusBadge ok={ok} label={ok ? 'OK' : 'Error'} />
+       : <StatusBadge unknown label="No recent reading" />
 );
 
 const Row = ({ icon, iconColor, label, value, hint, right, onPress }) => (
@@ -77,6 +87,12 @@ const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
 
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
+  /* What this account may do. The server refuses the rest whatever
+     happens here; this only stops the screen offering a control that
+     would come back 403. */
+  const can = useCan();
+  const isAdmin = useIsAdmin();
+  const { email: authEmail, signOut } = useAuth();
   const [device,  setDevice]  = useState(null);   // the physical node
   const [section, setSection] = useState(null);   // the section it reports for
   const [models,  setModels]  = useState(null);   // live /model-info
@@ -84,7 +100,6 @@ export default function SettingsScreen({ navigation }) {
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
-
   const [alerts, setAlerts] = useState({
     watering:      true,
     fertilizer:    true,
@@ -174,23 +189,13 @@ export default function SettingsScreen({ navigation }) {
   const isESP32Live  = !!device?.online;
   const isDHT22OK    = !!latest && !bad(latest.temperature) && !bad(latest.humidity);
   const isBH1750OK   = !!latest && !bad(latest.light) && latest.sensorFault !== true;
-  const isMoisOK     = !!latest && latest.soilRaw != null;
   const isFirebaseOK = online === true;
   const mlOK         = !!models;
 
   const sig          = signalLabel(device?.rssi);
   const lastSeenStr  = section?.freshness?.label ?? (device ? lastSeenLabel(device.lastSeenSec) : '-');
   const intervalStr  = device ? intervalLabel(device.readIntervalMs) : '-';
-  const rawStr       = latest?.soilRaw != null ? String(latest.soilRaw) : '-';
 
-  const wm = models?.watering?.metrics;
-  const tm = models?.tray?.metrics;
-  const waterStr = wm
-    ? 'MAE ' + Math.round(wm.hour?.mae_minutes ?? 0) + ' min · R² ' + (wm.hour?.r2 ?? 0).toFixed(3)
-    : '…';
-  const trayStr = tm
-    ? 'MAE ' + (tm.mae_seconds ?? tm.mae ?? 0).toFixed(2) + ' s'
-    : '…';
   const planStr = section?.plan?.waterTime
     ? section.plan.waterTime + ' for ' + section.plan.durationSec + 's'
     : 'not planned yet';
@@ -229,7 +234,6 @@ export default function SettingsScreen({ navigation }) {
               { label: 'Temp',  value: isDHT22OK  ? `${latest.temperature.toFixed(1)}°` : '-',  color: COLORS.temperature },
               { label: 'Humid', value: isDHT22OK  ? `${latest.humidity.toFixed(0)}%`     : '-',  color: COLORS.humidity    },
               { label: 'Light', value: isBH1750OK ? `${latest.light.toFixed(0)} lx`      : 'N/A', color: COLORS.light      },
-              { label: 'Tray',  value: latest?.sampleMoisture != null ? `${latest.sampleMoisture.toFixed(0)}%` : '-', color: COLORS.soil },
             ].map((item, i, arr) => (
               <React.Fragment key={i}>
                 <View style={s.snapCell}>
@@ -248,9 +252,12 @@ export default function SettingsScreen({ navigation }) {
               when it is unset belongs in setup, not here. */}
           <Text style={s.sectionLabel}>FARM LOCATION</Text>
           <View style={[s.card, SHADOW.sm]}>
+            {/* The coordinates stay readable - they explain which weather
+                forecast the models are using. Only moving the pin is admin. */}
             <TouchableOpacity
               style={s.locView}
-              onPress={() => setLocOpen(true)}
+              disabled={!can('setFarmLocation')}
+              onPress={can('setFarmLocation') ? () => setLocOpen(true) : undefined}
               activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Change where the farm is on the map">
@@ -274,11 +281,9 @@ export default function SettingsScreen({ navigation }) {
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="hardware-chip"        iconColor={COLORS.primary}     label="ESP32 Controller"      right={<StatusBadge ok={isESP32Live} label={isESP32Live ? 'Live' : 'Offline'} />} />
             <Divider />
-            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<StatusBadge ok={isDHT22OK}   label={isDHT22OK   ? 'OK'   : 'Error'}   />} />
+            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<SensorBadge ok={isDHT22OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<StatusBadge ok={isBH1750OK}  label={isBH1750OK  ? 'OK'   : 'Error'}   />} />
-            <Divider />
-            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<StatusBadge ok={isMoisOK}    label={isMoisOK    ? 'OK'   : 'Error'}   />} />
+            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<SensorBadge ok={isBH1750OK} live={isESP32Live} />} />
             <Divider />
             <Row icon="wifi-outline"         iconColor={COLORS.info}        label="Wi-Fi Signal"          value={sig.label} hint={device?.ip || undefined} />
             <Divider />
@@ -296,34 +301,6 @@ export default function SettingsScreen({ navigation }) {
             <Row icon="sparkles-outline"  iconColor={COLORS.warning} label="ML Backend"       right={<StatusBadge ok={mlOK}         label={mlOK         ? 'Running' : 'No data'} />} />
             <Divider />
             <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
-            <Divider />
-            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"   value={waterStr}
-                 hint="Random Forest regressor · decides the hour from dawn conditions" />
-            <Divider />
-            <Row icon="water-outline"     iconColor={COLORS.humidity} label="Tray Model"      value={trayStr}
-                 hint="Random Forest regressor · valve seconds" />
-            <Divider />
-            <Row icon="flask-outline"     iconColor={COLORS.fertilizer} label="Fertilizer" value="Encoded schedule"
-                 hint="A deterministic rule, not a learned model — reported honestly" />
-          </View>
-
-          {/* ── SENSOR CALIBRATION ───────────────────────────────────── */}
-          <Text style={s.sectionLabel}>SENSOR CALIBRATION</Text>
-          <View style={[s.card, SHADOW.sm]}>
-            <Row icon="options-outline" iconColor={COLORS.textSecondary} label="Probe Dry Value (ADC)" value={String(SOIL_DRY_ADC)} hint="Measured in open air" />
-            <Divider />
-            <Row icon="water"           iconColor={COLORS.humidity}      label="Probe Wet Value (ADC)" value={String(SOIL_WET_ADC)} hint="Blade in water to the printed line" />
-            <Divider />
-            <Row icon="pulse"           iconColor={COLORS.soil}          label="Current Raw Reading"   value={rawStr} hint="Falls as the tray fills" />
-            <Divider />
-            <Row
-              icon="construct-outline"
-              iconColor={COLORS.warning}
-              label="Recalibrate Sensor"
-              hint="Tap to start calibration wizard"
-              onPress={() => Alert.alert('Calibration', 'Point the sensor at dry air, then wet roots as prompted.\n\nCalibration wizard coming soon.')}
-              right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
-            />
           </View>
 
           {/* ── ALERTS ───────────────────────────────────────────────── */}
@@ -339,6 +316,43 @@ export default function SettingsScreen({ navigation }) {
           </View>
 
           {/* ── ABOUT ────────────────────────────────────────────────── */}
+          {/* ── ACCOUNT ──────────────────────────────────────────────
+              Who is signed in, and the two things they can do about it. The
+              email is shown because a farm phone gets handed around, and
+              "which account am I on" has no other answer in the app. */}
+          <Text style={s.sectionLabel}>ACCOUNT</Text>
+          <View style={[s.card, SHADOW.sm]}>
+            <Row icon="person-circle-outline" iconColor={COLORS.primary}
+              label="Signed in as" value={authEmail || '--'} />
+            {isAdmin && (<>
+              <Divider />
+              <Row
+                icon="people-outline"
+                iconColor={COLORS.info}
+                label="Team"
+                hint="Who can use this farm"
+                onPress={() => navigation.navigate('Team')}
+                right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+              />
+            </>)}
+            <Divider />
+            <Row
+              icon="log-out-outline"
+              iconColor={COLORS.danger}
+              label="Sign out"
+              /* Confirmed, because on a farm phone this is a slip that costs
+                 somebody their alarms until they remember the password. */
+              onPress={() => Alert.alert(
+                'Sign out?',
+                'You will need your email and password to sign in again, and '
+                + 'this phone will stop receiving alarms for the farm.',
+                [{ text: 'Stay signed in', style: 'cancel' },
+                 { text: 'Sign out', style: 'destructive', onPress: () => signOut() }],
+              )}
+              right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
+            />
+          </View>
+
           <Text style={s.sectionLabel}>ABOUT</Text>
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="leaf"                  iconColor={COLORS.primary}   label="System"        value="Smart Orchid Care" />
@@ -411,6 +425,7 @@ const s = StyleSheet.create({
   rowLabel: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '600' },
   rowHint:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2 },
   rowValue: { color: COLORS.textTertiary, fontSize: FONT.sm, maxWidth: 160, textAlign: 'right' },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   // Badge
   badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },

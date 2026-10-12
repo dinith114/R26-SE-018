@@ -137,7 +137,6 @@ from app.api.routes import devices
 from app.api.routes import smart_watering
 from app.api.routes import hybrid_pollination
 from app.api.routes import house_planner
-from app.api.routes import houses
 from app.api.routes import smart_care_v2
 from app.api.routes import automation
 
@@ -146,10 +145,20 @@ from app.api.routes import automation
 app.include_router(smart_watering.router,     prefix="/api/v1/watering",    tags=["Smart Watering"])
 app.include_router(hybrid_pollination.router, prefix="/api/v1/pollination", tags=["Hybrid Pollination"])
 app.include_router(house_planner.router,      prefix="/api/v2/care/houses", tags=["House Planner"])
-app.include_router(houses.router,             prefix="/api/v1/houses",      tags=["Houses"])
+# The deprecated v1 multi-house API (app/api/routes/houses.py) is NOT
+# mounted. It had no authentication and it reads and writes /houses/...
+# paths, which the tenant chokepoint does not rewrite - only /farm/... is
+# scoped - and one of them is a waterCommand. The module stays in the tree
+# because CLAUDE.md keeps it so older report results remain reproducible,
+# and reproducing them needs the code rather than a live route.
+# There is no commented-out include_router here on purpose: a commented
+# line invites uncommenting. test_main_wiring pins the absence instead.
 app.include_router(smart_care_v2.router,      prefix="/api/v2/care",        tags=["Smart Care v2"])
 app.include_router(devices.router,            prefix="/api/v2/devices",     tags=["Devices"])
 app.include_router(automation.router,         prefix="/api/v2/auto",        tags=["Automation Engine"])
+
+from app.api.routes import accounts
+app.include_router(accounts.router, prefix="/api/v2/accounts", tags=["Accounts"])
 
 
 @app.on_event("startup")

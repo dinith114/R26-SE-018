@@ -18,6 +18,7 @@ import {
 import {
   getUnassignedDevices, identifyDevice, lastSeenLabel, signalLabel,
 } from '../services/careV2';
+import { useCan } from '../config/auth';
 
 const C = {
   ink: '#1b1a20', ink2: '#4b4954', ink3: '#7c7986',
@@ -31,6 +32,7 @@ export default function NodePicker({ onSelect, onSkip, selectedMac }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const can = useCan();
   const [blinking, setBlinking] = useState(null);
 
   const load = useCallback(async (isRefresh) => {
@@ -96,7 +98,7 @@ export default function NodePicker({ onSelect, onSkip, selectedMac }) {
         <TouchableOpacity
           style={[styles.blinkBtn, blinking === item.mac && styles.blinkBtnActive]}
           onPress={() => blink(item.mac)}
-          disabled={blinking === item.mac}
+          disabled={blinking === item.mac || !can('identifyDevice')}
           accessibilityRole="button"
           accessibilityLabel={`Identify node ${item.shortId} by blinking its light`}
         >

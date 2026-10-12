@@ -18,26 +18,34 @@ import { API_KEY } from '../config/backend';
    file had already deleted. */
 import { COLORS } from '../config/theme';
 
-/* Content-Type plus the write key. Spread FIRST so an explicit
-   headers option could still override it. */
-const H = { 'Content-Type': 'application/json', 'X-API-Key': API_KEY };
+import { getToken, signOutNow } from './auth';
+import { makeRequest } from './request';
 import BASE_URL_VALUE from '../config/backend';
 const BASE_URL = BASE_URL_VALUE;
 
 const API = `${BASE_URL}/api/v2/care`;
 
-async function req(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
-    headers: H,
-    ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
+/**
+ * The credential is attached per call, never once at import.
+ *
+ * This used to be `const H = {...}`, evaluated when the module loaded. An ID
+ * token lives one hour, so a constant header would have worked for an hour and
+ * then failed for as long as the app stayed open - the worst shape a bug can
+ * take, because it works for the whole time you are testing it.
+ *
+ * X-API-Key is still sent. app/main.py has a middleware demanding it on every
+ * /api/v2 write, and it is an ADDITIONAL gate, not an alternative to the token:
+ * dropping it here would 401 every write. It stops being useful the moment the
+ * cutover deploys - by then every v2 write is behind require_role, and a shared
+ * secret compiled into every copy of the app identifies nobody - so removing it
+ * and the middleware together is ledgered for 2D.
+ *
+ * The decisions (refresh once on 401, never on 403) live in request.js, which
+ * imports nothing and so can be tested without a device.
+ */
+const request = makeRequest({ getToken, signOutNow, apiKey: API_KEY });
+
+const req     = (path, options) => request(API,  path, options);
 
 /* ── read ── */
 export const getOverview = () => req('/overview');
@@ -144,9 +152,66 @@ export const analyzePlacement = (h, maxSensors = 8) =>
     method: 'POST', body: JSON.stringify({ maxSensors }),
   });
 
+/**
+ * Mark the period when every node sat side by side: action 'start', 'end' or
+ * 'clear'. The server stamps its own clock, never the phone's, and refuses an
+ * 'end' under 40 minutes - too short to measure each sensor's offset.
+ */
+export const setColocation = (h, action) =>
+  req(`/houses/${h}/colocation`, { method: 'POST', body: JSON.stringify({ action }) });
+
+/**
+ * Every step of the placement analysis - raw counts, cleaning, sensor bias,
+ * variation, coverage, leave-one-out and the method comparison - for the
+ * screen that explains how the placement was decided. POST runs it (ten to
+ * twenty seconds of kriging); GET returns the last run.
+ */
+export const runPlacementAnalysis = (h) =>
+  req(`/houses/${h}/placement-analysis`, { method: 'POST' });
+export const getPlacementAnalysis = (h) => req(`/houses/${h}/placement-analysis`);
+
+/**
+ * "How do we know the watering times are correct?" - the two halves.
+ *
+ * getWateringValidation: the model against its own labels, on years it never
+ * saw. Shows it is faithful to the watering rule it learned.
+ *
+ * getShadehouseCheck: the sensors against the indoor conversion those labels
+ * were computed on (outdoor + 3.5 C x sun, + 7 % RH, 45 % light). Shows whether
+ * the rule was applied to the right house. Every section with history is pooled
+ * unless `section` names one; `sinceMs` drops readings from before the node
+ * went into the house. A 409 means not enough data yet, and its detail says why
+ * in words that can be shown as-is. `outdoorSource` says whether the outdoor
+ * weather was ERA5 or the forecast model - the last week is never ERA5.
+ */
+export const getShadehouseCheck = (h, section, sinceMs) =>
+  req(`/houses/${h}/shadehouse-check` + shadehouseQuery(section, sinceMs));
+export const getWateringValidation = () => req('/watering-validation');
+
+function shadehouseQuery(section, sinceMs) {
+  const q = [];
+  if (section) q.push(`section=${encodeURIComponent(section)}`);
+  if (sinceMs != null) q.push(`sinceMs=${encodeURIComponent(sinceMs)}`);
+  return q.length ? `?${q.join('&')}` : '';
+}
+
+/**
+ * What is wrong with a house's hardware right now, per section: a sensor not
+ * answering, a frozen or jumping reading, a node gone silent. From the
+ * server's in-memory checks; checkedAtMs is null until they have run since
+ * the server last started.
+ */
+export const getHouseHealth = (h) => req(`/houses/${h}/health`);
+
 /** Name the ESP32 that carries the relay board for this house. */
 export const setHouseMaster = (h, masterMac) =>
   req(`/houses/${h}/master`, { method: 'PUT', body: JSON.stringify({ masterMac }) });
+
+/** Which relay channels drive the house's two pumps. Send BOTH every time: the
+ *  server clears a channel that is missing from the body. */
+export const setHousePumps = (h, waterChannel, trayChannel) =>
+  req(`/houses/${h}/pumps`, { method: 'PUT',
+    body: JSON.stringify({ waterChannel, trayChannel }) });
 
 export const addSection  = (h, s)     => req(`/houses/${h}/sections`, { method: 'POST', body: JSON.stringify(s) });
 export const updateSection = (h, s, body) =>
@@ -231,18 +296,7 @@ export const fertilizeSection = (h, s, durationSec = 45) =>
 
 /* ── automation engine (one switch for the whole farm) ── */
 const AUTO = `${BASE_URL}/api/v2/auto`;
-
-async function autoReq(path, options = {}) {
-  const res = await fetch(`${AUTO}${path}`, {
-    headers: H, ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    throw new Error(detail);
-  }
-  return res.json();
-}
+const autoReq = (path, options) => request(AUTO, path, options);
 
 export const getAutoMode = ()  => autoReq('/auto-mode');
 export const setAutoMode = (on) =>
@@ -269,20 +323,10 @@ export const registerPushToken = (token, platform) =>
  * is that rule firing, and its detail message is written to be shown as-is.
  */
 const DEV = `${BASE_URL}/api/v2/devices`;
-
-async function devReq(path, options = {}) {
-  const res = await fetch(`${DEV}${path}`, {
-    headers: H, ...options,
-  });
-  if (!res.ok) {
-    let detail = `Server error ${res.status}`;
-    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch (_) {}
-    const err = new Error(detail);
-    err.status = res.status;          // 409 means the 1:1 rule refused the change
-    throw err;
-  }
-  return res.json();
-}
+/* err.status used to be set only here, for the 409 the one-to-one rule raises.
+   request() now sets it on every path, so that 409 still arrives and a 403 can
+   be told apart from a 401 everywhere else too. */
+const devReq = (path, options) => request(DEV, path, options);
 
 /** Every node that has ever announced itself, online ones first. */
 export const getDevices = () => devReq('/');
@@ -412,3 +456,40 @@ export function vpdStatus(vpd) {
   if (vpd < 2.4) return { label: 'high drying', color: COLORS.warning };
   return { label: 'extreme', color: COLORS.danger };
 }
+
+/* ── accounts: the people who can use this farm ──
+ *
+ * The tenant is never a parameter. Every one of these acts on the caller's own
+ * farm, worked out from the token, so there is no way to pass somebody else's
+ * id by accident or on purpose.
+ *
+ * Reading the list is open to any signed-in member - knowing who else is on the
+ * farm is not privileged, and an operator seeing "two admins, one of them me"
+ * is how they know who to ask. The three that change anything are admin only.
+ */
+const ACCOUNTS = `${BASE_URL}/api/v2/accounts`;
+const acctReq = (path, options) => request(ACCOUNTS, path, options);
+
+/** Everyone on this farm: { uid, email, role, addedAt }, oldest first. */
+export const getTeam = () => acctReq('/users');
+
+/**
+ * Create a member of this farm.
+ *
+ * The password is set here and passed on out of band - there is no invite
+ * email, and pretending otherwise would leave somebody waiting for one.
+ */
+export const addTeamMember = (email, password, role) =>
+  acctReq('/users', { method: 'POST', body: JSON.stringify({ email, password, role }) });
+
+/**
+ * Change what somebody may do.
+ *
+ * The server revokes their refresh tokens, so they are signed out and have to
+ * sign in again. Tell them that before doing it, not after.
+ */
+export const setTeamRole = (uid, role) =>
+  acctReq(`/users/${uid}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+
+/** Remove somebody. The server refuses the last admin, and refuses self-delete. */
+export const removeTeamMember = (uid) => acctReq(`/users/${uid}`, { method: 'DELETE' });

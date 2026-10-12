@@ -4,8 +4,27 @@
 
 ## Overview
 
-This module predicts hybrid pollination compatibility between Vanda orchid
-parent plants from photographs.
+This module answers two questions about Vanda breeding, from two different
+kinds of evidence, and it is worth being precise about which is which.
+
+**Level 1, from a photograph.** Is this plant fit to be used as a parent?
+A frozen ResNet18 embedding and 66 image and trait features give a three-class
+readiness verdict. The same model is applied to both parents of a cross, but
+with a different bar for each: the pod parent carries the capsule for about
+nine months and needs full vigour, while the pollen parent only has to donate
+pollinia, so a Moderate verdict blocks nothing on that side and advises a
+reversal on the other.
+
+**Level 2, from the registered record.** Has this pairing been made before?
+Two parent names are resolved against 27 registered crosses and answered with
+an evidence tier, never a success percentage.
+
+What this module does **not** do is predict whether a cross will succeed from
+the two photographs. That would need a model trained on cross outcomes
+including failures, and the register contains only successes — see
+*No success percentage is produced, deliberately* below. Nor does it measure
+pollen viability, which lives under the anther cap and would need close-ups
+and new labels.
 
 ---
 
@@ -212,6 +231,30 @@ survivors. Any percentage would be survivorship bias presented as measurement.
 
 Direction is preserved throughout: the pod parent is named first, and the
 engine reports separately when a pairing is registered only in reverse.
+
+### Where the name comes from, and what happens when it is wrong
+
+The photograph and the name answer different questions. The photograph reads
+**condition**; it is not an identifier, and no model here was trained to tell
+one Vanda hybrid from another. The name is typed from the plant's tag, and the
+engine says which of three ways it understood it:
+
+| `genus_source` | Meaning |
+|---|---|
+| `stated` | The genus is written on the name — `V. tessellata`, `Cattleya Bowringiana` |
+| `matched` | No genus given, but the name is in the knowledge base, which records one |
+| `assumed` | Neither. The collection's genus is used as a fallback, and the result says so |
+
+Only the third case is a guess, and it is reported rather than hidden. The
+engine used to collapse all three into one line — `parse_cross(name)["genus"]
+or "Vanda"` — so any unrecognised name became a Vanda. Typing `Catliya` against
+`Aeridovanda Frank Johnston` returned a confident **"Vanda × Aeridovanda is an
+established combination"**: a verdict about a plant the grower had not named.
+A near-miss is now offered as a correction, and genera outside the Vanda
+alliance (Cattleya, Dendrobium, Oncidium and the rest) are recognised so that
+reaching across an alliance is reported as the botanical wall it is, rather
+than as "no precedent found" — which reads like a gap in a small knowledge base
+and invites the grower to try anyway.
 
 ---
 
