@@ -1,47 +1,15 @@
 /**
- * API Configuration
- * Component: Orchid Growth Stage Recognition
+ * API configuration for Component 2 (growth stage and bloom prediction).
+ *
+ * The backend address is NOT chosen here any more. This module used to pick
+ * ENV.DEV.ANDROID_URL (10.0.2.2) on Android - the emulator's alias for the host
+ * machine, unreachable from a real phone - and in a release build __DEV__ is
+ * false, so it fell through to a 'your-api-domain.com' placeholder. Either way
+ * this component could not reach the backend from an installed APK.
+ *
+ * One constant now, shared with every other screen and service.
  */
-import { Platform } from 'react-native';
-
-// For different environments
-const ENV = {
-    DEV: {
-        BASE_URL: 'http://localhost:8000',        // For iOS simulator
-        ANDROID_URL: 'http://10.0.2.2:8000',      // For Android emulator
-        LOCAL_URL: 'http://192.168.113.51:8000'      // Your PC's Wi-Fi IP (ipconfig)
-    },
-    PROD: {
-        BASE_URL: 'https://your-api-domain.com'   // For production
-    }
-};
-
-// Detect platform
-const isAndroid = Platform.OS === 'android';
-const isWeb = Platform.OS === 'web';
-
-// react-native-device-info isn't a project dependency, so an Android
-// emulator vs. a physical Android device can't be auto-detected - set this
-// manually if you switch to emulator testing.
-// true:  running in the Android emulator on this machine (uses ENV.DEV.ANDROID_URL)
-// false: running via Expo Go on a real phone (uses ENV.DEV.LOCAL_URL)
-const USE_ANDROID_EMULATOR = false;
-
-// Choose base URL. Web always uses localhost since the browser runs on the
-// same machine as the backend; native (phone) needs the PC's LAN IP because
-// "localhost" on the phone means the phone itself, not this computer.
-let BASE_URL;
-if (__DEV__) {
-    if (isWeb) {
-        BASE_URL = ENV.DEV.BASE_URL;
-    } else if (isAndroid && USE_ANDROID_EMULATOR) {
-        BASE_URL = ENV.DEV.ANDROID_URL;
-    } else {
-        BASE_URL = ENV.DEV.LOCAL_URL;
-    }
-} else {
-    BASE_URL = ENV.PROD.BASE_URL;
-}
+import BASE_URL from './backend';
 
 export const API_CONFIG = {
     BASE_URL: BASE_URL,
@@ -70,3 +38,40 @@ export const API_CONFIG = {
     TIMEOUT: 30000, // 30 seconds
     MAX_RETRIES: 3,
 };
+
+
+/* ---------------------------------------------------------------------------
+ * Component 1 - disease detection
+ *
+ * Appended below API_CONFIG; nothing above this line is modified. The host and
+ * endpoints come from API_CONFIG, which every component shares. Only the values
+ * here are specific to disease detection.
+ *
+ * WHY THESE EXPORTS MUST EXIST
+ * Without them, services/diseaseApi.js imports undefined. The upload URL then
+ * becomes "undefined/detect", which the browser treats as a RELATIVE path and
+ * sends to the Expo dev server on port 8081 instead of the backend on 8000.
+ * The dev server answers every unknown path with its index.html, so the app
+ * receives HTML where it expected JSON and reports "the server sent a response
+ * the app could not read". The failure looks like a backend problem and is not.
+ * ------------------------------------------------------------------------- */
+
+export const API_BASE_URL = API_CONFIG.BASE_URL;
+export const DISEASE_API = `${API_CONFIG.BASE_URL}/api/v1/disease`;
+
+/** Host without scheme or port, shown in error hints so a grower can see which
+ *  address failed. */
+export const API_HOST = API_CONFIG.BASE_URL.replace(/^https?:\/\//, '').split(':')[0];
+
+/**
+ * Generous on purpose: the first /detect call after the server starts loads two
+ * TensorFlow models from disk, which takes several seconds. Later calls are fast.
+ */
+export const REQUEST_TIMEOUT_MS = 60000;
+
+/**
+ * Confidence below which the backend reports "unidentified" rather than naming
+ * a disease. Chosen from the VALIDATION sweep, never the test set.
+ * See ml-models/disease_detection/PROJECT_CONTEXT.md section 4c.
+ */
+export const CONFIDENCE_THRESHOLD = 0.7;

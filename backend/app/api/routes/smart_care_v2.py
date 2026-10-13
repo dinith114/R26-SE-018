@@ -1,0 +1,3818 @@
+"""
+Smart Orchid Care v2 — redesigned API.
+
+WHAT CHANGED FROM v1
+--------------------
+v1 asked "should we water? yes/no" using a root-moisture probe per plant.
+That is impractical — you cannot probe every plant's roots.
+
+v2 has two control loops per SECTION (= one microclimate zone = one device):
+
+  LOOP 1 · WATERING   Daily watering is mandatory. The model predicts WHAT TIME
+                      today and FOR HOW LONG. Normally once per day; a second
+                      session is allowed ONLY in extreme heat (Vanda literature
+                      permits twice-daily watering in extreme heat). Fertilizer,
+                      when due, is injected into that same water.
+
+  LOOP 2 · HUMIDITY   A shallow 3 cm tray per section. When humidity falls the
+                      valve tops it up; evaporation lifts RH toward the Vanda
+                      band (60-80%) WITHOUT soaking the roots. A hot day makes
+                      the tray work harder rather than triggering a second spray.
+
+Hierarchy:  farm -> houses -> sections
+Firebase:   /farm/meta
+            /farm/houses/{h}/sections/{s}/{latest,plan,tray,fertilizer,control,meta}
+            /farm/history/{h}/{s}/{pushId}      <- archive, deliberately separate
+
+The history archive is NOT stored under the section. Firebase REST returns a
+whole subtree, so while history lived there every dashboard poll of
+/farm/houses.json downloaded the entire archive — 1 MB against 8 KB of real
+state, which made the app take seconds to show anything. Keep them apart.
+"""
+
+import math
+import os
+# joblib, not pickle, for the v2 bundles: they are stored compressed so the
+# backend can be deployed without shipping 1.7 GB. joblib.load reads a plain
+# pickle too, so restoring an uncompressed backup still works.
+import joblib
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone, tzinfo
+from typing import Dict, List, Optional
+
+import numpy as np
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+import requests as _req
+
+from app.api.routes.smart_watering import _fb_get, _fb_put, FIREBASE_BASE_URL
+# Liveness lives with the registry that owns lastSeen; importing it keeps one
+# definition of "is this board there" instead of two that can drift apart.
+from app.api.routes.devices import device_liveness as _device_liveness
+
+router = APIRouter()
+
+
+def _fb_delete(path: str) -> bool:
+    try:
+        return _req.delete(f"{FIREBASE_BASE_URL}{path}", timeout=8).status_code == 200
+    except Exception:
+        return False
+
+# ─── Model loading ────────────────────────────────────────────────────────────
+_MODEL_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "..", "..", "ml_pipeline", "results"))
+
+_water: Optional[dict] = None
+_tray:  Optional[dict] = None
+_fert:  Optional[dict] = None
+
+
+def _load_v2():
+    global _water, _tray, _fert
+    _water = joblib.load(os.path.join(_MODEL_DIR, "watering_v2.pkl"))
+    # v3 adds an anticipation head trained on the section's own trajectory, so
+    # the tray can act early WITHOUT the outdoor forecast API. v2 stays as the
+    # fallback: its dose head is byte-identical in features and label, so a farm
+    # running either behaves the same reactively.
+    try:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v3.pkl"))
+    except Exception:
+        _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
+    _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
+    m = _water["metrics"]
+    print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
+          f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
+          f"duration R2={m['duration']['r2']:.3f}")
+    if _tray.get("drop_model") is not None:
+        d = _tray["metrics"].get("drop_at_threshold") or {}
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s | "
+              f"drop-risk AUC={_tray['metrics'].get('drop_auc', 0):.3f} "
+              f"(thr {d.get('threshold', 0):.2f}: precision {d.get('precision', 0):.3f}, "
+              f"recall {d.get('recall', 0):.3f}) - no outdoor API")
+    else:
+        print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s "
+              f"(v2 - reactive only)")
+    # Deliberately NOT printed as an F1 score. It is 1.0 because the label is a
+    # deterministic function of the inputs, so the classifier reproduces a rule
+    # the code already holds. Printing "F1=1.000" invites a claim we cannot defend.
+    print("[ML v2] Fertilizer     rule-based schedule (encoded as a classifier, "
+          "not learned from observed feeding)")
+
+
+try:
+    _load_v2()
+except Exception as e:
+    print(f"[WARN] v2 models not loaded from {_MODEL_DIR}: {e}")
+    print("[WARN] Run: python ml_pipeline/train_models_v2.py")
+
+
+def _ready() -> bool:
+    return _water is not None and _tray is not None and _fert is not None
+
+
+# ─── Sensor helpers ───────────────────────────────────────────────────────────
+SENTINEL = -999
+SAFE = {"temperature": 28.0, "humidity": 70.0, "light": 0.0}
+
+# A 3 cm tray cannot physically dry out faster than this. Any "low humidity"
+# sooner than this after a fill is caused by dry air, not an empty tray — so we
+# refuse to refill and avoid a wasteful overflow loop.
+# A second, lighter watering is allowed on a genuinely extreme day - but it is
+# decided in the AFTERNOON from what the day actually did, not at dawn.
+#
+# It used to be a dawn prediction pinned to 17:00. By 17:00 the system knows the
+# measured temperature, the measured humidity, and whether the tray coped, and
+# was throwing all of it away in favour of a guess made twelve hours earlier.
+#
+# It is also gated on the tray being exhausted, which removes a conflict rather
+# than managing one. The tray is the cheap intervention and carries no root-rot
+# risk, so it always goes first; a second watering happens only once the tray
+# has demonstrably failed - it has water, and humidity is still below the band.
+# The two can no longer fire for the same reason.
+#
+# The code already said this and never did it: the tray writes "The tray is at
+# its limit - extra watering may be needed" and nothing anywhere acted on it.
+ALLOW_SECOND_SESSION = True
+
+# Late enough that the day has shown what it is, early enough that roots are not
+# going into the night wet.
+SECOND_WINDOW_START, SECOND_WINDOW_END = 15.0, 17.5
+# Extreme, measured now - not predicted at dawn. Same thresholds the training
+# label used, applied to observation instead.
+SECOND_PEAK_TEMP_C = 36.0
+SECOND_VPD_KPA = 3.0
+SECOND_DOSE_SHARE = 0.7
+# A decision this consequential is not made on an old reading.
+SECOND_MAX_READING_AGE_MIN = 30.0
+
+
+def second_session_due(section: dict, now: Optional[datetime] = None) -> Optional[dict]:
+    """Does today, as measured, justify a second watering for this section?
+
+    Every condition is something OBSERVED this afternoon. Nothing here is a
+    prediction, and nothing here is from a weather service.
+
+    The tray gate is the important one. Without it, the tray and a second
+    watering both react to the same heat and can over-treat a section between
+    them. With it there is a strict order: the tray tries first because it is
+    cheap and cannot rot a root, and the roots are only watered again once the
+    tray has water in it and STILL cannot hold humidity up.
+    """
+    if not ALLOW_SECOND_SESSION:
+        return None
+    now = now or farm_now()
+    hour = now.hour + now.minute / 60.0
+    if not (SECOND_WINDOW_START <= hour <= SECOND_WINDOW_END):
+        return None
+
+    latest = _clean((section or {}).get("latest") or {})
+    t, rh = latest.get("temperature"), latest.get("humidity")
+    if t is None or rh is None:
+        return None
+
+    # An old reading cannot describe this afternoon.
+    ts = latest.get("timestamp")
+    try:
+        age_min = (_server_now_ms() - float(ts)) / 60000.0
+    except (TypeError, ValueError):
+        return None
+    if age_min > SECOND_MAX_READING_AGE_MIN or age_min < -SECOND_MAX_READING_AGE_MIN:
+        return None
+
+    tray = (section or {}).get("tray") or {}
+    plan = (section or {}).get("plan") or {}
+    v = vpd_kpa(t, rh)
+    low = float(tray.get("targetLow") or 60.0)
+
+    extreme = (t >= SECOND_PEAK_TEMP_C) or (v >= SECOND_VPD_KPA)
+    dry_now = rh < low
+    tray_spent = bool(tray.get("trayAtLimit"))
+    if not (extreme and dry_now and tray_spent):
+        return None
+
+    base = int(plan.get("durationSec") or 0)
+    if base <= 0:
+        return None
+    secs = max(20, min(RELAY_MAX_SEC, int(round(base * SECOND_DOSE_SHARE))))
+    return {"durationSec": secs,
+            "temperature": t, "humidity": rh, "vpd": round(v, 3),
+            "reason": (f"Second watering: it is {t}C at {rh}% humidity (VPD {v:.2f}) and the "
+                       f"tray was filled {tray.get('hoursSinceFill')}h ago and still cannot "
+                       f"hold humidity up. The tray has done what it can.")}
+
+COOLDOWN_HOURS = 6.0
+
+# The dose that actually fills the tray, and so earns the FULL cooldown.
+# Reactive doses land around 30-40 s; an anticipatory top-up is 6-15 s.
+TRAY_FULL_FILL_SEC = 30.0
+# Even a splash needs a moment before the next assessment means anything. This
+# one is never waived, including for a refill, so a probe stuck at "dry" cannot
+# make the valve open every fifteen minutes for ever.
+TRAY_MIN_HOLD_HOURS = 0.5
+
+# ── MEASURED HARDWARE, 28 August 2026 ────────────────────────────────────────
+# Until this was measured, "seconds" was an arbitrary unit. The duration labels
+# were synthesised by formula during training with no pump in the loop, so the
+# models learned a scale that had never been checked against water.
+#
+# Bench measurement, outlet into a jug on a scale:
+#     5 s -> 1.13 L      8 s -> 2.03 L      15 s -> capped by a 2.3 L jug
+# The 15 s runs are discarded: they measure the jug, not the pump. The rate is
+# the 5->8 s slope, which cancels the volume left priming the tube:
+#     (2.03 - 1.13) / 3 = 0.300 L/s
+PUMP_ML_PER_SEC = 300.0
+# Tray measured 32 x 48 cm. Depth is the working figure the cooldown reasoning
+# has always assumed.
+TRAY_AREA_CM2 = 32.0 * 48.0          # 1536 cm2 -> 1.536 L per cm of depth
+TRAY_MAX_DEPTH_CM = 3.0              # 4.61 L full
+
+
+def _ml_per_sec(section: dict) -> float:
+    """How fast water actually reaches THIS section, ml per second.
+
+    PUMP_ML_PER_SEC is one measurement of one pump discharging straight into a
+    jug. Once that pump feeds eight solenoid valves through pipe of different
+    lengths, the section nearest the pump and the section at the far end do not
+    receive the same flow, and a single figure would quietly over-water one and
+    under-water the other.
+
+    Per-section, measured the same way the 300 ml/s was: run the valve for a
+    known time, weigh or measure what comes out, divide. Falls back to the
+    pump's own rate where nobody has measured yet, which is the right default -
+    it is what the plumbing delivers with no pipe in the way.
+    """
+    try:
+        v = float(((section or {}).get("meta") or {}).get("mlPerSec"))
+        if 10.0 <= v <= 5000.0:
+            return v
+    except (TypeError, ValueError):
+        pass
+    return PUMP_ML_PER_SEC
+
+
+def _manual_durations(section: dict) -> dict:
+    """A grower's own pour lengths for this section, where they have set any.
+
+    Stored under control/durations, NOT control/override - that key already
+    holds the auto/manual autonomy switch and means something different.
+
+    These change HOW LONG a pour runs, never WHETHER one happens. The models
+    still decide the timing and whether water is needed at all; this only
+    replaces the length once that decision is made. A value that forced fills
+    would keep watering a section forever after one afternoon of tinkering.
+    """
+    d = ((section or {}).get("control") or {}).get("durations") or {}
+    out = {}
+    for key in ("water", "tray"):
+        try:
+            v = int(d.get(key))
+            if v > 0:
+                out[key] = v
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _sec_for_depth(cm: float) -> int:
+    """Pump seconds to raise the tray by this depth, from measured geometry."""
+    return max(1, int(round(TRAY_AREA_CM2 * cm / PUMP_ML_PER_SEC)))
+
+
+# A hard ceiling, like the 120 s relay cap - a physical limit the model cannot
+# argue with. Before this the model routinely asked for 25 s and could ask for
+# 60 s, which at the measured rate is 7.5 L and 18 L into a tray that holds
+# 4.6 L. The overflow was invisible because nothing measures outflow.
+#
+# Derived rather than hardcoded so a different pump or tray needs three measured
+# numbers changed, not a retrained model.
+TRAY_MAX_SEC = _sec_for_depth(TRAY_MAX_DEPTH_CM)          # ~15 s
+
+# Below this the tray cannot buffer anything - there is nothing left to
+# evaporate - and it is refilled regardless of what the air is doing.
+TRAY_LOW_PCT = 20.0
+# Refilling an empty tray means filling it, so it is the ceiling by definition.
+TRAY_REFILL_SEC = TRAY_MAX_SEC
+
+# How long after a real fill the tray should be showing water. Anything longer
+# and a still-dry reading is not evidence about the tray.
+TRAY_RESPONSE_HOURS = 1.0
+
+
+def _tray_level(latest: dict):
+    """Measured water level in the tray, or None when there is no usable probe.
+
+    The capacitive probe sits IN the humidity tray - Vanda grow bare-root, so
+    there is no medium to measure and the probe was repurposed to report the
+    tray. The firmware maps it to a percentage against a calibration measured on
+    this exact probe: 2600 counts in open air, 1100 with the blade in water.
+
+    None rather than a guess when the probe is absent or faulty. A section
+    without one keeps the older air-humidity behaviour instead of being told its
+    tray is empty on no evidence.
+    """
+    v = (latest or {}).get("sampleMoisture")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f < -5.0 or f > 105.0:          # outside anything the mapping can produce
+        return None
+    return max(0.0, min(100.0, f))
+
+
+def _effective_cooldown(last_secs) -> float:
+    """How long to hold off, scaled by how much water actually went in.
+
+    The cooldown exists for a physical reason: a 3 cm tray cannot dry out within
+    six hours, so low humidity soon after a fill means the AIR is dry, not the
+    tray. That reasoning holds for a fill that filled the tray. It does not hold
+    for a 6 second anticipatory top-up, which does not.
+
+    Charging both the same six hours was a real regression. Traced on a real
+    Jaffna morning: a 6 s top-up at 08:00 blocked the 35 s fill the model asked
+    for at 10:00, and the section then went through the whole dry spell - 53 to
+    57 % humidity - on six seconds of water, where the old reactive-only model
+    would have given it thirty-five.
+
+    Missing seconds means old data written before this existed; assume a full
+    fill, because under-watering is the safer way to be wrong about a tray.
+    """
+    try:
+        secs = float(last_secs)
+    except (TypeError, ValueError):
+        return COOLDOWN_HOURS
+    if secs <= 0:
+        return COOLDOWN_HOURS
+    share = min(1.0, secs / TRAY_FULL_FILL_SEC)
+    return max(TRAY_MIN_HOLD_HOURS, COOLDOWN_HOURS * share)
+
+# What "days since fertilized" means for a section that has never been fed
+# through the system. Deliberately at the Active-stage interval so it reads as
+# due once, is acted on, and then runs on real timestamps from that point.
+FERT_UNKNOWN_DAYS = 7.0
+
+
+# Physically possible ranges. A reading outside these means the sensor is
+# faulty (stuck, disconnected, garbage on the wire) — not a real measurement.
+LIMITS = {"temperature": (-10.0, 60.0), "humidity": (0.0, 100.0), "light": (0.0, 200000.0)}
+
+
+# Values the models must never see, and the app must never be shown.
+DISPLAY_DROP = (None, SENTINEL)
+
+
+def _display(reading: dict) -> dict:
+    """A reading as the FARMER should see it - or nothing at all.
+
+    `_clean` exists to keep a model from being fed rubbish, so it substitutes
+    training-range defaults for anything missing or flagged -999. Those defaults
+    then leaked straight through /overview into the app, and a section with no
+    sensor at all displayed 28.0 C and 70 % humidity as though measured - 70 %
+    even landing inside the ideal band, so a zone with no hardware showed a
+    green "GOOD".
+
+    Nothing is invented here. A sensor that did not report reads as null, and
+    the app shows "--".
+    """
+    raw = reading or {}
+    if not raw.get("timestamp"):
+        return {}
+    out = {}
+    for k, v in raw.items():
+        if k in ("temperature", "humidity", "light", "vpd", "sampleMoisture"):
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                out[k] = None
+                continue
+            out[k] = None if fv <= SENTINEL else fv
+        else:
+            out[k] = v
+    return out
+
+
+def _clean(reading: dict) -> dict:
+    """Make a raw device reading safe to feed to the models.
+
+    Handles three kinds of bad data:
+      * missing keys            -> training-range default
+      * -999 sensor-fault flag  -> training-range default
+      * physically impossible   -> clamped to the sensor's real range
+        (e.g. 150% RH or -40 C means the sensor has failed, and feeding that
+        to a model trained on 30-97% RH produces nonsense)
+    """
+    out = dict(reading or {})
+    for k, dflt in SAFE.items():
+        try:
+            v = float(out.get(k))
+        except (TypeError, ValueError):
+            v = None
+        if v is None or v <= SENTINEL:
+            out[k] = dflt
+        else:
+            lo, hi = LIMITS[k]
+            out[k] = min(max(v, lo), hi)
+    return out
+
+
+def vpd_kpa(temp_c: float, rh_pct: float) -> float:
+    """Vapour Pressure Deficit (kPa) — the physical drying power of the air.
+
+    Standard greenhouse metric; combines temperature and humidity into one
+    number. This turned out to be the dominant driver of watering time.
+    """
+    svp = 0.6108 * math.exp(17.27 * temp_c / (temp_c + 237.3))
+    return round(svp * (1.0 - rh_pct / 100.0), 3)
+
+
+def _recent_history(house_id: str, section_id: str) -> dict:
+    """The section's last ~24 h of readings, fetched ONCE.
+
+    Both _yesterday_stats and _dawn_reading need this same window. They each
+    used to fetch it themselves, so every plan pulled the identical ~50 KB from
+    Firebase twice — about a second of pure waste per section, multiplied by
+    every section on the farm.
+    """
+    return _fb_get(f'/farm/history/{house_id}/{section_id}.json'
+                   f'?orderBy="$key"&limitToLast=288') or {}
+
+
+def _yesterday_stats(raw: dict, fallback: dict) -> dict:
+    """Summarise the section's own history (previous ~24 h)."""
+    if not raw:
+        return {"peak_temp": fallback["temperature"] + 5,
+                "mean_humidity": fallback["humidity"],
+                "mean_vpd": vpd_kpa(fallback["temperature"], fallback["humidity"])}
+    recs = [_clean(r) for r in raw.values() if isinstance(r, dict)]
+    if not recs:
+        return {"peak_temp": fallback["temperature"] + 5,
+                "mean_humidity": fallback["humidity"],
+                "mean_vpd": vpd_kpa(fallback["temperature"], fallback["humidity"])}
+    temps = [r["temperature"] for r in recs]
+    hums  = [r["humidity"] for r in recs]
+    vpds  = [vpd_kpa(r["temperature"], r["humidity"]) for r in recs]
+    return {"peak_temp": round(max(temps), 1),
+            "mean_humidity": round(sum(hums) / len(hums), 1),
+            "mean_vpd": round(sum(vpds) / len(vpds), 3)}
+
+
+def _dawn_reading(raw: dict, latest: dict) -> dict:
+    """Find this section's DAWN reading (~5-6 AM) from its own history.
+
+    The watering-time model is trained on dawn conditions — that is when the
+    decision is actually made each morning. Feeding it an afternoon reading
+    would be out-of-distribution and produce unreliable plans, so we search
+    history for the reading nearest 05:00. If the history does not span a dawn
+    yet, we fall back to the coolest reading available (the best dawn proxy).
+    """
+    if not raw:
+        return latest
+    recs = []
+    for r in raw.values():
+        if not isinstance(r, dict) or r.get("timestamp") is None:
+            continue
+        try:
+            # LOCAL time: "dawn" is 04:00-07:00 where the plants are, and the
+            # model was trained on Asia/Colombo hours.
+            ts = to_farm_time(r["timestamp"])
+        except Exception:
+            continue
+        recs.append((ts, _clean(r)))
+    if not recs:
+        return latest
+
+    dawn = [(t, r) for t, r in recs if 4 <= t.hour <= 7]
+    if dawn:
+        # nearest to 05:00
+        best = min(dawn, key=lambda p: abs((p[0].hour + p[0].minute / 60.0) - 5.0))
+        return best[1]
+    # no dawn in history yet — coolest reading is the closest proxy
+    return min(recs, key=lambda p: p[1]["temperature"])[1]
+
+
+# ═══════════════ GROWTH STAGE — Component 2 integration ══════════════════════
+#
+# Growth stage decides WHICH fertilizer a section gets (30-10-10 for active
+# growth, 10-30-20 for flowering, none when dormant), so getting it wrong feeds
+# the plant the wrong thing. It must not be a stale value someone typed once.
+#
+# ─── INTEGRATION CONTRACT FOR COMPONENT 2 (Growth Stage Recognition) ─────────
+# Component 2 writes its prediction to this path, per section:
+#
+#   /farm/houses/{houseId}/sections/{sectionId}/growthPrediction
+#   {
+#     "stage":       "Active" | "Flowering" | "Dormant",
+#     "confidence":  0.0 - 1.0,
+#     "predictedAt": <epoch milliseconds>,
+#     "source":      "component2-cnn"
+#   }
+#
+# Nothing else is required — no API call, no import, no shared code. As soon as
+# Component 2 starts writing that node, this component picks it up automatically.
+# Until then the farmer's manual setting is used, and the app asks them to set it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+GROWTH_PREDICTION_MAX_AGE_DAYS = 21   # a stage lasts weeks; older than this is stale
+GROWTH_PREDICTION_MIN_CONF     = 0.50 # below this we do not trust it over the farmer
+GROWTH_MANUAL_STALE_DAYS       = 60   # farmer's setting this old is probably outdated
+VALID_STAGES = ("Active", "Flowering", "Dormant")
+
+
+# The exact feature order these models were trained on.
+#
+# The bundles used to carry this as `feature_columns`, and /model-info read it
+# straight out of the pickle. The retrain on real ERA5 weather stopped writing
+# that key into watering_v2.pkl and tray_v2.pkl (only fertilizer_v2.pkl still
+# has it), so /model-info raised KeyError and returned 500 - and the About
+# screen and the viva both read that endpoint.
+#
+# ORDER MATTERS: these must stay in step with the arrays handed to
+# scaler.transform() in _plan_section and _tray_decision. They are the labels
+# for those columns, not an independent list.
+WATER_FEATURES = [
+    "dawn_temp", "dawn_humidity", "dawn_light", "dawn_vpd",
+    "yest_peak_temp", "yest_mean_humidity", "yest_mean_vpd",
+    "season_month", "growth_stage_enc", "light_exposure",
+]
+TRAY_FEATURES = ["temperature", "humidity", "light", "vpd", "hour"]
+
+
+# ──────────────────── Commands: cloud → node ─────────────────────────
+#
+# There are TWO consumers of a command and they read DIFFERENT documents:
+#
+#   control/waterCommand   {requested, durationSec, withFertilizer, ...}
+#       → FARM_SIMULATOR.html, the digital twin.
+#
+#   command                {id, action, durationSec}
+#       → the real firmware. pollCommand() in sensor_node_validate.ino reads
+#         this path and acknowledges at commandAck.
+#
+# The backend was written against the simulator; the firmware was written later
+# against its own contract. For a while the app's Water Now button therefore
+# wrote a document no physical node has ever read — the plants would not have
+# been watered. Every command now goes through _issue_node_command as WELL as
+# the control/* write, so both consumers act on it.
+#
+# The node matches by `id` and never deletes the document: a repeated poll of
+# the same id is deliberately ignored, so a genuinely new command MUST carry a
+# new id. Never reuse or reset one.
+#
+# Latency is one firmware read cycle - READ_INTERVAL_MS is 15 s - so a pump
+# starts within about 15 seconds of the button, not instantly.
+
+# "stop" ends whatever is running and carries no duration, which is why the
+# duration guard below has to make an exception for it.
+NODE_ACTIONS = ("water", "tray", "stop", "wifi")
+
+# The firmware's own safety clamp: RELAY_MAX_SEC = 120 in
+# sensor_node_validate.ino. The backend used to accept up to 180 s, so a manual
+# request between 121 and 180 s made the app promise a pour the hardware would
+# silently cut short. Clamp to the same number the relay will actually honour,
+# so what the farmer is told is what happens. The model's own plans are already
+# bounded to 30-120 s, so this only affects a manual override.
+RELAY_MAX_SEC = 120
+
+
+# One master controller can hold one relay board, and eight is what the common
+# board offers. Beyond that a second master is needed rather than a bigger map.
+MASTER_MAX_CHANNELS = 8
+
+# /devices is read once per command burst rather than once per command. A tick
+# that waters four sections would otherwise pull the whole registry four times.
+_DEVICE_CACHE: dict = {"at": 0.0, "devices": None}
+_DEVICE_CACHE_SEC = 30.0
+
+
+def _devices_cached() -> dict:
+    now = _server_now_ms() / 1000.0
+    if _DEVICE_CACHE["devices"] is None or now - _DEVICE_CACHE["at"] > _DEVICE_CACHE_SEC:
+        _DEVICE_CACHE["devices"] = _fb_get("/devices.json") or {}
+        _DEVICE_CACHE["at"] = now
+    return _DEVICE_CACHE["devices"]
+
+
+def _own_device(house_id: str, section_id: str) -> Optional[str]:
+    """The MAC of the node assigned to this section, or None.
+
+    The registry is the authority, not meta.deviceId: that field is a
+    convenience for the app and drifts when a write half-fails.
+    """
+    target = f"{house_id}/{section_id}"
+    for mac, rec in (_devices_cached() or {}).items():
+        if (rec or {}).get("assignedTo") == target:
+            return mac
+    return None
+
+
+def _master_for_house(house_id: str) -> Optional[str]:
+    """The controller that actuates sections having no node of their own."""
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    mac = (meta.get("masterMac") or "").strip()
+    return mac or None
+
+
+def _natural_key(sid: str):
+    """Sort S2 before S10.
+
+    NATURAL order, not lexicographic. sorted() puts S10, S11, S12 before S2, so
+    on a farm with more than nine sections the derived relay channels came out
+    scrambled - S12 landed on channel 4 in testing, which on correctly wired
+    hardware opens the wrong valve and looks like a plumbing fault rather than a
+    sort order. Module level because the calibration status endpoint lists
+    sections too, and two copies of this would eventually disagree.
+    """
+    digits = "".join(c for c in sid if c.isdigit())
+    return (0, int(digits)) if digits else (1, 0), sid
+
+
+def _channel_map(house_id: str) -> dict:
+    """{channel: [section ids]} for the whole house, explicit and derived.
+
+    Exists because two sections sharing a channel is not a cosmetic problem: the
+    relay board has one pin per channel and one valve per pin, so a duplicate
+    means watering section A physically waters section B. Nothing in the pour
+    path can detect that - the command is well formed, the firmware obeys it,
+    the ack comes back, and the water goes to the wrong plants.
+
+    It happens easily. Derived channels come from position in sorted order, so
+    setting ONE section explicitly to a number another section already derives
+    collides silently - which is exactly what happened when S8 was pinned to
+    channel 1 while S1 already derived it.
+    """
+    out: dict = {}
+    for sid in sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}),
+                      key=_natural_key):
+        ch = _relay_channel(house_id, sid)
+        if ch:
+            out.setdefault(ch, []).append(sid)
+    return out
+
+
+def _shared_pumps(house_id: str) -> bool:
+    """Is this house plumbed as ONE pump per job rather than a valve per section?"""
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    return hmeta.get("waterChannel") is not None or hmeta.get("trayChannel") is not None
+
+
+def _channel_conflicts(house_id: str) -> list:
+    """Human-readable warnings, one per shared channel. Empty when clean.
+
+    SILENT WHEN THE HOUSE IS ON SHARED PUMPS, because then sharing is the
+    wiring, not a fault. This farm runs one watering pump and one tray pump for
+    the whole house, so every section legitimately resolves to the same two
+    channels; reporting that as a conflict would have put a permanent red
+    warning on a correctly plumbed house - and would have made the real warning
+    worthless the moment a house did get per-section valves.
+
+    It also retires a warning that was never a fault: H1 was flagged because S8
+    was pinned to channel 1 while S1 derived it. With one pump they are supposed
+    to share it.
+    """
+    if _shared_pumps(house_id):
+        return []
+    return [f"Channel {ch} is claimed by {' and '.join(ids)} - "
+            f"they would open the same valve."
+            for ch, ids in sorted(_channel_map(house_id).items())
+            if len(ids) > 1]
+
+
+def _relay_channel(house_id: str, section_id: str,
+                   action: str = "water") -> Optional[int]:
+    """Which relay channel on the master opens this section's valve.
+
+    WATERING AND TRAY FILLING ARE DIFFERENT VALVES, and this used to ignore
+    that. The master was handed one channel whatever the action was, so a tray
+    fill opened the watering line: the farmer asked for humidity and got the
+    pump on the roots. Reported from the app on 30 Aug, with Water Now and Fill
+    Tray both starting the same motor.
+
+    The single-node firmware never had this bug - handleCommand() dispatches
+    `water` to RELAY_WATER and `tray` to RELAY_TRAY, two separate pins. Only the
+    master path, which is now every pour, collapsed them into one.
+
+    It matters more than a wrong output: Vanda roots rot if they are watered too
+    often, and the tray loop is deliberately the one that raises humidity
+    WITHOUT touching the roots. Silently doing the other thing defeats the
+    reason the two loops exist.
+
+    There is NO positional fallback for the tray channel. A guessed watering
+    channel waters the wrong section, which is bad; a guessed tray channel is
+    just as likely to be a watering valve, which is worse. Absent means absent,
+    the caller refuses the fill, and the app says which section needs wiring.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json") or {}
+    key = "trayChannel" if action == "tray" else "relayChannel"
+    try:
+        ch = int(meta[key])
+        if 1 <= ch <= MASTER_MAX_CHANNELS:
+            return ch
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # TWO PUMPS SERVING THE WHOLE HOUSE is how this farm is actually plumbed:
+    # one pump for watering, a separate one for the trays, wired to IN1/D25 and
+    # IN2/D26 - which are channels 1 and 2 in CHANNEL_PIN, and the same two pins
+    # the single-node build calls RELAY_WATER and RELAY_TRAY.
+    #
+    # So a section does not normally own a channel at all; it shares the house's.
+    # Modelling this only per-section would have been wrong twice: every section
+    # would need the same numbers copied into it, and the duplicate-channel guard
+    # would then refuse the correct wiring as a conflict.
+    #
+    # A house with a valve per section still overrides per-section above, so the
+    # eight-channel design is unaffected - it just is not what is on the bench.
+    hmeta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    hkey = "trayChannel" if action == "tray" else "waterChannel"
+    try:
+        ch = int(hmeta[hkey])
+        if 1 <= ch <= MASTER_MAX_CHANNELS:
+            return ch
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    if action == "tray":
+        return None
+    ids = sorted((_fb_get(f"/farm/houses/{house_id}/sections.json") or {}).keys(),
+                 key=_natural_key)
+    if section_id in ids:
+        ch = ids.index(section_id) + 1
+        if ch <= MASTER_MAX_CHANNELS:
+            return ch
+    return None
+
+
+# Actions that address a BOARD rather than a section's plumbing, and so are
+# never routed through the master's relay. Wi-Fi credentials reconfigure the
+# node that reads them; sending them to a relay board would hand them to the
+# wrong device entirely.
+DIRECT_ACTIONS = ("wifi",)
+
+
+def _issue_node_command(house_id: str, section_id: str, action: str,
+                        duration_sec: int, **extra) -> Optional[dict]:
+    """Write the command document the FIRMWARE polls. Returns it, or None.
+
+    The firmware ignores a command whose durationSec is <= 0, so a zero-length
+    command is not written at all rather than being written and silently dropped.
+    """
+    if action not in NODE_ACTIONS:
+        raise ValueError(f"unknown node action {action!r}")
+    secs = int(duration_sec)
+    # Only the two actions that move water need a duration. "stop" ends whatever
+    # is running; "wifi" carries credentials instead.
+    if secs <= 0 and action not in ("stop", "wifi"):
+        return None
+
+    now = datetime.now(timezone.utc)
+    cmd = {"id": uuid.uuid4().hex[:12],
+           "action": action,
+           "durationSec": secs,
+           "issuedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+           # Epoch SECONDS, so the node can refuse a command that has gone
+           # stale. A command document persists until something overwrites it,
+           # so a node that reboots hours later would otherwise find the last
+           # one and pour - which is exactly what happened on the bench:
+           # a 20-hour-old watering command ran at boot. Seconds rather than
+           # milliseconds because `long` is 32-bit on the ESP32 and an epoch in
+           # ms overflows it.
+           "issuedAtSec": int(now.timestamp())}
+    cmd.update(extra)
+
+    # Anything addressed to ONE BOARD rather than to a section's plumbing still
+    # goes straight to that board's own document. Wi-Fi credentials are the
+    # case that matters: they reconfigure the node that reads them, and routing
+    # them through a relay board would deliver them to the wrong device.
+    if action in DIRECT_ACTIONS:
+        cmd["routedTo"] = None
+        _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/command.json", cmd)
+        return cmd
+
+    # EVERY POUR GOES THROUGH THE MASTER, including a section that has a sensor
+    # node of its own.
+    #
+    # This used to branch: a section with its own node was commanded directly,
+    # and only nodeless sections went to the master. That matched a farm where
+    # every node had a pump wired to it. The farm being built does not work that
+    # way - there is ONE pump and a solenoid valve per section, and all eight
+    # valves sit on the master's relay board. A sensor node therefore has
+    # nothing to open: it measures, and that is all it does.
+    #
+    # Removing the branch makes this simpler rather than more complex, and it
+    # removes a whole class of bug - a command written to a node that has no
+    # valve would be obeyed by firmware and move no water, while the app
+    # reported success.
+    master = _master_for_house(house_id)
+    channel = _relay_channel(house_id, section_id, action) if master else None
+    if not master or not channel:
+        # Refusing is the point. Writing to the section's own path here would
+        # produce a command nobody polls: not delayed, never seen, while the app
+        # reports success and the log records a watering that did not happen.
+        why = ("no master controller assigned" if not master
+               else f"no {'tray' if action == 'tray' else 'relay'} channel wired")
+        print(f"[CMD] {house_id}/{section_id}: {why} - {action} not issued")
+        return None
+
+    cmd["targetSection"] = section_id
+    cmd["channel"] = channel
+    cmd["routedTo"] = master
+
+    # A QUEUE, keyed by command id - not a single document. The engine can find
+    # several sections due in one 60 s tick (today's plan has two of them a
+    # minute apart), and a shared document would let each write clobber the one
+    # before it. The section would still be marked watered, so the log would
+    # claim three pours where one happened. Distinct keys cannot collide.
+    _fb_put(f"/farm/masters/{master}/queue/{cmd['id']}.json", cmd)
+
+    # So the app knows the section can be actuated after all, and stops greying
+    # out its controls.
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/routedTo.json", master)
+    return cmd
+
+
+def _last_ack(section: dict) -> dict:
+    """What the node last reported finishing, for the app to confirm against."""
+    ack = (section or {}).get("commandAck") or {}
+    return {"id": ack.get("id"), "action": ack.get("action"),
+            "durationSec": ack.get("durationSec"), "at": ack.get("at")}
+
+
+# ─────────────────────────── Reading freshness ───────────────────────────────
+# The farm has Wi-Fi but NO MAINS POWER: every node runs off a battery. A flat
+# battery or a dropped Wi-Fi link makes a node stop reporting SILENTLY — the
+# last reading just sits in Firebase looking perfectly current.
+#
+# That is dangerous in both directions:
+#   * the farmer trusts a humidity number that is hours old, and
+#   * the planner would happily irrigate from a stale reading.
+#
+# So every reading is aged here, server-side, and the app is never allowed to
+# show a number without also showing how old it is.
+#
+# ─────────────────────── The farm's own clock ─────────────────────────
+#
+# Everything about WATERING is expressed in the plants' local time. The models
+# were trained on ERA5 hourly weather fetched with `timezone=Asia/Colombo`
+# (ml_pipeline/fetch_real_weather.py), so a predicted waterTime of "06:34" means
+# 06:34 where the plants are - not 06:34 UTC.
+#
+# The server used to have no farm timezone at all. It planned and scheduled on
+# UTC, so on this UTC+5:30 farm every watering fired 5.5 h late: on 24 Aug 2026
+# the node acknowledged the day's watering at 06:36:58 UTC = 12:06:58 local, a
+# MIDDAY SOAK, which is the single thing this component exists to prevent. The
+# same gap fed the model bad input, because _dawn_reading searched 04:00-07:00
+# UTC - 09:30-12:30 local - and called late-morning air "dawn".
+#
+# Only "what hour is it for the plants" moves. Absolute instants - reading
+# freshness, the tray cooldown - are epoch based and are deliberately untouched.
+FARM_TZ_NAME_DEFAULT   = "Asia/Colombo"
+FARM_TZ_OFFSET_DEFAULT = 330      # minutes. Sri Lanka is UTC+5:30, and has no DST.
+_TZ_CACHE_SEC          = 300      # this is read on every tick; do not hit Firebase each time
+
+_tz_cache: Dict[str, object] = {"tz": None, "at": 0.0}
+
+
+def farm_tz() -> tzinfo:
+    """The farm's timezone, from /farm/meta.
+
+    Prefers an IANA name (`timezone`: "Asia/Colombo") so a site with DST would
+    be handled correctly. Falls back to a fixed offset (`tzOffsetMinutes`) when
+    the IANA database is missing, which is the normal case on Windows without
+    the `tzdata` package - and is exactly right here, Sri Lanka having no DST.
+    """
+    now = time.time()
+    cached = _tz_cache.get("tz")
+    if cached is not None and now - float(_tz_cache["at"]) < _TZ_CACHE_SEC:
+        return cached                                    # type: ignore[return-value]
+
+    meta = _fb_get("/farm/meta.json") or {}
+    tz: Optional[tzinfo] = None
+    name = meta.get("timezone") or FARM_TZ_NAME_DEFAULT
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(str(name))
+    except Exception:
+        try:
+            mins = int(meta.get("tzOffsetMinutes", FARM_TZ_OFFSET_DEFAULT))
+        except (TypeError, ValueError):
+            mins = FARM_TZ_OFFSET_DEFAULT
+        tz = timezone(timedelta(minutes=mins))
+
+    _tz_cache["tz"], _tz_cache["at"] = tz, now
+    return tz
+
+
+def farm_now() -> datetime:
+    """Now, on the farm's clock. Use this for every watering decision."""
+    return datetime.now(farm_tz())
+
+
+# ────────────────── Who is allowed to act by itself ──────────────────
+#
+# ONE definition of this question, because there used to be two and they
+# disagreed. automation.py asked `section_is_auto()`, which consults the farm
+# switch and the per-section override. `_tray_decision` asked its own
+# `ctrl.get("mode", "auto") != "manual"` - the LEGACY per-section key that
+# /farm/meta/autoMode replaced.
+#
+# The consequence was that "Check Tray" would open a valve while the app was
+# telling the farmer "Automatic care is OFF - the system alerts you and you do
+# it yourself". The master switch did not cover the tray path at all. Verified
+# on 24 Aug 2026: autoMode was false while S5 still carried control.mode "auto",
+# so the tray auto-fill was live.
+#
+# `section_is_auto` in automation.py now delegates here. Do not reintroduce a
+# second answer.
+_AUTO_CACHE_SEC = 5.0        # asked once per section in a fan-out; do not re-fetch each time
+_auto_cache: Dict[str, object] = {"on": None, "at": 0.0}
+
+
+def farm_auto_mode() -> bool:
+    """The farm-level switch. Defaults to ON for a freshly set-up farm."""
+    now = time.time()
+    if _auto_cache["on"] is not None and now - float(_auto_cache["at"]) < _AUTO_CACHE_SEC:
+        return bool(_auto_cache["on"])
+    meta = _fb_get("/farm/meta.json") or {}
+    on = bool(meta.get("autoMode", True))
+    _auto_cache["on"], _auto_cache["at"] = on, now
+    return on
+
+
+def section_acts_alone(section: dict, master: Optional[bool] = None) -> bool:
+    """Does THIS section act without the farmer pressing anything?
+
+    The farm switch decides, unless the farmer has pinned this one section.
+    `control.override` is 'auto' | 'manual' | absent, and absent means
+    "follow the farm".
+    """
+    if master is None:
+        master = farm_auto_mode()
+    ov = ((section or {}).get("control") or {}).get("override")
+    if ov == "auto":
+        return True
+    if ov == "manual":
+        return False
+    return bool(master)
+
+
+def to_farm_time(ts_ms) -> datetime:
+    """An epoch-ms reading timestamp as the farm's local wall time."""
+    return datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=farm_tz())
+
+
+# Production nodes read every 300 s (5 min) and sync their clock, so device time
+# == wall-clock time and the server clock is the correct reference.
+#
+# "Now" USED to be max(server clock, newest reading anywhere on the farm), so an
+# accelerated simulator could drive the whole farm's clock. That coupling is a
+# trap: it lets ONE section decide how old EVERY other section looks. A browser
+# simulator (FARM_SIMULATOR.html) left running with a fast-forward clock stamped
+# H1/S1 with a 2027 date, and every healthy node on the farm was then aged
+# against that clock and shown as "163 days ago" while it was reporting fine
+# every 30 seconds. One bad row made the entire farm look dead.
+#
+# A reading may now only contribute to the farm clock if it is not implausibly
+# ahead of the server clock. Future-dated readings are reported as a fault on
+# their OWN section (see _freshness) instead of silently rebasing time for their
+# neighbours. A dead node still ages out normally, because the server clock
+# keeps advancing past its frozen reading.
+# How late a reading may be before it stops being trustworthy.
+#
+# These used to be FIXED at 15 and 60 minutes, which is wrong in both directions
+# now that the reporting interval is settable from the app. A node on a 15 s
+# interval could be silent for sixty consecutive readings and still be called
+# "live"; a node on 5 minutes was judged by a threshold that assumed 5 minutes,
+# which happened to work and only by coincidence.
+#
+# A node is late when it has missed readings it OWED, so the thresholds are
+# multiples of its own interval. The floor stops a fast interval from flapping
+# on one dropped packet; the ceiling stops a very slow interval from hiding a
+# dead node for hours.
+READING_LIVE_CYCLES    = 2.0   # one missed reading is jitter; two is trouble
+READING_DELAYED_CYCLES = 4.0   # beyond this it is stale and not trusted
+READING_LIVE_FLOOR_MIN = 1.5   # never call a node late sooner than this
+READING_LIVE_CEIL_MIN  = 20.0  # never wait longer than this to call it late
+
+# What a node reports at when nothing has been configured. Matches
+# READ_INTERVAL_MS in the firmware.
+DEFAULT_READ_INTERVAL_MS = 15000
+
+# Each cycle also does its blocking HTTP work - announce, fetch assignment, poll
+# command, upload - which measured at about 11 s on this hardware. A node on a
+# 15 s interval genuinely reports every ~27 s, so judging it against 15 s would
+# call every healthy node late.
+CYCLE_OVERHEAD_SEC = 12
+
+
+def _apply_link_state(fresh: dict, node: dict) -> dict:
+    """Let a heartbeat overrule reading age when it says the board is GONE.
+
+    Reading freshness and node liveness answer different questions, and both are
+    reported separately. But the UI has to gate on one of them, and gating on
+    reading age alone is wrong in a way a farmer sees immediately: unplug a node
+    reading every 5 minutes and the app keeps saying "live, 6 min ago" for
+    another eight minutes, offering Water Now buttons whose commands nothing
+    will ever collect.
+
+    A board on validation-1.6+ promises a heartbeat every 30 s, so 90 s of
+    silence means it is not there - regardless of how recent its last reading
+    happens to be. This downgrades ONLY in that direction:
+
+      * only when the board actually heartbeats (older firmware keeps the
+        interval-based judgement, or every un-reflashed node would read dead)
+      * only downwards - fresh readings never resurrect a silent node, and a
+        genuinely stale reading is never promoted because the board is awake
+
+    'stale' rather than a new state name: it already renders as a red "No
+    signal" with a battery icon and already makes isLive() false, so phones
+    carrying an older build behave correctly without being rebuilt.
+    """
+    if not node or not node.get("heartbeat") or node.get("online"):
+        return fresh
+    if fresh.get("state") in ("never", "nonode"):
+        return fresh
+    secs = node.get("lastSeenSec")
+    ago = (f"{int(secs) // 60} min" if isinstance(secs, (int, float)) and secs >= 120
+           else f"{int(secs)} s" if isinstance(secs, (int, float)) else "a moment")
+    return {**fresh,
+            "state": "stale",
+            "trusted": False,
+            "link": "offline",
+            "message": (f"This node stopped answering {ago} ago. It is expected to "
+                        "check in every 30 seconds, so it has lost power or Wi-Fi. "
+                        "The readings below are the last ones it managed to send.")}
+
+
+def _freshness_limits(read_interval_ms=None):
+    """(live_minutes, delayed_minutes) for a node reporting at this interval."""
+    ms = read_interval_ms or DEFAULT_READ_INTERVAL_MS
+    cycle_min = (ms / 1000.0 + CYCLE_OVERHEAD_SEC) / 60.0
+    live = min(READING_LIVE_CEIL_MIN,
+               max(READING_LIVE_FLOOR_MIN, cycle_min * READING_LIVE_CYCLES))
+    delayed = max(live * 1.5, cycle_min * READING_DELAYED_CYCLES)
+    return live, delayed
+# Device clocks drift by seconds, and a reading can land in Firebase moments
+# before the server reads it. Past this margin, a future timestamp is not drift:
+# it is a wrong clock or fabricated data.
+CLOCK_SKEW_TOLERANCE_MIN = 10.0
+CLOCK_SKEW_TOLERANCE_MS  = CLOCK_SKEW_TOLERANCE_MIN * 60_000.0
+
+
+def _server_now_ms() -> float:
+    """Real wall-clock time. The only trustworthy reference for ageing data."""
+    return datetime.now(timezone.utc).timestamp() * 1000.0
+
+
+def _minutes_ahead(ts_ms) -> float:
+    """How far a timestamp sits in the future, in minutes. 0 if it is in the past."""
+    try:
+        return max(0.0, (float(ts_ms) - _server_now_ms()) / 60_000.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _farm_now_ms(houses: dict) -> float:
+    """'Now' for ageing readings — the server clock, never dragged forward by a
+    section whose timestamp is in the future. See the note above."""
+    server  = _server_now_ms()
+    horizon = server + CLOCK_SKEW_TOLERANCE_MS
+    newest  = 0.0
+    for h in (houses or {}).values():
+        if not isinstance(h, dict):
+            continue
+        for s in ((h.get("sections") or {})).values():
+            if not isinstance(s, dict):
+                continue
+            try:
+                ts = float(((s.get("latest") or {}).get("timestamp")))
+            except (TypeError, ValueError):
+                continue
+            if ts > horizon:
+                continue          # wrong clock: never allowed to define "now"
+            newest = max(newest, ts)
+    return max(server, newest)
+
+
+def _plain_span(minutes: float) -> str:
+    """A length of time: '25 minutes', '3 hours', '2 days'."""
+    if minutes < 60:
+        m = max(1, int(minutes))
+        return "1 minute" if m == 1 else f"{m} minutes"
+    hours = minutes / 60.0
+    if hours < 24:
+        h = int(round(hours))
+        return "1 hour" if h == 1 else f"{h} hours"
+    d = int(round(hours / 24.0))
+    return "1 day" if d == 1 else f"{d} days"
+
+
+def _plain_age(minutes: float) -> str:
+    """A point in the past: 'just now', '25 min ago', '3 hours ago'."""
+    if minutes < 2:  return "just now"
+    if minutes < 60: return f"{int(minutes)} min ago"
+    return f"{_plain_span(minutes)} ago"
+
+
+def _freshness(section: dict, farm_now_ms: float, read_interval_ms=None) -> dict:
+    """Age a section's last reading. Returned on every section in /overview."""
+    ts = ((section or {}).get("latest") or {}).get("timestamp")
+    if ts is None:
+        return {"state": "never", "ageMinutes": None, "label": "No reading yet",
+                "trusted": False,
+                "message": "This device has never sent a reading. Check that it is "
+                           "switched on and connected to Wi-Fi."}
+
+    # A timestamp in the FUTURE is not fresh, it is wrong. _hours_since clamps a
+    # negative age to zero, so without this the least trustworthy reading on the
+    # farm would render as "just now" — which is exactly how the simulator's 2027
+    # data passed itself off as live sensor data.
+    ahead = _minutes_ahead(ts)
+    if ahead > CLOCK_SKEW_TOLERANCE_MIN:
+        return {"state": "future", "ageMinutes": None, "label": "clock wrong",
+                "trusted": False,
+                "message": f"This section's last reading is stamped {_plain_span(ahead)} "
+                           "in the future, so either the device clock is wrong or the "
+                           "data is simulated. These numbers cannot be trusted."}
+
+    hrs = _hours_since(ts, farm_now_ms)
+    if hrs is None:
+        return {"state": "never", "ageMinutes": None, "label": "No reading yet",
+                "trusted": False, "message": "This device has never sent a reading."}
+
+    mins  = hrs * 60.0
+    label = _plain_age(mins)
+    READING_LIVE_MIN, READING_DELAYED_MIN = _freshness_limits(read_interval_ms)
+
+    if mins <= READING_LIVE_MIN:
+        return {"state": "live", "ageMinutes": round(mins), "label": label,
+                "trusted": True, "message": ""}
+    if mins <= READING_DELAYED_MIN:
+        # trusted=False from the moment a node misses the readings it owed.
+        #
+        # This used to be True, on the theory that "late but plausible" was
+        # still usable. In practice it meant a node could be silent for twice
+        # its own reporting interval while the app showed its last value in
+        # full colour, with the action buttons live - so a farmer could press
+        # Water Now against a number the hardware had stopped standing behind.
+        # "delayed" and "stale" now differ only in how long it has been, which
+        # is what the message says; neither is trusted.
+        return {"state": "delayed", "ageMinutes": round(mins), "label": label,
+                "trusted": False,
+                "message": f"Last reading {label}. This node has missed at least two "
+                           f"readings in a row, so what it last sent may no longer be "
+                           f"true. Check its power and Wi-Fi."}
+    return {"state": "stale", "ageMinutes": round(mins), "label": label,
+            "trusted": False,
+            "message": f"No reading for {_plain_span(mins)}. These numbers are old — "
+                       f"check the device's battery and Wi-Fi before trusting them."}
+
+
+def _seasonal_stage(month: int) -> str:
+    """Last-resort estimate from the Sri Lankan season. Never silently trusted —
+    it is always reported as source='seasonal' so the app can flag it."""
+    if month in (12, 1, 2):
+        return "Dormant"
+    if month in (10, 11):
+        return "Flowering"
+    return "Active"
+
+
+def _resolve_growth_stage(section: dict) -> dict:
+    """Decide the growth stage, preferring Component 2's prediction.
+
+    Order: Component 2 prediction -> farmer's manual setting -> seasonal guess.
+    Always reports which source was used and whether the farmer should act.
+    """
+    meta = (section or {}).get("meta") or {}
+    now  = datetime.now(timezone.utc)
+    # NOTE: growth-stage timestamps use REAL server time, not the device clock.
+    # Component 2 and the setup wizard both run off-device, so their timestamps
+    # are wall-clock. (The tray cooldown is the opposite case — both of its
+    # timestamps come from the device, so that one uses device time.)
+    real_now = now.timestamp() * 1000.0
+    month    = now.month
+
+    # 1 ── Component 2's prediction
+    pred = (section or {}).get("growthPrediction") or {}
+    stage = pred.get("stage")
+    if stage in VALID_STAGES:
+        try:
+            conf = float(pred.get("confidence", 0))
+        except (TypeError, ValueError):
+            conf = 0.0
+        age_h = _hours_since(pred.get("predictedAt"), real_now)
+        age_d = (age_h / 24.0) if age_h is not None else None
+        fresh = age_d is None or age_d <= GROWTH_PREDICTION_MAX_AGE_DAYS
+
+        if conf >= GROWTH_PREDICTION_MIN_CONF and fresh:
+            return {"stage": stage, "source": "component2",
+                    "confidence": round(conf * 100, 1),
+                    "ageDays": round(age_d, 1) if age_d is not None else None,
+                    "needsAttention": False,
+                    "message": (f"Growth stage detected automatically by the camera "
+                                f"({stage}, {round(conf*100)}% confidence).")}
+        # present but not usable — fall through, but say why
+        reason = ("confidence too low" if conf < GROWTH_PREDICTION_MIN_CONF
+                  else f"prediction is {round(age_d)} days old")
+    else:
+        reason = None
+
+    # 2 ── the farmer's manual setting
+    manual = meta.get("growthStage")
+    if manual in VALID_STAGES:
+        set_h = _hours_since(meta.get("growthStageSetAt"), real_now)
+        set_d = (set_h / 24.0) if set_h is not None else None
+        stale = set_d is not None and set_d > GROWTH_MANUAL_STALE_DAYS
+        msg = f"Growth stage set by you: {manual}."
+        if reason:
+            msg = f"Camera prediction unusable ({reason}) — using your setting: {manual}."
+        if stale:
+            msg += f" You set it {round(set_d)} days ago — please check it is still correct."
+        return {"stage": manual, "source": "manual", "confidence": None,
+                "ageDays": round(set_d, 1) if set_d is not None else None,
+                "needsAttention": bool(stale),
+                "message": msg}
+
+    # 3 ── nothing set anywhere: guess from the season and ASK THE FARMER
+    guess = _seasonal_stage(month)
+    return {"stage": guess, "source": "seasonal", "confidence": None, "ageDays": None,
+            "needsAttention": True,
+            "message": ("No growth stage available — the camera has not reported one and "
+                        f"you have not set it. Using a seasonal estimate ({guess}), which "
+                        "may be wrong. Please set the growth stage for this section.")}
+
+
+def _hhmm(hour_float: float) -> str:
+    h = int(hour_float)
+    m = int(round((hour_float - h) * 60))
+    if m == 60:
+        h, m = h + 1, 0
+    return f"{h:02d}:{m:02d}"
+
+
+# ═══════════════════════ ML: today's watering plan ════════════════════════════
+
+def _reading_for_planning(section: dict) -> tuple:
+    """The reading to plan from, and where it came from.
+
+    Prefers what the section measured. Falls back to a kriged estimate from
+    neighbouring sections when this one has no hardware - which is the whole
+    point of the spatial service - but returns the provenance alongside, so a
+    plan built on an estimate can say so rather than passing it off as measured.
+
+    The estimate is only accepted if it is recent. A stale one describes a
+    different hour of a different day, and is worse than having none, because
+    it looks exactly as authoritative as a fresh one.
+    """
+    # The RAW record decides whether a reading exists, not the cleaned one.
+    # _clean() substitutes model-safe defaults - 28 C and 70 % - for a section
+    # that never reported, which is correct for feeding a model and useless as
+    # an existence test: checking the cleaned value would find a temperature
+    # every time and this fallback would never run at all.
+    raw_latest = (section or {}).get("latest") or {}
+    measured = _clean(raw_latest)
+    if raw_latest.get("timestamp") and measured.get("temperature") is not None:
+        return measured, "measured", None
+
+    est = (section or {}).get("estimated") or {}
+    try:
+        age_min = (_server_now_ms() - float(est.get("timestampMs"))) / 60000.0
+    except (TypeError, ValueError):
+        return measured, "measured", None
+    if age_min > 60.0 or est.get("temperature") is None:
+        return measured, "measured", None
+
+    return ({"temperature": est.get("temperature"),
+             "humidity": est.get("humidity"),
+             "light": est.get("light", 0.0),
+             "timestamp": est.get("timestampMs")},
+            "interpolated",
+            {"anchors": est.get("anchorCount"),
+             "temperatureSd": est.get("temperatureSd"),
+             "humiditySd": est.get("humiditySd"),
+             "method": est.get("method")})
+
+
+def _plan_section(house_id: str, section_id: str, section: dict,
+                  now: Optional[datetime] = None) -> dict:
+    """`now` lets the automation engine keep one pass internally consistent.
+
+    Without it the plan was stamped with the real server date while the engine
+    pass was evaluating a simulated one, so `_due_sessions` compared two
+    different days and the watering never fired. Defaults to real time, so
+    production behaviour is unchanged."""
+    latest = _clean((section or {}).get("latest") or {})
+    meta   = (section or {}).get("meta") or {}
+
+    gs = _resolve_growth_stage(section)
+    stage = gs["stage"]
+    stage_enc = _water["growth_stage_map"].get(stage, 0)
+    exposure = float(meta.get("lightExposure", 0.8))
+    # The farm's clock, not the server's: the model's predicted hour, the plan's
+    # date and the season month are all in the plants' local time.
+    now = now or farm_now()
+
+    # one history fetch feeds both the daily summary and the dawn lookup
+    hist = _recent_history(house_id, section_id)
+    y = _yesterday_stats(hist, latest)
+    # the model decides at dawn — use the dawn reading, not whatever time it is now
+    dawn = _dawn_reading(hist, latest)
+    dawn_vpd = vpd_kpa(dawn["temperature"], dawn["humidity"])
+
+    feats = np.array([[
+        dawn["temperature"], dawn["humidity"], dawn["light"], dawn_vpd,
+        y["peak_temp"], y["mean_humidity"], y["mean_vpd"],
+        float(now.month), float(stage_enc), exposure,
+    ]])
+    Xs = _water["scaler"].transform(feats)
+
+    hour   = float(_water["model_hour"].predict(Xs)[0])
+    dur    = int(round(float(_water["model_duration"].predict(Xs)[0])))
+
+    hour = max(6.0, min(9.0, hour))
+    dur  = max(30, min(120, dur))
+
+    # A length set by the grower wins over the model's, but not over the safety
+    # clamp: the relay stops at RELAY_MAX_SEC regardless, so promising more in
+    # the app than the hardware will honour would be a lie.
+    manual = _manual_durations(section)
+    model_dur = dur
+    if manual.get("water"):
+        dur = max(1, min(RELAY_MAX_SEC, int(manual["water"])))
+
+    plan = {
+        "date": now.strftime("%Y-%m-%d"),
+        "waterHour": round(hour, 2),
+        "waterTime": _hhmm(hour),
+        "durationSec": dur,
+        # What the model asked for, kept beside what is actually used, so an
+        # override is visible rather than silently replacing the model.
+        "modelDurationSec": model_dur,
+        "durationSetBy": "manual" if manual.get("water") else "model",
+        # Volume, using THIS section's own flow rate. One pump feeding eight
+        # solenoid valves does not deliver the same litres per second to the
+        # section beside it and the section at the far end of the pipe, so a
+        # single figure would over-state one and under-state the other. It is
+        # published because a grower can judge "25 litres" and cannot judge
+        # "84 seconds".
+        "litres": round(dur * _ml_per_sec(section) / 1000.0, 2),
+        "mlPerSec": _ml_per_sec(section),
+        # A second watering is no longer part of the dawn plan. It is decided in
+        # the afternoon from measured conditions - see second_session_due() - so
+        # there is nothing about it to publish twelve hours in advance, and the
+        # fields that used to carry one have been removed rather than left
+        # permanently empty for screens to test against.
+        "reason": (f"One watering at {_hhmm(hour)} for {dur}s. The tray handles "
+                   f"midday humidity (VPD {dawn_vpd}); if the afternoon turns "
+                   f"extreme and the tray cannot cope, a second session is added "
+                   f"then, on measured conditions."),
+        "inputs": {"dawnTemp": dawn["temperature"], "dawnHumidity": dawn["humidity"],
+                   "dawnLight": dawn["light"], "dawnVpd": dawn_vpd,
+                   "yesterdayPeakTemp": y["peak_temp"], "yesterdayMeanVpd": y["mean_vpd"]},
+        "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
+
+    # Predict how the rest of today will go, so the tray can act BEFORE the heat
+    # instead of chasing it. Stored per section: each microclimate has its own
+    # curve, which is the whole point of the zone survey.
+    try:
+        from app.api.routes import forecast as _fx
+        fc = _fx.predict_day(dawn, now.month, exposure, y["peak_temp"])
+        if fc:
+            _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/forecast.json", fc)
+            plan["forecast"] = {"peakTemp": fc["peakTemp"], "peakHour": fc["peakHour"],
+                                "minHumidity": fc["minHumidity"], "hotDay": fc["hotDay"]}
+    except Exception as e:                       # a forecast failure must never
+        print(f"[WARN] forecast skipped for {house_id}-{section_id}: {e}")  # block watering
+
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/plan.json", plan)
+
+    # Compute and STORE the fertilizer decision alongside the plan, so every
+    # screen can show it. (It used to be returned only from /plan, which meant
+    # fertilization was invisible unless the user tapped that one button.)
+    fert = _fert_decision(section)
+    existing = (section or {}).get("fertilizer") or {}
+    # Nulls from the decision must not clobber what is already recorded. The
+    # decision is computed from a snapshot taken BEFORE this pass, so a feed
+    # recorded moments ago reads back as None here and would erase itself.
+    merged = {**existing, **{k: v for k, v in fert.items() if v is not None},
+              "updatedAt": plan["generatedAt"]}
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer.json", merged)
+    plan["fertilizer"] = fert
+    return plan
+
+
+# ═══════════════════════ ML: tray humidity control ════════════════════════════
+
+def _device_now_ms(section: dict) -> float:
+    """'Now' according to the DEVICE clock (the latest reading's timestamp).
+
+    All time reasoning uses device time, not server time, so that:
+      * a device with clock drift stays self-consistent, and
+      * the farm simulator (which runs many times faster than real time)
+        produces correct cooldown behaviour.
+    Falls back to the server clock if the device has never reported.
+    """
+    ts = ((section or {}).get("latest") or {}).get("timestamp")
+    try:
+        return float(ts)
+    except (TypeError, ValueError):
+        return datetime.now(timezone.utc).timestamp() * 1000.0
+
+
+def _hours_since(ts_ms, now_ms: Optional[float] = None) -> Optional[float]:
+    """Hours between an epoch-ms timestamp and 'now' (device clock)."""
+    try:
+        ref = now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000.0
+        return max(0.0, (ref - float(ts_ms)) / 3600000.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_per_section(houses: dict, fn) -> dict:
+    """Apply `fn(house_id, section_id, section)` to every reporting section.
+
+    Runs them concurrently. Each call is dominated by Firebase round-trips
+    (~0.7 s each, several per section), so doing four sections in sequence took
+    ~19 s for /plan-all — long enough that the app's buttons looked broken. The
+    work itself is independent per section, so a small thread pool collapses
+    that to roughly the time of one section.
+    """
+    jobs = [(hid, sid, s)
+            for hid, h in (houses or {}).items() if isinstance(h, dict)
+            for sid, s in ((h.get("sections") or {}).items())
+            if isinstance(s, dict) and s.get("latest")]
+    if not jobs:
+        return {}
+
+    results: Dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+        futures = {pool.submit(fn, hid, sid, s): f"{hid}-{sid}" for hid, sid, s in jobs}
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                results[key] = fut.result()
+            except Exception as e:
+                # one bad section must not take the whole farm down
+                results[key] = {"error": str(e), "fillSeconds": 0}
+    return dict(sorted(results.items()))
+
+
+# The tray is never filled in the dark: there has to be heat and light left to
+# evaporate what goes in. Matches the hours the model was trained on.
+TRAY_DAY_START, TRAY_DAY_END = 6, 18
+
+
+def _recent_window(house_id: str, section_id: str, points: int = 48) -> dict:
+    """The last few hours of this section's own readings.
+
+    Deliberately NOT _history_window(), which pulls 288 records (~50 KB) for the
+    daily plan. The tray runs every 15 minutes; at that rate the big window would
+    add tens of MB a day against a 360 MB budget, to answer a question that only
+    needs about four hours. 48 records is four hours at a 5-minute interval.
+    """
+    return _fb_get(f'/farm/history/{house_id}/{section_id}.json'
+                   f'?orderBy="$key"&limitToLast={points}') or {}
+
+
+def _at_hours_ago(recs: list, now_ms: float, hours: float, tol_min: float = 25.0):
+    """The reading nearest `hours` ago, or None if the gap is too wide.
+
+    A node reporting every 5 minutes gives an exact-ish match; one reporting
+    every 15 does not, hence the tolerance. Returning None rather than the
+    nearest-whatever matters: a "1 hour ago" value that is really 3 hours old
+    would invent a trend that never happened.
+    """
+    target = now_ms - hours * 3600_000.0
+    best, best_gap = None, None
+    for r in recs:
+        ts = r.get("timestamp")
+        if not ts:
+            continue
+        gap = abs(float(ts) - target)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = r, gap
+    if best is None or best_gap is None or best_gap > tol_min * 60_000.0:
+        return None
+    return best
+
+
+def _drop_risk(house_id: str, section_id: str, latest: dict, now: datetime) -> Optional[float]:
+    """Probability this section breaches the humidity band within a few hours.
+
+    Built ONLY from readings the node has already sent. This is what replaces the
+    outdoor forecast for the tray: over a 1-4 hour horizon the section's own
+    trajectory - how fast humidity is falling and drying power rising - carries
+    the signal, and needs no external service that can rate-limit, block or go
+    down. The forecast is still used for the day-level view, where weather that
+    has not arrived yet genuinely cannot be inferred from local sensors.
+
+    Returns None when there is not enough history to be honest about a trend,
+    which is the correct answer for a node that booted twenty minutes ago.
+    """
+    if not _tray or _tray.get("drop_model") is None:
+        return None
+    raw = _recent_window(house_id, section_id)
+    recs = [r for r in (raw or {}).values() if isinstance(r, dict) and r.get("timestamp")]
+    if len(recs) < 12:                      # under an hour of readings
+        return None
+    now_ms = _device_now_ms({"latest": latest}) or _server_now_ms()
+
+    past = {h: _at_hours_ago(recs, now_ms, h) for h in (1, 2, 3)}
+    if any(v is None for v in past.values()):
+        return None
+    p = {h: _clean(v) for h, v in past.items()}
+
+    t0, rh0, li0 = latest["temperature"], latest["humidity"], latest["light"]
+    v0 = vpd_kpa(t0, rh0)
+    pv = {h: vpd_kpa(p[h]["temperature"], p[h]["humidity"]) for h in (1, 2, 3)}
+
+    # Same order as drop_features in the bundle. Built from that list rather than
+    # hardcoded, so a retrain that reorders features cannot silently misalign.
+    vals = {
+        "temperature": t0, "humidity": rh0, "light": li0, "vpd": v0,
+        "hour": float(now.hour), "month": float(now.month),
+        "d_rh_1": rh0 - p[1]["humidity"], "d_rh_2": rh0 - p[2]["humidity"],
+        "d_rh_3": rh0 - p[3]["humidity"],
+        "d_t_1": t0 - p[1]["temperature"], "d_t_2": t0 - p[2]["temperature"],
+        "d_t_3": t0 - p[3]["temperature"],
+        "d_vpd_1": v0 - pv[1], "d_vpd_2": v0 - pv[2], "d_vpd_3": v0 - pv[3],
+        "d_light_1": li0 - p[1]["light"],
+        "rh_min_3": min(rh0, p[1]["humidity"], p[2]["humidity"], p[3]["humidity"]),
+    }
+    try:
+        row = np.array([[vals[k] for k in _tray["drop_features"]]])
+        X = _tray["drop_scaler"].transform(row)
+        return float(_tray["drop_model"].predict_proba(X)[0][1])
+    except Exception as e:
+        print(f"[WARN] drop-risk skipped for {house_id}-{section_id}: {e}")
+        return None
+
+
+def _tray_decision(house_id: str, section_id: str, section: dict,
+                   now: Optional[datetime] = None) -> dict:
+    latest = _clean((section or {}).get("latest") or {})
+    # The tray model takes hour-of-day as a feature and was trained on local
+    # hours, so this must be the farm's clock, not the server's.
+    now  = now or farm_now()
+    hour = now.hour
+    v = vpd_kpa(latest["temperature"], latest["humidity"])
+
+    Xs = _tray["scaler"].transform(np.array([[
+        latest["temperature"], latest["humidity"], latest["light"], v, float(hour)]]))
+    secs = int(round(float(_tray["model"].predict(Xs)[0])))
+    secs = max(0, min(60, secs))
+    model_secs = secs          # the model's own call, kept for the UI and report
+
+    # A length set by the grower replaces the model's - but only when the model
+    # has already decided a fill is warranted. Applying it to a zero would turn
+    # a manual preference into a standing instruction to keep filling.
+    manual = _manual_durations(section)
+    if secs > 0 and manual.get("tray"):
+        secs = int(manual["tray"])
+
+    # PHYSICAL CEILING. The model was trained on a synthetic seconds scale that
+    # no pump was ever measured against; at 300 ml/s its typical 25 s dose is
+    # 7.5 L into a 4.6 L tray. Clamp to what the tray can actually hold. This
+    # applies to a manual length too - the tray's size is not a preference.
+    if secs > TRAY_MAX_SEC:
+        secs = TRAY_MAX_SEC
+
+    lo, hi = _tray["rh_target_low"], _tray["rh_target_high"]
+    rh = latest["humidity"]
+
+    prev    = (section or {}).get("tray") or {}
+    dev_now = _device_now_ms(section)
+    since   = _hours_since(prev.get("lastFillTs"), dev_now)
+
+    # ── THE MODEL DECIDES WHETHER TO FILL, NOT A THRESHOLD ───────────────────
+    # The regressor was trained on a target that already returns 0 when no fill
+    # is needed (above the band, or inside it on a mild day) and a positive dose
+    # otherwise. So `secs > 0` IS the model's fill / no-fill decision, made from
+    # temperature, humidity, light, VPD and hour together.
+    #
+    # This used to be overridden by hard humidity thresholds, which threw that
+    # decision away and reduced the model to a dose calculator. A fixed 60%
+    # cutoff also creates a cliff: 59.9% triggered a full fill and 60.1% did
+    # nothing, even though a hot bright morning at 62% needs water more than a
+    # cool evening at 58%. The model blends those factors; a threshold cannot.
+    #
+    # The bands survive only to choose the WORDS shown to the farmer.
+    if secs == 0:
+        status = "ok"
+        if rh >= hi:
+            msg = f"Humidity {rh}% is above target, no fill needed."
+        elif rh >= lo:
+            msg = f"Humidity {rh}% is inside the {lo:.0f}-{hi:.0f}% band, no fill needed."
+        else:
+            msg = (f"Humidity {rh}% is below {lo:.0f}%, but it is mild enough that the "
+                   f"model does not call for a fill yet.")
+    elif rh >= lo:
+        status = "topup"
+        msg = (f"Humidity {rh}% is inside the band, but it is hot and bright, so a "
+               f"small {secs}s top-up keeps it there.")
+    else:
+        status = "fill"
+        msg = f"Humidity {rh}% is below {lo:.0f}%, open the valve {secs}s to raise it."
+
+    # ── ANTICIPATORY TOP-UP ──────────────────────────────────────────────────
+    # Nothing is needed right now, but the section's own trajectory says the
+    # band is about to be breached. Top up while there is still heat and light
+    # to evaporate it, rather than filling into an afternoon that has already
+    # turned dry.
+    #
+    # This used to be driven by the outdoor forecast API. It is not any more:
+    # over a 1-4 hour horizon the node's own falling humidity and rising drying
+    # power predict the drop at AUC 0.987, and that needs no external service
+    # that can rate-limit, block, or be down when the plants need water.
+    #
+    # The threshold is set for PRECISION, not best F1. A missed anticipation
+    # costs nothing - the reactive path fills an hour later. A WRONG one starts
+    # the six-hour cooldown and can block a fill that was genuinely needed.
+    prefill = None
+    if secs == 0 and TRAY_DAY_START <= hour <= TRAY_DAY_END and rh < hi:
+        risk = _drop_risk(house_id, section_id, latest, now)
+        thr = float((_tray or {}).get("drop_threshold") or 0.70)
+        if risk is not None and risk >= thr:
+            secs = max(6, min(15, int(round((hi - rh) * 0.6))))
+            status = "prefill"
+            prefill = {"risk": round(risk, 3), "threshold": thr,
+                       "horizon": (_tray or {}).get("drop_horizon_hours", 3)}
+            msg = (f"Humidity is {rh}% and falling: it is likely to drop below "
+                   f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
+                   f"while there is still heat to evaporate it.")
+
+    # ── KEEP THE RESERVOIR CHARGED ───────────────────────────────────────────
+    # A humidity tray raises humidity by evaporating. An empty one cannot, so
+    # waiting for the air to dry before filling charges the buffer exactly when
+    # it is already too late.
+    #
+    # Every other rule here infers the tray's state - from air humidity, or from
+    # a clock. The probe MEASURES it, and a measurement beats an inference. On
+    # the live farm this was found reading 0 % for thirty hours while the system
+    # reported "ok, no fill needed", because the air happened to be humid at the
+    # time it was asked.
+    level = _tray_level(latest)
+
+    # ── DOES THE TRAY ANSWER WHEN IT IS FILLED? ──────────────────────────────
+    # A level reading is only worth acting on if it responds to water. Three
+    # things produce a permanent, entirely plausible 0%:
+    #
+    #   * the probe is unplugged - a floating ADC pin sits near the dry end,
+    #     which reads as a perfectly ordinary "empty tray", not as a fault
+    #   * the probe is mounted above the water line
+    #   * the fill never arrives - the tray pump is not wired on this rig yet,
+    #     so the command reaches a relay channel with nothing on the end of it
+    #
+    # None of those is distinguishable from a genuinely empty tray by looking at
+    # one reading. What IS distinguishable: fill it, and see whether anything
+    # changes. If a real dose went in within the last hour and the tray still
+    # reads empty, then whatever this number is, it is not measuring water - so
+    # stop letting it open the valve, and fall back to the air-humidity
+    # behaviour that needs no probe at all.
+    #
+    # This is deliberately about the whole path rather than the probe alone. A
+    # dead pump, a kinked tube and an empty water butt all look the same from
+    # here, and all three mean the same thing: do not keep commanding fills that
+    # achieve nothing.
+    responds = prev.get("trayResponds")
+    if level is not None and level >= TRAY_LOW_PCT:
+        responds = True                      # it has shown water: it works
+    elif (level is not None and since is not None
+          and since <= TRAY_RESPONSE_HOURS
+          and float(prev.get("lastFillSeconds") or 0) >= TRAY_REFILL_SEC):
+        responds = False                     # filled, and nothing moved
+
+    dry = (level is not None and level < TRAY_LOW_PCT and responds is not False)
+    if dry and TRAY_DAY_START <= hour <= TRAY_DAY_END and secs < TRAY_REFILL_SEC:
+        secs = TRAY_REFILL_SEC
+        status = "refill"
+        msg = (f"The tray is empty (level {level:.0f}%). Refilling {secs}s so there is "
+               f"water to evaporate when humidity falls. An empty tray cannot hold "
+               f"humidity up, however good the air looks right now.")
+
+    # A tray that does not answer is worth saying out loud: it is a bench fault,
+    # not a plant one, and the farmer can do something about it.
+    if responds is False and level is not None and level < TRAY_LOW_PCT:
+        msg += (" The tray still reads empty after a fill, so the probe, the tray "
+                "pump or the water supply needs checking - humidity is being "
+                "managed from the air reading alone until it does.")
+
+    # SAFETY NET, not a decision. The model already returns 0 above the band, so
+    # this only catches a bad prediction (retrained model, corrupt pickle).
+    # Overfilling a 3 cm tray into already damp air risks mould on the roots,
+    # so this one stays hard.
+    # `not dry` matters: this ceiling exists to stop water being added to a tray
+    # that already has some, into air that is already damp. Putting water into an
+    # EMPTY tray is not over-humidifying - it is stocking a reservoir, and
+    # evaporation self-limits at high humidity anyway.
+    if secs > 0 and rh >= hi and not dry:
+        msg = (f"Model asked for {secs}s but humidity is {rh}%, at or above the "
+               f"{hi:.0f}% ceiling. Fill blocked to avoid over-humidifying.")
+        secs, status = 0, "ok"
+
+    # ── COOLDOWN GUARD ───────────────────────────────────────────────────────
+    # A 3 cm tray cannot physically dry out within COOLDOWN_HOURS. So if humidity
+    # is still low that soon after a fill, the tray is NOT empty — the dry air is
+    # (open-sided shade house, hot afternoon). Refilling would only overflow the
+    # 3 cm notch and waste water. Instead we hold off and flag that the tray has
+    # reached its limit, which is what justifies an extra watering session.
+    cooling = False
+    # "prefill" belongs in this list. It was missing, so the anticipatory path
+    # skipped the cooldown entirely and could refill a tray filled minutes
+    # earlier - the exact overflow the guard exists to prevent.
+    # The cooldown answers "does the tray still have water?" by inference. When
+    # the probe answers it directly, believe the probe - but never drop below the
+    # minimum hold, so a probe stuck at dry cannot cycle the valve for ever.
+    hold = _effective_cooldown(prev.get("lastFillSeconds"))
+    if dry:
+        hold = TRAY_MIN_HOLD_HOURS
+    if status in ("fill", "topup", "prefill", "refill") and since is not None and since < hold:
+        cooling  = True
+        wait     = round(hold - since, 1)
+        at_limit = status == "fill"
+        status, secs = "cooldown", 0
+        msg = (f"Tray was filled {since:.1f} h ago, so it still has water. "
+               f"Humidity is {rh}% because the air is dry today, not because the tray is empty. "
+               f"Next fill allowed in {wait} h.")
+        if at_limit:
+            msg += " The tray is at its limit — extra watering may be needed."
+
+    # ── AUTO MODE: actually issue the command ────────────────────────────────
+    # Deciding is not enough — in auto mode the system must act without the
+    # farmer pressing anything. (Found by the farm simulator: trays were being
+    # correctly diagnosed as empty but never refilled.)
+    ctrl      = (section or {}).get("control") or {}
+    # The farm switch and the per-section override, not the legacy `mode` key.
+    # trayEnabled is a separate per-section opt-out and still applies on top.
+    auto      = section_acts_alone(section) and ctrl.get("trayEnabled", True)
+    commanded = False
+    # Acts on ANY dose the model asks for, not just a full "fill". Top-ups were
+    # previously computed and then silently dropped, so the small maintenance
+    # doses the model is best at never actually reached the valve.
+    if auto and status in ("fill", "topup", "prefill", "refill") and secs > 0:
+        cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
+               "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+        _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
+        node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
+        _log_event(house_id, section_id, section,
+                   action="tray", durationSec=secs, withFertilizer=False,
+                   by="auto", commandId=(node_cmd or {}).get("id"),
+                   confirmed=False)
+        commanded = True
+        msg += " Auto mode: filling now."
+
+    out = {"fillSeconds": secs, "status": status, "message": msg,
+           # what the model asked for before any safety override, so the app and
+           # the report can show the model's own decision rather than the result
+           "modelSeconds": model_secs,
+           "prefill": prefill,
+           "decidedBy": ("manual" if manual.get("tray") and secs > 0
+                         else "model" if secs == model_secs else "safety-override"),
+           "manualSeconds": manual.get("tray"),
+           "autoCommanded": commanded,
+           "lastFillTs": (dev_now if commanded else prev.get("lastFillTs")),
+           # Remembered so the NEXT check can size the hold to what actually
+           # went in, rather than charging a splash the same six hours as a fill.
+           "lastFillSeconds": (secs if commanded else prev.get("lastFillSeconds")),
+           # What the probe actually reads, so the app can show an empty tray
+           # instead of only ever showing the air.
+           # Seconds meant nothing physical until the pump was measured. Volume
+           # is what a grower can sanity-check, and what the tray's own capacity
+           # is expressed in. Per-section rate: see _ml_per_sec.
+           "litres": round(secs * _ml_per_sec(section) / 1000.0, 2),
+           "trayCapacityL": round(TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000.0, 2),
+           "maxSeconds": TRAY_MAX_SEC,
+           "trayLevel": level,
+           "trayEmpty": bool(dry),
+           # None until it has been put to the test either way.
+           "trayResponds": responds,
+           "humidity": rh, "temperature": latest["temperature"],
+           "vpd": v, "targetLow": lo, "targetHigh": hi,
+           "cooldownHours": round(hold, 1),
+           "hoursSinceFill": round(since, 1) if since is not None else None,
+           "hoursUntilNextFill": round(max(0.0, hold - since), 1) if cooling else 0,
+           "trayAtLimit": bool(cooling and rh < lo),
+           "checkedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", out)
+    return out
+
+
+# ═══════════════════════ ML: fertilizer ═══════════════════════════════════════
+
+def _days_since_fertilized(section: dict) -> float:
+    """How long since this section was actually fed, in days.
+
+    Derived from a TIMESTAMP, not from a stored number.
+
+    The previous version read a plain `daysSince` integer that nothing ever
+    wrote. Three faults compounded:
+      * a number cannot advance with time, so it never grew;
+      * nothing reset it after a feed, so it never shrank;
+      * its default (7) equalled the Active-stage interval (7), so any section
+        created through the app was born "due" and stayed due forever.
+    The visible result was every single watering claiming to mix in plant food,
+    and a "Fertilizer due" alert that could never be cleared.
+    """
+    fert = (section or {}).get("fertilizer") or {}
+    now_ms = _device_now_ms(section)
+
+    ts = fert.get("lastFertilizedTs")
+    if ts:
+        hrs = _hours_since(ts, now_ms)
+        if hrs is not None:
+            return round(hrs / 24.0, 2)
+
+    # Never fed through the system. Fall back to whatever was seeded, and treat
+    # an absent value as "due now" rather than inventing a history - a section
+    # whose feeding is unknown SHOULD be flagged once, and recording the first
+    # feed then starts the clock properly.
+    try:
+        return float(fert.get("daysSince"))
+    except (TypeError, ValueError):
+        return float(FERT_UNKNOWN_DAYS)
+
+
+def _record_fertilized(house_id: str, section_id: str, section: dict) -> None:
+    """Start the clock. Called when a watering that CARRIES fertilizer is issued.
+
+    Recorded at issue rather than at the node's acknowledgement: an ack can be
+    lost, and feeding twice because a confirmation went missing is worse than
+    the small risk of counting a feed the pump never delivered. The farmer can
+    correct it from the section screen.
+    """
+    now_ms = _device_now_ms(section)
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedTs.json",
+            now_ms)
+    # to_farm_time takes epoch MILLISECONDS, not a datetime. Passing a datetime
+    # raised inside the request and turned every fertilised watering into a 500,
+    # after the timestamp above had already been written.
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/fertilizer/lastFertilizedAt.json",
+            to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"))
+
+
+# How many events are kept per section. Events are written a handful of times a
+# day, so this is roughly a month of history - enough to answer "when was this
+# last watered and fed" without the document growing without bound.
+EVENT_KEEP = 60
+
+
+def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optional[str]:
+    """Record something that MOVED WATER, so it can be shown as history.
+
+    The only record before this was `watering/log/{day}-{tag}`, holding `{at,
+    by}`. It was written by the automatic path only, carried no duration and no
+    fertilizer detail, and was keyed by day so at most two entries survived per
+    day. There was no way to answer "when was this section last fed", which is
+    the question the fertilizer schedule depends on.
+
+    Keyed by epoch milliseconds so the keys sort chronologically.
+    """
+    now_ms = int(_device_now_ms(section))
+    ev = {"at": now_ms,
+          "atLocal": to_farm_time(now_ms).strftime("%Y-%m-%d %H:%M"),
+          **fields}
+    key = str(now_ms)
+    # OUTSIDE the section subtree, on its own branch.
+    #
+    # /farm/houses.json is the engine's hot path - fetched every 60 seconds, so
+    # 1,440 times a day. Anything stored inside a section is paid for on every
+    # one of those fetches. At 60 events per section this log would have added
+    # ~84 KB to a 23 KB document and taken the engine alone from 29 MB/day to
+    # about 147 MB. History was moved out of the section subtree for exactly
+    # this reason once already.
+    base = f"/farm/events/{house_id}/{section_id}"
+    if not _fb_put(f"{base}/{key}.json", ev):
+        return None
+
+    # Prune oldest beyond EVENT_KEEP. `shallow=true` returns keys only, so this
+    # costs a few hundred bytes rather than the whole log.
+    try:
+        keys = _fb_get(f"{base}.json?shallow=true") or {}
+        if len(keys) > EVENT_KEEP:
+            for old_key in sorted(keys, key=lambda k: int(k) if k.isdigit() else 0)[:len(keys) - EVENT_KEEP]:
+                _fb_delete(f"{base}/{old_key}.json")
+    except Exception:
+        pass          # a failed prune must never fail the watering
+    return key
+
+
+def _fert_decision(section: dict) -> dict:
+    latest = _clean((section or {}).get("latest") or {})
+    # Growth stage decides WHICH fertilizer — take it from Component 2 if it has
+    # reported, else the farmer's setting, else a seasonal guess (and say so).
+    gs     = _resolve_growth_stage(section)
+    stage  = gs["stage"]
+    days   = _days_since_fertilized(section)
+    now    = datetime.now(timezone.utc)
+
+    # The farmer can switch plant food off entirely (e.g. they feed by hand).
+    # Checked before the model so nothing is ever dosed behind their back.
+    if ((section or {}).get("control") or {}).get("fertEnabled") is False:
+        return {"due": False, "npkType": "None", "strength": 0.0,
+                "daysSinceFertilize": days, "growthStage": stage,
+                "growthSource": gs["source"], "growthMessage": gs["message"],
+                "growthNeedsAttention": gs["needsAttention"], "fertEnabled": False,
+                "message": "Automatic plant food is switched off for this section.",
+                "guidance": "Turn it back on from My Farm when you want the system "
+                            "to feed the plants again."}
+
+    # HARD SAFETY RULE (never left to the model): dormant Vanda are not fed.
+    # A resting plant cannot use the nutrients; salts accumulate in the velamen
+    # and burn the roots.
+    if stage == "Dormant":
+        return {"due": False, "npkType": "None", "strength": 0.0,
+                "daysSinceFertilize": days, "growthStage": stage,
+                "growthSource": gs["source"], "growthMessage": gs["message"],
+                "growthNeedsAttention": gs["needsAttention"],
+                "message": "Plant is dormant — no fertilizer until growth resumes.",
+                "guidance": ("Feeding a resting Vanda burns the roots: salts build up "
+                             "in the velamen because the plant is not taking them up.")}
+
+    Xs = _fert["scaler"].transform(np.array([[
+        days, float(_fert["growth_stage_map"].get(stage, 0)), float(now.month),
+        latest["temperature"], latest["humidity"]]]))
+
+    due = bool(_fert["model_due"].predict(Xs)[0])
+    npk = _fert["npk_encoder"].inverse_transform(_fert["model_npk"].predict(Xs))[0]
+    strength = 0.5 if now.month not in (11, 12, 1, 2) and stage != "Dormant" else 0.25
+
+    # What this stage takes, regardless of whether a feed is due right now. The
+    # history needs it: a farmer who feeds early still mixed something, and
+    # recording "None" against a feed that happened is simply wrong.
+    npk_for_stage = npk
+    if not due:
+        npk = "None"
+        nxt = _fert["schedule_days"].get(stage, 7) - days
+        msg = f"Not due — next feed in about {max(0, int(nxt))} day(s)."
+    else:
+        msg = (f"Due now: {npk} at {int(strength*100)}% strength, "
+               f"mixed into the next watering (never on dry roots).")
+
+    fert_rec = (section or {}).get("fertilizer") or {}
+    return {"due": due, "npkType": npk, "strength": strength,
+            "daysSinceFertilize": days,
+            # None until the first recorded feed, which the app shows as
+            # "not recorded yet" rather than inventing a date.
+            "npkForStage": npk_for_stage,
+            "lastFertilizedAt": fert_rec.get("lastFertilizedAt"),
+            "everFertilized": bool(fert_rec.get("lastFertilizedTs")),
+            "intervalDays": int(_fert["schedule_days"].get(stage, 7)),
+            "growthStage": stage,
+            "growthSource": gs["source"], "growthMessage": gs["message"],
+            "growthNeedsAttention": gs["needsAttention"],
+            "growthConfidence": gs["confidence"],
+            "message": msg,
+            "guidance": ("Vanda are heavy feeders: weekly in the growing season, "
+                         "every 2-3 weeks when dormant, always at 1/4-1/2 strength "
+                         "and always delivered with water.")}
+
+
+# ═══════════════════════ Setup / hierarchy ════════════════════════════════════
+
+class SectionIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    label: Optional[str] = ""                 # "bright edge", "shaded corner"
+    plantCount: int = 0
+    growthStage: str = "Active"
+    lightExposure: float = Field(0.8, ge=0.0, le=1.0)
+
+
+class HouseIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+    type: str = "shade-net"
+    plantCount: int = 0
+    # Metres. Optional because houses created before this existed have none, but
+    # everything spatial needs them: without the dimensions a section at (7, 9)
+    # cannot be drawn, because nothing knows whether that is the middle of the
+    # house or outside it. The planner has always asked for them and then thrown
+    # them away at the point of creation.
+    width: Optional[float] = None
+    length: Optional[float] = None
+    sections: List[SectionIn] = []
+
+
+class FarmSetup(BaseModel):
+    # Neither of these is asked for any more. The setup wizard used to demand a
+    # farm name and an owner name before a farmer could do anything, and neither
+    # earned its keep: ownerName was written here and read by NOTHING, and
+    # farmName is only a screen title that already falls back to "My Farm"
+    # everywhere it is shown. Renaming the farm is still available on the
+    # dashboard for anyone who wants one.
+    farmName: str = "My Farm"
+    # Where the farm is. Optional so an older client still sets up fine, but the
+    # wizard asks for it, because the alternative is what happened before: the
+    # forecast quietly used Peradeniya for every farm on earth.
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    houses: List[HouseIn] = []
+
+
+@router.post("/setup")
+async def setup_farm(cfg: FarmSetup):
+    """First-time setup wizard: farm -> houses -> sections."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    meta = {"farmName": (cfg.farmName or "My Farm").strip() or "My Farm",
+            "createdAt": now, "version": 2}
+    if (cfg.latitude is not None and cfg.longitude is not None
+            and -90.0 <= cfg.latitude <= 90.0 and -180.0 <= cfg.longitude <= 180.0):
+        meta["latitude"] = round(float(cfg.latitude), 6)
+        meta["longitude"] = round(float(cfg.longitude), 6)
+    _fb_put("/farm/meta.json", meta)
+    made = []
+    for hi, h in enumerate(cfg.houses, 1):
+        hid = h.id or f"H{hi}"
+        _fb_put(f"/farm/houses/{hid}/meta.json", {
+            "name": h.name, "type": h.type, "plantCount": h.plantCount,
+            "sectionCount": len(h.sections), "createdAt": now})
+        for si, s in enumerate(h.sections, 1):
+            sid = s.id or f"S{si}"
+            _fb_put(f"/farm/houses/{hid}/sections/{sid}/meta.json", {
+                "name": s.name, "label": s.label, "plantCount": s.plantCount,
+                "growthStage": s.growthStage, "lightExposure": s.lightExposure,
+                "deviceId": f"{hid}-{sid}", "createdAt": now})
+            _fb_put(f"/farm/houses/{hid}/sections/{sid}/control.json",
+                    {"mode": "auto", "trayEnabled": True})
+        made.append({"houseId": hid, "sections": len(h.sections)})
+    return {"status": "success", "farm": cfg.farmName, "houses": made,
+            "note": "Flash each device with its deviceId, e.g. H1-S1."}
+
+
+@router.post("/houses")
+async def add_house(h: HouseIn):
+    """Add a house later (farmer can extend the farm any time)."""
+    existing = _fb_get("/farm/houses.json") or {}
+    hid = h.id or f"H{len(existing) + 1}"
+    if hid in existing:
+        raise HTTPException(409, f"House '{hid}' already exists")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    meta = {"name": h.name, "type": h.type, "plantCount": h.plantCount,
+            "sectionCount": len(h.sections), "createdAt": now}
+    if h.width and h.length:
+        meta["width"] = round(float(h.width), 2)
+        meta["length"] = round(float(h.length), 2)
+    _fb_put(f"/farm/houses/{hid}/meta.json", meta)
+    for si, s in enumerate(h.sections, 1):
+        sid = s.id or f"S{si}"
+        _fb_put(f"/farm/houses/{hid}/sections/{sid}/meta.json", {
+            "name": s.name, "label": s.label, "plantCount": s.plantCount,
+            "growthStage": s.growthStage, "lightExposure": s.lightExposure,
+            "deviceId": f"{hid}-{sid}", "createdAt": now})
+        _fb_put(f"/farm/houses/{hid}/sections/{sid}/control.json",
+                {"mode": "auto", "trayEnabled": True})
+    return {"status": "success", "houseId": hid}
+
+
+@router.post("/houses/{house_id}/sections")
+async def add_section(house_id: str, s: SectionIn):
+    """Add a section to an existing house."""
+    house = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not house:
+        raise HTTPException(404, f"House '{house_id}' not found")
+    existing = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    # The lowest FREE slot, not len+1. Counting breaks the moment a section is
+    # deleted: remove S3 from S1-S8 and len becomes 7, so the next add computes
+    # S8, which still exists - a 409 that never clears, leaving the house unable
+    # to accept another section for as long as the gap is there.
+    sid = s.id
+    if not sid:
+        n = 1
+        while f"S{n}" in existing:
+            n += 1
+        sid = f"S{n}"
+    if sid in existing:
+        raise HTTPException(409, f"Section '{sid}' already exists in {house_id}")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/meta.json", {
+        "name": s.name, "label": s.label, "plantCount": s.plantCount,
+        "growthStage": s.growthStage, "lightExposure": s.lightExposure,
+        "deviceId": f"{house_id}-{sid}", "createdAt": now})
+    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/control.json",
+            {"mode": "auto", "trayEnabled": True})
+    house["sectionCount"] = len(existing) + 1   # existing was read before the write
+    _fb_put(f"/farm/houses/{house_id}/meta.json", house)
+    return {"status": "success", "houseId": house_id, "sectionId": sid,
+            "deviceId": f"{house_id}-{sid}"}
+
+
+@router.put("/houses/{house_id}/sections/{section_id}")
+async def update_section(house_id: str, section_id: str, s: SectionIn):
+    meta = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if s.growthStage != meta.get("growthStage"):
+        meta["growthStageSetAt"] = int(datetime.now(timezone.utc).timestamp() * 1000)
+    meta.update({"name": s.name, "label": s.label, "plantCount": s.plantCount,
+                 "growthStage": s.growthStage, "lightExposure": s.lightExposure})
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/meta.json", meta)
+    return {"status": "success", "meta": meta}
+
+
+# ═══════════════════════ Read endpoints ═══════════════════════════════════════
+
+@router.get("/overview")
+async def overview():
+    """Everything the dashboard needs: every house, every section, current status."""
+    farm   = _fb_get("/farm/meta.json") or {}
+    houses = _fb_get("/farm/houses.json") or {}
+    out, alerts = [], 0
+
+    # Which node reports for which section, and how often it is meant to. A
+    # section is only "late" relative to its OWN node's interval, and a section
+    # with no node at all must say so rather than showing an empty reading as if
+    # the hardware were merely quiet. 0.2 KB, fetched once for the whole farm.
+    devices = _fb_get("/devices.json") or {}
+    by_section = {}
+    for mac, rec in (devices or {}).items():
+        assigned = (rec or {}).get("assignedTo")
+        if assigned:
+            by_section[assigned] = {"mac": mac,
+                                    "shortId": mac[-4:],
+                                    "readIntervalMs": (rec or {}).get("readIntervalMs"),
+                                    # Whether the BOARD is answering, which is a
+                                    # different question from whether its last
+                                    # READING is fresh - see device_liveness().
+                                    **_device_liveness(rec)}
+
+    # One clock for the whole farm, so sections are aged consistently.
+    farm_now = _farm_now_ms(houses)
+    stale_sections = 0
+
+    for hid, h in sorted(houses.items()):
+        if not isinstance(h, dict):
+            continue
+        secs = []
+        for sid, s in sorted((h.get("sections") or {}).items()):
+            if not isinstance(s, dict):
+                continue
+            node   = by_section.get(f"{hid}/{sid}")
+            latest = _display(s.get("latest") or {})
+            plan   = s.get("plan") or {}
+            tray   = s.get("tray") or {}
+            fresh  = _freshness(s, farm_now, (node or {}).get("readIntervalMs"))
+
+            # Only an estimate that still describes this hour counts. An
+            # hour-old kriging of a microclimate is describing weather that has
+            # moved on, and it would look exactly as confident as a fresh one.
+            est = (s.get("estimated") or {})
+            try:
+                est_age = (_server_now_ms() - float(est.get("timestampMs"))) / 60000.0
+            except (TypeError, ValueError):
+                est_age = None
+            if est_age is None or not (0 <= est_age <= 60) or est.get("temperature") is None:
+                est = {}
+
+            # Stand in for a MISSING measurement, never over a real one. A
+            # section that kept its sensor is always shown its own reading; only
+            # a zone with nothing of its own falls back here. Without this the
+            # dashboard showed "--" for every unmonitored zone while a perfectly
+            # good estimate sat one key away in the same document - which is the
+            # spatial service doing its job and nobody being told.
+            #
+            # The numbers arrive labelled: freshness.state is set to "estimated"
+            # below and `trusted` stays false, so no screen can present these as
+            # measured. Showing them unlabelled would be the real error.
+            if not latest and est:
+                latest = {"temperature": est.get("temperature"),
+                          "humidity": est.get("humidity"),
+                          "light": est.get("light"),
+                          "timestamp": est.get("timestampMs")}
+
+            # A section with no node is not a section whose node is quiet. The
+            # app used to show both identically, so a zone with no hardware
+            # displayed 28 C and 70 % - the model's fallback defaults - and 70 %
+            # sits in the ideal band, so it even showed a green "GOOD".
+            if node is None and fresh["state"] == "never":
+                fresh = {"state": "nonode", "ageMinutes": None,
+                         "label": "No sensor node", "trusted": False,
+                         "message": "No sensor node is linked to this section, so "
+                                    "there are no readings. Link one from Add Section."}
+
+            # A zone with no sensor of its own but a CURRENT estimate is not a
+            # gap in the farm - it is the placement decision working as designed,
+            # and it is what most of a house looks like after the analysis says
+            # which sensors to pull. Reporting it as "no node" made a deliberate
+            # choice look like missing hardware, and reporting it as "stale"
+            # would have raised an alert for a zone doing exactly what was asked.
+            if est and fresh["state"] in ("nonode", "never", "stale", "delayed"):
+                fresh = {"state": "estimated", "ageMinutes": None,
+                         "label": "Estimated", "trusted": False,
+                         "message": "No sensor here. These numbers are interpolated "
+                                    f"from {est.get('anchorCount') or 'the'} nearby "
+                                    "sections that do have one."}
+
+            # A heartbeat is a faster and more direct answer than reading age.
+            fresh = _apply_link_state(fresh, node)
+
+            # "online" used to mean "has ever reported", so a node that died days
+            # ago still read as online. It now means "reported recently enough".
+            online = fresh["state"] in ("live", "delayed")
+            # `trusted` is false for an estimate too, because it is not a
+            # measurement and must never be shown as one - but it is NOT a fault,
+            # so it does not count as stale and does not raise an alert. Counting
+            # it would have put every unmonitored zone in the alert badge for
+            # good, which is the fastest way to teach someone to ignore it.
+            if not fresh["trusted"] and fresh["state"] != "estimated":
+                stale_sections += 1
+                alerts += 1
+            needs  = tray.get("status") == "fill"
+            if needs:
+                alerts += 1
+            fert = s.get("fertilizer") or {}
+            if fert.get("due"):
+                alerts += 1
+            secs.append({
+                "sectionId": sid,
+                "meta": s.get("meta", {}),
+                "online": online,
+                "freshness": fresh,
+                # vpd only when both inputs are real. Computing it from the
+                # model's fallback defaults produced a confident 0.611 kPa for a
+                # section that had never reported anything.
+                "latest": {**latest,
+                           "vpd": (vpd_kpa(latest["temperature"], latest["humidity"])
+                                   if latest.get("temperature") is not None
+                                   and latest.get("humidity") is not None else None)},
+                "node": node,
+                # Whether this zone is being INTERPOLATED rather than measured.
+                # /overview omitted it entirely, so the dashboard had no way to
+                # tell a section estimated by kriging from one with a dead node,
+                # and drew both grey. Sent as a small summary rather than the
+                # whole estimate: the list needs to know THAT it is estimated
+                # and how uncertain, not the full record, which the section and
+                # map screens already read from the house document.
+                "estimated": ({"temperatureSd": est.get("temperatureSd"),
+                               "humiditySd": est.get("humiditySd"),
+                               "anchors": est.get("anchorCount"),
+                               "at": est.get("timestampMs")}
+                              if est else None),
+                "plan": plan,
+                "tray": tray,
+                "fertilizer": fert,
+                "control": s.get("control", {}),
+            })
+        out.append({"houseId": hid, "meta": h.get("meta", {}), "sections": secs})
+
+    return {"status": "success", "farm": farm, "houses": out,
+            "houseCount": len(out),
+            "sectionCount": sum(len(x["sections"]) for x in out),
+            "staleSections": stale_sections,
+            "alerts": alerts}
+
+
+@router.get("/houses/{house_id}")
+async def get_house(house_id: str):
+    """One house, with each section aged the same way /overview ages it.
+
+    This used to return the raw Firebase document, so the section screen had no
+    idea how old a reading was and displayed a number from a dead node exactly
+    like a number from a live one. It also let -999 - the firmware's "this
+    sensor failed" marker - through to the screen as though it were a
+    measurement.
+    """
+    h = _fb_get(f"/farm/houses/{house_id}.json")
+    if not h:
+        raise HTTPException(404, f"House '{house_id}' not found")
+
+    devices = _fb_get("/devices.json") or {}
+    by_section = {}
+    for mac, rec in (devices or {}).items():
+        assigned = (rec or {}).get("assignedTo")
+        if assigned:
+            by_section[assigned] = {"mac": mac,
+                                    "shortId": mac[-4:],
+                                    "readIntervalMs": (rec or {}).get("readIntervalMs"),
+                                    # Whether the BOARD is answering, which is a
+                                    # different question from whether its last
+                                    # READING is fresh - see device_liveness().
+                                    **_device_liveness(rec)}
+
+    farm_now = _farm_now_ms({house_id: h})
+    for sid, sec in ((h.get("sections") or {})).items():
+        if not isinstance(sec, dict):
+            continue
+        node = by_section.get(f"{house_id}/{sid}")
+        fresh = _freshness(sec, farm_now, (node or {}).get("readIntervalMs"))
+        if node is None and fresh["state"] == "never":
+            fresh = {"state": "nonode", "ageMinutes": None,
+                     "label": "No sensor node", "trusted": False,
+                     "message": "No sensor node is linked to this section, so there "
+                                "are no readings. Link one from Add Section."}
+        sec["freshness"] = _apply_link_state(fresh, node)
+        sec["node"] = node
+        sec["latest"] = _display(sec.get("latest") or {})
+
+    return {"status": "success", "houseId": house_id, "house": h}
+
+
+# ═══════════════════════ ML endpoints ═════════════════════════════════════════
+
+@router.post("/houses/{house_id}/sections/{section_id}/plan")
+async def plan_section(house_id: str, section_id: str):
+    """Today's watering plan for one section: time + duration + 2nd session."""
+    if not _ready():
+        raise HTTPException(503, "v2 models not loaded — run train_models_v2.py")
+    s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
+    if not s:
+        raise HTTPException(404, "Section not found")
+    plan = _plan_section(house_id, section_id, s)
+    fert = _fert_decision(s)
+    return {"status": "success", "houseId": house_id, "sectionId": section_id,
+            "plan": plan, "fertilizer": fert}
+
+
+@router.post("/plan-all")
+async def plan_all():
+    """Generate today's plan for every section (run once each morning)."""
+    if not _ready():
+        raise HTTPException(503, "v2 models not loaded")
+    houses = _fb_get("/farm/houses.json") or {}
+    results = _run_per_section(houses, _plan_section)
+    return {"status": "success", "sectionsPlanned": len(results), "plans": results}
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/tray-check")
+async def tray_check(house_id: str, section_id: str):
+    """Should this section's humidity tray be topped up right now?"""
+    if not _ready():
+        raise HTTPException(503, "v2 models not loaded")
+    s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
+    if not s:
+        raise HTTPException(404, "Section not found")
+    return {"status": "success", "houseId": house_id, "sectionId": section_id,
+            "tray": _tray_decision(house_id, section_id, s)}
+
+
+@router.post("/tray-check-all")
+async def tray_check_all():
+    """Humidity check for every section (run every few minutes)."""
+    if not _ready():
+        raise HTTPException(503, "v2 models not loaded")
+    houses = _fb_get("/farm/houses.json") or {}
+    results = _run_per_section(houses, _tray_decision)
+    filling = sum(1 for r in results.values() if r["fillSeconds"] > 0)
+    return {"status": "success", "sectionsChecked": len(results),
+            "sectionsFilling": filling, "results": results}
+
+
+# ═══════════════════════ Control endpoints ════════════════════════════════════
+
+class WaterCmd(BaseModel):
+    durationSec: int = 45
+    withFertilizer: bool = False
+    triggeredBy: str = "user"
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/water")
+async def water_section(house_id: str, section_id: str, cmd: WaterCmd):
+    """Manual watering. Fertilizer, if requested, rides along in the same water."""
+    s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
+    if not s:
+        raise HTTPException(404, "Section not found")
+    command = {"requested": True,
+               # 1, not 10. A ten second floor lived here, in a different
+               # endpoint from the one that validates a grower's saved lengths,
+               # so a section set to 2 s was quietly watered for 10 while the
+               # confirm sheet promised 2 - and the countdown, which reads the
+               # ack, showed the 10. Silently multiplying a pour by five is
+               # worse than refusing it.
+               "durationSec": max(1, min(cmd.durationSec, RELAY_MAX_SEC)),
+               "withFertilizer": cmd.withFertilizer,
+               "triggeredBy": cmd.triggeredBy,
+               "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/waterCommand.json", command)
+    # ...and the document the real firmware actually polls. Without this the
+    # button only ever moved data inside the server.
+    node_cmd = _issue_node_command(house_id, section_id, "water",
+                                   command["durationSec"],
+                                   withFertilizer=command["withFertilizer"])
+    # Start the fertilizer clock. Without this the counter never moves, so every
+    # subsequent watering claims to mix in plant food and the "due" alert can
+    # never be cleared.
+    fert_now = _fert_decision(s) if command["withFertilizer"] else None
+    if command["withFertilizer"]:
+        _record_fertilized(house_id, section_id, s)
+    _log_event(house_id, section_id, s,
+               action="water",
+               durationSec=command["durationSec"],
+               withFertilizer=bool(command["withFertilizer"]),
+               npkType=((fert_now or {}).get("npkForStage")
+                        if command["withFertilizer"] else None),
+               strength=(fert_now or {}).get("strength") if command["withFertilizer"] else None,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
+    return {"status": "success", "command": command,
+            "nodeCommand": node_cmd,
+            "lastAck": _last_ack(s),
+            "message": (f"Watering for {command['durationSec']}s. The node picks "
+                        "this up within about 15 seconds.")}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/events")
+def section_events(house_id: str, section_id: str, limit: int = 40) -> dict:
+    """Everything that moved water in this section, newest first.
+
+    Includes whether the node confirmed it. A command the server accepted and a
+    pour the hardware actually ran are different claims, and the history has to
+    show which one it is holding.
+    """
+    raw = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+    items = []
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            items.append({"id": k, **v})
+    items.sort(key=lambda x: x.get("at") or 0, reverse=True)
+
+    waters = [x for x in items if x.get("action") == "water"]
+    feeds  = [x for x in waters if x.get("withFertilizer")]
+    return {"status": "success",
+            "events": items[:max(1, min(limit, 200))],
+            "counts": {"total": len(items),
+                       "waterings": len(waters),
+                       "feeds": len(feeds)},
+            "lastWatered": waters[0]["atLocal"] if waters else None,
+            "lastFed": feeds[0]["atLocal"] if feeds else None}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/command-status")
+def command_status(house_id: str, section_id: str,
+                   id: Optional[str] = None) -> dict:
+    """Has the node actually carried out the last command sent to this section?
+
+    The run screen polls this so it can say "node confirmed" instead of only
+    "sent". Those are genuinely different claims: the server writing a command
+    proves nothing about a pump, and for months this project had a command path
+    that reached no hardware at all while every screen reported success.
+
+    Confirmation requires the ack's id to MATCH the pending command. The node
+    matches by id and never deletes the document, so a stale ack left over from
+    a previous command would otherwise read as this one having succeeded.
+    """
+    base = f"/farm/houses/{house_id}/sections/{section_id}"
+    cmd = _fb_get(f"{base}/command.json") or {}
+    ack = _fb_get(f"{base}/commandAck.json") or {}
+
+    # THE COMMAND IS PROBABLY NOT HERE ANY MORE.
+    #
+    # Every pour now goes through the master's queue - see _issue_node_command,
+    # which stopped writing the section's own command document for water and
+    # tray. This function was never updated to match, so it kept reading a
+    # section path that only Wi-Fi commands still touch, compared the id it was
+    # asked about against an ack from days earlier, found no match, and reported
+    # "sent, not yet confirmed" forever. The pours themselves were running
+    # perfectly: on 30 Aug the board acked three of them - 2 s, 8 s, 2 s - in
+    # the master's ledger while the app sat on "Waiting for the node to pick
+    # this up".
+    #
+    # The issuing was unified and the OBSERVING was not, which is the same gap
+    # in reverse that the command-path work closed a fortnight ago.
+    if id and ack.get("id") != id:
+        master = _master_for_house(house_id)
+        if master:
+            # Is it pouring RIGHT NOW? The controller publishes this the moment
+            # before it opens the valve and deletes it when the valve shuts, so
+            # `startedAt` is the node's own clock rather than a moment the phone
+            # guessed. That is the only honest basis for a countdown.
+            run = _fb_get(f"/farm/masters/{master}/running.json") or {}
+            pouring = run.get("id") == id
+            if pouring:
+                started = run.get("startedAt")
+                secs_r = int(run.get("durationSec") or 0)
+                ack = {"id": id, "action": cmd.get("action"),
+                       "durationSec": secs_r, "started": True, "done": False,
+                       "stopped": False, "at": started, "routed": True}
+                cmd = {**cmd, "id": id, "durationSec": secs_r}
+                m_ack = {}
+            else:
+                m_ack = _fb_get(f"/farm/masters/{master}/acks/{id}.json") or {}
+            if m_ack and m_ack.get("id") == id:
+                outcome = m_ack.get("outcome")
+                ran = int(m_ack.get("ranSec") or 0)
+                # The final word on the pour. Until validation-1.9 this was
+                # the ONLY thing the controller ever said - written at the end,
+                # with nothing at the start - so a routed pour had no moment it
+                # could honestly be called running and no start time to count
+                # down from. The running marker read above closed that gap; the
+                # countdown comes from the node's clock, never from the phone's.
+                ack = {"id": id,
+                       "action": cmd.get("action") or m_ack.get("action"),
+                       "durationSec": ran,
+                       "started": True,
+                       # ANY outcome in this ledger means the run is over.
+                       #
+                       # First cut listed only done/ok, so a pour the farmer
+                       # stopped came back done=False and the app went straight
+                       # back to waiting forever - the exact bug being fixed,
+                       # reintroduced one line lower down. The refusals
+                       # (invalid, unsupported, stale, zero) are terminal too:
+                       # the controller saw the command and declined it, and a
+                       # farmer left watching a spinner learns nothing.
+                       #
+                       # What separates them is not `done` but `ranSec` and
+                       # `outcome`: a refusal reports 0 seconds, so nothing here
+                       # can be mistaken for water that moved.
+                       "done": True,
+                       # The controller now distinguishes a pour that ran its
+                       # course from one the farmer cut short, and the ledger
+                       # must not report the second as the first.
+                       "stopped": outcome == "stopped",
+                       "at": m_ack.get("at"),
+                       "routed": True,
+                       "outcome": outcome,
+                       "ranSec": ran}
+                cmd = {**cmd, "id": id, "durationSec": ran}
+            elif not pouring and _fb_get(f"/farm/masters/{master}/queue/{id}.json"):
+                # Still in the controller's queue: accepted, not yet poured.
+                # Distinguishing this from "never arrived" is the difference
+                # between a farmer waiting and a farmer going to check a board.
+                #
+                # Guarded by `pouring` because the entry is NOT removed when the
+                # pour starts - the firmware deletes it only after acking, so it
+                # sits there for the whole pour. Without the guard this branch
+                # overwrote the live countdown with "queued" on every poll, and
+                # the app went back to saying nothing was happening while water
+                # was moving. Caught in test, not in the field.
+                ack = {"id": None, "queued": True}
+
+    cid = cmd.get("id")
+
+    # Which command is the caller asking about?
+    #
+    # `id` matters because Stop REPLACES the command document. Keying off
+    # whatever happens to be in there now means that the moment a farmer presses
+    # Stop, the run they were watching becomes unfindable: the app polled
+    # forever, the countdown kept ticking and the Stop button stayed spinning
+    # even though the relay had already opened. The caller passes the id it
+    # started, and that is answered from the ack, which keeps its own id.
+    want = id or cid
+    matches = bool(want) and ack.get("id") == want
+    confirmed = matches and bool(ack.get("done"))
+
+    # The node posts an ack twice: once with started=true/done=false the moment
+    # it begins pouring, and again when it finishes. "running" is the gap
+    # between them, and it is the only honest basis for a countdown or a Stop
+    # button - a timer the phone starts on its own is a guess about hardware.
+    running = matches and bool(ack.get("started")) and not bool(ack.get("done"))
+
+    started_at = ack.get("at") if matches and ack.get("started") else None
+    # From the ACK when it is the run we were asked about - the command document
+    # may since have been replaced by the stop that ended it.
+    secs = (ack.get("durationSec") if matches else cmd.get("durationSec")) or 0
+    remaining = None
+    if running and started_at:
+        # started_at is the NODE's clock; time.time() is the SERVER's. Any
+        # disagreement between them lands directly in this number, and it showed
+        # up as a 2 s pour counting down from 4. Clamped to the pour's own
+        # length, which is true whatever the two clocks think: there can never
+        # be more time left than the whole pour.
+        remaining = max(0, min(int(secs),
+                               int(started_at) + int(secs) - int(time.time())))
+
+    # Stamp the outcome onto the event that started it. The app polls this
+    # throughout every manual run, so the history learns whether the node
+    # actually did the work without any extra request.
+    if matches and bool(ack.get("done")) and want:
+        try:
+            evs = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+            for k, v in evs.items():
+                if isinstance(v, dict) and v.get("commandId") == want and not v.get("confirmed"):
+                    ev = f"/farm/events/{house_id}/{section_id}/{k}"
+                    _fb_put(f"{ev}/confirmed.json", True)
+                    _fb_put(f"{ev}/stoppedEarly.json", bool(ack.get("stopped")))
+                    break
+        except Exception:
+            pass
+
+    return {
+        "status": "success",
+        "house": house_id,
+        "section": section_id,
+        "askedAbout": want,
+        "command": {"id": cid,
+                    "action": cmd.get("action"),
+                    "durationSec": cmd.get("durationSec"),
+                    "issuedAt": cmd.get("issuedAt")},
+        # True when this pour was carried out by the house's relay controller
+        # rather than by the section's own board, which is now the normal case.
+        "routed": bool(ack.get("routed")),
+        "queuedAtController": bool(ack.get("queued")),
+        "outcome": ack.get("outcome"),
+        "ack": {"id": ack.get("id"),
+                "action": ack.get("action"),
+                "durationSec": ack.get("durationSec"),
+                "started": bool(ack.get("started")),
+                "done": bool(ack.get("done")),
+                # True only when the farmer cut it short. "watered for 90 s" and
+                # "stopped after 12 s" are different outcomes and the app must
+                # not report one as the other.
+                "stopped": bool(ack.get("stopped")),
+                "idle": bool(ack.get("idle")),
+                "at": ack.get("at")},
+        "running": running,
+        "remainingSec": remaining,
+        "confirmed": confirmed,
+    }
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/stop")
+def stop_section(house_id: str, section_id: str) -> dict:
+    """Cut a running pour short.
+
+    Until the firmware loop was made cooperative this was impossible: the node
+    waited out a pour inside one delay(), so nothing could reach it while water
+    was moving. It now watches for this command in 250 ms slices.
+
+    A stop carries no duration - it ends whatever is running. If nothing is
+    running the node acknowledges it as idle, so the app never waits forever.
+    """
+    if not _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json"):
+        raise HTTPException(404, f"Section '{house_id}/{section_id}' not found")
+
+    # A ROUTED pour is stopped through the controller, not through the section.
+    #
+    # Sending "stop" into the master queue is what used to happen, and the
+    # firmware answered `unsupported` because masterRunOne only accepts water
+    # and tray - so the button did nothing and the pump ran its full length.
+    # Two acks recorded exactly that on 30 Aug. The controller now watches
+    # /farm/masters/{mac}/stop while it pours, so the stop goes there, naming
+    # the run it is meant for.
+    master = _master_for_house(house_id)
+    if master:
+        run = _fb_get(f"/farm/masters/{master}/running.json") or {}
+        if run.get("targetSection") == section_id and run.get("id"):
+            _fb_put(f"/farm/masters/{master}/stop.json", run["id"])
+            return {"status": "success",
+                    "command": {"id": run["id"], "action": "stop",
+                                "routedTo": master},
+                    "message": "Stop sent to the controller. It checks every "
+                               "few seconds while pouring."}
+        # Nothing of ours is running there. Say so rather than writing a stop
+        # that would sit around and cut short the NEXT pour.
+        return {"status": "success", "command": None,
+                "message": "Nothing is pouring in this section right now."}
+
+    cmd = _issue_node_command(house_id, section_id, "stop", 0)
+    if not cmd:
+        raise HTTPException(500, "Could not write the stop command")
+
+    return {"status": "success", "command": cmd,
+            "message": "Stop sent. The node picks this up within a few seconds."}
+
+
+class WifiCmd(BaseModel):
+    ssid: str = Field(..., min_length=1, max_length=32)
+    password: str = Field("", max_length=63)
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/wifi")
+def set_node_wifi(house_id: str, section_id: str, body: WifiCmd) -> dict:
+    """Move this section's node onto a different Wi-Fi network.
+
+    The node treats the change as PROVISIONAL: `saveCredsProvisional` keeps the
+    working network as a backup, and if the new one does not come up at boot
+    `rollbackCreds` puts it back and restarts. So a typo costs a reboot, not a
+    node - and holding BOOT for 3 s still forces the setup portal as a last
+    resort.
+
+    The password is written to the Realtime Database in plain text, and the
+    database rules are currently open. That is a deliberate, temporary choice
+    while the app is unpublished; it must be closed before this ships. Tightening
+    the rules needs auth tokens in BOTH the firmware and the backend first, or
+    both stop working at once.
+    """
+    dev = _fb_get("/devices.json") or {}
+    node = next((m for m, r in dev.items()
+                 if (r or {}).get("assignedTo") == f"{house_id}/{section_id}"), None)
+    if not node:
+        raise HTTPException(400,
+                            f"No node is linked to {house_id}/{section_id}, so there is "
+                            "nothing to move onto a different network.")
+
+    cmd = _issue_node_command(house_id, section_id, "wifi", 0,
+                              ssid=body.ssid, **{"pass": body.password})
+    if not cmd:
+        raise HTTPException(500, "Could not write the Wi-Fi command")
+
+    # Never echo the password back.
+    safe = {k: v for k, v in cmd.items() if k != "pass"}
+    return {"status": "success", "command": safe, "node": node,
+            "message": (f"Sent to node {node[-4:]}. It will restart onto '{body.ssid}'. "
+                        "If that network does not work it returns to the current one "
+                        "by itself, which takes about a minute.")}
+
+
+class TrayCmd(BaseModel):
+    fillSeconds: int = 15
+    triggeredBy: str = "user"
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/tray-fill")
+async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd):
+    """Manually top up this section's humidity tray."""
+    s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
+    if not s:
+        raise HTTPException(404, "Section not found")
+    now = datetime.now(timezone.utc)
+    command = {"requested": True,
+               # TRAY_MAX_SEC, not 60. Sixty seconds is 18 litres at the
+               # measured 300 ml/s, into a tray that holds 4.61 - this endpoint
+               # was a way to overflow the tray that went around the cap every
+               # other path respects.
+               "fillSeconds": max(1, min(cmd.fillSeconds, TRAY_MAX_SEC)),
+               "triggeredBy": cmd.triggeredBy,
+               "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+    # ISSUE FIRST, RECORD SECOND.
+    #
+    # The cooldown stamp and the history entry used to be written before the
+    # command was even attempted, so a fill that could not be issued still put
+    # the tray into cooldown and still appeared in the log as a fill. Now that a
+    # section without its own tray valve is refused rather than sent to the
+    # watering line, that ordering would have turned one bug into a quieter one:
+    # no water, no error, and a record saying the tray was topped up.
+    node_cmd = _issue_node_command(house_id, section_id, "tray",
+                                   command["fillSeconds"])
+    if not node_cmd:
+        master = _master_for_house(house_id)
+        raise HTTPException(
+            409,
+            "No master controller is set for this house." if not master else
+            f"Section {section_id} has no tray valve wired. Watering and filling "
+            "the tray are different outputs, so this cannot be sent to the "
+            "watering valve - that would put water on the roots when you asked "
+            "to raise humidity. Set the tray channel in the section's Setup tab.")
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)
+
+    # Stamp the fill so the cooldown guard knows the tray now has water.
+    # This MUST use the device clock, because _tray_decision measures the
+    # cooldown against the device clock too. Stamping it with server time made
+    # the two ends of the same subtraction come from different clocks, so under
+    # the simulator a manual fill read as weeks old and the cooldown never
+    # applied to it. On real hardware the clocks agree (NTP) and this is a no-op.
+    tray = (s or {}).get("tray") or {}
+    tray.update({"lastFillTs": int(_device_now_ms(s)),
+                 "lastFillSeconds": command["fillSeconds"],
+                 "status": "cooldown", "fillSeconds": 0,
+                 "hoursSinceFill": 0.0,
+                 "hoursUntilNextFill": COOLDOWN_HOURS,
+                 "message": (f"Tray filled for {command['fillSeconds']}s just now. "
+                             f"Next fill allowed in {COOLDOWN_HOURS:.0f} h.")})
+    _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", tray)
+
+    # Tray fills belong in the history too. Watering was logged and this was
+    # not, so the record answered "when was it watered" but never "when was the
+    # tray last topped up" - which is the other half of humidity control.
+    _log_event(house_id, section_id, s,
+               action="tray",
+               durationSec=command["fillSeconds"],
+               withFertilizer=False,
+               by=cmd.triggeredBy or "user",
+               commandId=(node_cmd or {}).get("id"),
+               confirmed=False)
+    return {"status": "success", "command": command,
+            "nodeCommand": node_cmd,
+            "lastAck": _last_ack(s),
+            "cooldownHours": COOLDOWN_HOURS}
+
+
+class ModeCmd(BaseModel):
+    # All three are optional so a screen can flip ONE switch without having to
+    # resend the others (and accidentally reset them).
+    mode: Optional[str] = Field(None, pattern="^(auto|manual)$")
+    trayEnabled: Optional[bool] = None
+    fertEnabled: Optional[bool] = None
+
+
+def _apply_mode(house_id: str, section_id: str, cmd: ModeCmd) -> dict:
+    path = f"/farm/houses/{house_id}/sections/{section_id}/control.json"
+    ctrl = _fb_get(path) or {}
+    if cmd.mode is not None:
+        ctrl["mode"] = cmd.mode
+    if cmd.trayEnabled is not None:
+        ctrl["trayEnabled"] = cmd.trayEnabled
+    if cmd.fertEnabled is not None:
+        ctrl["fertEnabled"] = cmd.fertEnabled
+    _fb_put(path, ctrl)
+    return ctrl
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/mode")
+async def set_mode(house_id: str, section_id: str, cmd: ModeCmd):
+    """Switch a section between automatic and manual control."""
+    return {"status": "success", "control": _apply_mode(house_id, section_id, cmd)}
+
+
+@router.put("/mode-all")
+async def set_mode_all(cmd: ModeCmd):
+    """Set watering / plant-food automation for the WHOLE farm at once.
+
+    The farmer thinks in terms of "is the system looking after my plants?", not
+    per-section control nodes, so the dashboard needs one switch that reaches
+    every section.
+    """
+    houses = _fb_get("/farm/houses.json") or {}
+    jobs = [(hid, sid)
+            for hid, h in houses.items() if isinstance(h, dict)
+            for sid in (h.get("sections") or {})]
+    if not jobs:
+        return {"status": "success", "sectionsUpdated": 0}
+
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+        list(pool.map(lambda j: _apply_mode(j[0], j[1], cmd), jobs))
+    return {"status": "success", "sectionsUpdated": len(jobs)}
+
+
+class HouseEdit(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    plantCount: Optional[int] = None
+
+
+class RenameIn(BaseModel):
+    """Just a new label. Deliberately separate from the full edit models: a
+    farmer fixing a typo in a name must never risk resetting plantCount,
+    growthStage or lightExposure because the app forgot to resend a field."""
+    name: str
+
+
+def _clean_name(raw: str, limit: int = 40) -> str:
+    name = " ".join((raw or "").split())        # collapse stray whitespace
+    if not name:
+        raise HTTPException(400, "Name cannot be empty")
+    if len(name) > limit:
+        raise HTTPException(400, f"Name must be {limit} characters or fewer")
+    return name
+
+
+@router.put("/farm")
+async def rename_farm(body: RenameIn):
+    """Rename the farm. The wizard used to be the only way to set this, so a
+    typo during setup was permanent unless the whole farm was rebuilt."""
+    meta = _fb_get("/farm/meta.json") or {}
+    meta["farmName"] = _clean_name(body.name)
+    _fb_put("/farm/meta.json", meta)
+    return {"status": "success", "farm": meta}
+
+
+class LocationIn(BaseModel):
+    latitude: float
+    longitude: float
+
+
+@router.put("/farm/location")
+async def set_farm_location(body: LocationIn):
+    """Where this farm actually is.
+
+    forecast.farm_location() has always READ /farm/meta/{latitude,longitude},
+    falling back to Peradeniya. Nothing anywhere ever wrote them - no endpoint,
+    no screen, no script - so every farm silently used Peradeniya's weather for
+    its outdoor forecast, whatever the model was told about it. The setting was
+    designed and its writer was never built. This is that writer.
+
+    It matters because two errors compound for a farm elsewhere: the outdoor
+    forecast is for the wrong place, AND the indoor-vs-outdoor delta the model
+    learned was calibrated for Peradeniya. Neither shows a symptom on any
+    screen, which is exactly why it went unnoticed.
+    """
+    lat, lon = float(body.latitude), float(body.longitude)
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise HTTPException(400, "Latitude must be -90..90 and longitude -180..180.")
+
+    meta = _fb_get("/farm/meta.json") or {}
+    meta["latitude"] = round(lat, 6)
+    meta["longitude"] = round(lon, 6)
+    _fb_put("/farm/meta.json", meta)
+
+    # Today's outdoor forecast was fetched for the OLD location and is cached
+    # until midnight. Without this, moving the farm appears to do nothing at all
+    # until tomorrow - the worst kind of setting, one that silently ignores you.
+    try:
+        from app.api.routes import forecast as _fx
+        _fx._outdoor_cache.clear()
+    except Exception as e:
+        print(f"[WARN] could not clear the forecast cache after a move: {e}")
+
+    return {"status": "success", "farm": meta}
+
+
+# A house that has never been through the planner has no lifecycle key, and
+# must keep working exactly as it did. Absent therefore means "active" - the
+# state where the system waters and estimates normally.
+LIFECYCLE_STATES = ("calibrating", "active")
+CALIBRATION_DAYS = 3
+# Readings a section must have contributed before its data is worth placing
+# sensors from. At the node's ~40 s report rate this is roughly half a day, so
+# it is the elapsed-days rule that normally binds - this exists to catch a
+# section that was offline for most of the window.
+CALIBRATION_MIN_READINGS = 400
+
+
+def _house_lifecycle(meta: dict) -> str:
+    """The house's state. Absent means active, so old houses are unaffected."""
+    v = ((meta or {}).get("lifecycle") or "").strip().lower()
+    return v if v in LIFECYCLE_STATES else "active"
+
+
+class FlowIn(BaseModel):
+    """Measured millilitres per second for one section, or null to reset."""
+    mlPerSec: Optional[float] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/flow")
+async def set_section_flow(house_id: str, section_id: str, body: FlowIn):
+    """Record what this section's valve actually delivers.
+
+    Measured the same way the pump's 300 ml/s was: open the valve for a known
+    time, collect the water, divide. Worth doing per section because one pump
+    through eight valves and different pipe runs is not one flow rate - the far
+    section receives measurably less, and every litres figure and every dose the
+    model chooses is computed from this number.
+
+    Cleared, it falls back to the pump's own rate.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if body.mlPerSec is None:
+        meta.pop("mlPerSec", None)
+    else:
+        v = float(body.mlPerSec)
+        if not (10.0 <= v <= 5000.0):
+            raise HTTPException(400, "Flow must be between 10 and 5000 ml/s.")
+        meta["mlPerSec"] = round(v, 1)
+    _fb_put(path, meta)
+    return {"status": "success",
+            "mlPerSec": meta.get("mlPerSec"),
+            "effective": _ml_per_sec({"meta": meta}),
+            "isDefault": "mlPerSec" not in meta}
+
+
+class DimensionsIn(BaseModel):
+    width: float = Field(..., gt=1.0, le=200.0)
+    length: float = Field(..., gt=1.0, le=200.0)
+
+
+@router.put("/houses/{house_id}/dimensions")
+async def set_house_dimensions(house_id: str, body: DimensionsIn):
+    """Give an existing house its size in metres.
+
+    Houses created before dimensions were stored have none, and every spatial
+    feature needs them - the map cannot place a section at (7, 9) without
+    knowing whether the house is eight metres across or forty.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+    meta["width"] = round(float(body.width), 2)
+    meta["length"] = round(float(body.length), 2)
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "width": meta["width"], "length": meta["length"]}
+
+
+class LifecycleIn(BaseModel):
+    lifecycle: str
+
+
+@router.put("/houses/{house_id}/lifecycle")
+async def set_house_lifecycle(house_id: str, body: LifecycleIn):
+    """Move a house between calibrating and active.
+
+    Calibrating means sensors are spread out collecting the data that will
+    decide where they finally go. Active means that decision has been made.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    want = (body.lifecycle or "").strip().lower()
+    if want not in LIFECYCLE_STATES:
+        raise HTTPException(400, f"lifecycle must be one of {LIFECYCLE_STATES}")
+
+    meta["lifecycle"] = want
+    if want == "calibrating":
+        sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+        meta["calibration"] = {
+            "startedAt": _server_now_ms(),
+            "targetDays": CALIBRATION_DAYS,
+            "minReadings": CALIBRATION_MIN_READINGS,
+            "sectionCount": len(sections),
+        }
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id,
+            "lifecycle": want, "calibration": meta.get("calibration")}
+
+
+class ApplyPlacementIn(BaseModel):
+    """Section ids that KEEP their sensor. Everything else gives its node up."""
+    keep: List[str]
+
+
+@router.post("/houses/{house_id}/apply-placement")
+async def apply_placement(house_id: str, body: ApplyPlacementIn):
+    """Act on the placement decision: free the sensors it says are redundant.
+
+    WHY THIS IS ONE CALL AND NOT TWELVE.
+    The app used to finish the placement flow by setting the lifecycle to active
+    and nothing else, so the farmer was told which sensors to take out and the
+    system carried on believing all twelve were still there. Doing the unassign
+    from the client would mean a dozen requests that can stop half way, leaving
+    a house where some sections were freed and some were not, and no record of
+    which was which.
+
+    CLEARING `latest` IS THE PART THAT MATTERS.
+    Unassigning alone does not produce the behaviour anyone wants. Both the map
+    and `_display` prefer a section's own measurement over an estimate - "the
+    measurement is the thing that happened" - and that rule is right while a
+    sensor exists. Once the sensor is physically removed, the section's last
+    reading is frozen at the moment it was pulled, and a day later the app would
+    still be showing yesterday's temperature in green as though it were current,
+    while a perfectly good kriged estimate sat unused beside it.
+
+    So the reading is deleted with the assignment. The claim "this section has a
+    reading of its own" stops being true the moment the sensor leaves, and the
+    honest consequence is that kriging takes over - which is exactly what the
+    placement analysis promised would happen.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    if not sections:
+        raise HTTPException(400, "House has no sections.")
+
+    keep = {str(k) for k in (body.keep or [])}
+    unknown = keep - set(sections)
+    if unknown:
+        raise HTTPException(400, f"Not sections of {house_id}: {sorted(unknown)}")
+    if not keep:
+        raise HTTPException(400, "Refusing to strip every sensor from the house.")
+
+    # The promise this flow makes to the farmer is that the freed sections keep
+    # working, estimated from the ones that kept a sensor. Below the kriging
+    # minimum that promise is false: interpolate_house returns
+    # "insufficient-anchors" and writes nothing, so those zones would go blank
+    # for good. Refused here rather than left to the caller, because this is the
+    # call that makes it irreversible - the readings are deleted.
+    from app.api.routes.spatial_service import MIN_ANCHORS
+    if len(keep) < MIN_ANCHORS:
+        raise HTTPException(
+            400,
+            f"Keeping {len(keep)} sensor(s) would leave nothing to estimate from. "
+            f"Kriging needs at least {MIN_ANCHORS} reporting sections, so the other "
+            f"zones would stay blank rather than being interpolated.")
+
+    devices = _fb_get("/devices.json") or {}
+    by_section = {}
+    for mac, rec in devices.items():
+        assigned = (rec or {}).get("assignedTo")
+        if assigned:
+            by_section[assigned] = mac
+
+    freed, cleared = [], []
+    for sid in sorted(sections, key=_natural_key):
+        if sid in keep:
+            continue
+        mac = by_section.get(f"{house_id}/{sid}")
+        if mac:
+            _fb_delete(f"/devices/{mac}/assignedTo.json")
+            _fb_delete(f"/farm/houses/{house_id}/sections/{sid}/deviceMac.json")
+            freed.append({"sectionId": sid, "mac": mac})
+        # Cleared even when no node was linked: a section can hold a stale
+        # reading from a board that was moved by hand earlier.
+        if (sections[sid] or {}).get("latest"):
+            _fb_delete(f"/farm/houses/{house_id}/sections/{sid}/latest.json")
+            cleared.append(sid)
+
+    meta["lifecycle"] = "active"
+    meta["placement"] = {"keep": sorted(keep, key=_natural_key),
+                         "appliedAt": _server_now_ms(),
+                         "freed": [f["mac"] for f in freed]}
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _DEVICE_CACHE["devices"] = None                 # assignments just changed
+
+    # A house that has just given up sensors can ONLY water those zones through
+    # the controller, so this is the moment a master stops being optional. The
+    # app has no other way to know that, and a farmer who is never told ends up
+    # with sections nothing can reach.
+    master = _master_for_house(house_id)
+
+    return {
+        "status": "success",
+        "houseId": house_id,
+        "lifecycle": "active",
+        "kept": sorted(keep, key=_natural_key),
+        "freed": freed,
+        "clearedReadings": cleared,
+        "masterMac": master,
+        "needsMaster": bool(freed) and not master,
+        "message": (f"{len(freed)} sensor(s) freed. Those sections are now "
+                    "estimated from the ones that kept theirs; the first "
+                    "estimate appears within a few minutes."),
+    }
+
+
+@router.get("/houses/{house_id}/calibration")
+async def calibration_status(house_id: str):
+    """How calibration is really going, counted from the stored readings.
+
+    Every number here is read from `/farm/history`, never from a timer. A
+    progress bar that advances while a node is unplugged is worse than no
+    progress bar: it promises data that will not exist when the analysis runs,
+    and the farmer finds out three days later.
+
+    `ready` needs BOTH the elapsed days and every section above minReadings, so
+    one dead node extends the wait for the house and says which node it was.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    cal = meta.get("calibration") or {}
+    started = float(cal.get("startedAt") or 0)
+    target_days = float(cal.get("targetDays") or CALIBRATION_DAYS)
+    min_readings = int(cal.get("minReadings") or CALIBRATION_MIN_READINGS)
+
+    now_ms = _server_now_ms()
+    days = (now_ms - started) / 86400000.0 if started else 0.0
+
+    sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    rows, blockers = [], []
+    for sid in sorted(sections, key=_natural_key):
+        # DOWNLOADING THE WHOLE ARCHIVE TO COUNT IT COSTS REAL MONEY.
+        #
+        # This used to fetch every stored reading for every section and then use
+        # exactly two things from them: how many there were, and the newest
+        # timestamp. On an eight-section house that is 772 KB per call. The
+        # calibration screen polls every 30 s while a farmer watches it, which
+        # is 90 MB an hour of Firebase downloads for two numbers - and it is
+        # what pushed this project past the free 360 MB/day quota, measured at
+        # a 483.8 MB peak day.
+        #
+        # Two bounded queries replace it:
+        #
+        #   count   shallow=true - keys only, no values. ~12 KB per section
+        #           instead of ~96 KB.
+        #   newest  limitToLast(1) - push ids sort chronologically, so the last
+        #           key IS the newest record. One reading instead of thousands.
+        #
+        # A limitToFirst cap on the count would be better still - the question
+        # is only ever "has it reached the minimum" - but Firebase REFUSES it:
+        #   "orderBy not supported for with shallow GET, keys are returned in
+        #    lexicographical order"
+        # and the 400 it returns parses as a one-key dict, which silently reads
+        # as "1 reading". Shallow alone, then, and the count grows with the
+        # archive; at ~28 bytes a key that is affordable for a long time.
+        #
+        # Measured on this house: 772 KB -> 103 KB per call.
+        base = f"/farm/history/{house_id}/{sid}.json"
+        keys = _fb_get(f"{base}?shallow=true") or {}
+        count = len(keys)
+        newest = _fb_get(f'{base}?orderBy="$key"&limitToLast=1') or {}
+        stamps = [r.get("timestamp") for r in newest.values()
+                  if isinstance(r, dict) and r.get("timestamp")]
+        last = max(stamps) if stamps else None
+        age_min = (now_ms - float(last)) / 60000.0 if last else None
+        ok = count >= min_readings
+        rows.append({
+            "id": sid,
+            "name": ((sections[sid] or {}).get("meta") or {}).get("name") or sid,
+            "readings": count,
+            "needed": min_readings,
+            "lastSeenMinAgo": None if age_min is None else round(age_min, 1),
+            "ok": ok,
+        })
+        if not count:
+            blockers.append(f"{sid} has never reported.")
+        elif age_min is not None and age_min > 120:
+            blockers.append(f"{sid} stopped reporting {age_min / 60:.0f} hours ago.")
+        elif not ok:
+            blockers.append(f"{sid} has {count} of {min_readings} readings.")
+
+    time_done = days >= target_days
+    data_done = bool(rows) and all(r["ok"] for r in rows)
+    if not time_done:
+        blockers.insert(0, f"{target_days - days:.1f} more days of data needed.")
+
+    return {
+        "status": "success",
+        "houseId": house_id,
+        "lifecycle": _house_lifecycle(meta),
+        "width": meta.get("width"),
+        "length": meta.get("length"),
+        # Wiring faults belong next to readiness: a house can finish calibrating
+        # perfectly and still water the wrong plants.
+        "masterMac": _master_for_house(house_id),
+        "channelConflicts": _channel_conflicts(house_id),
+        "daysElapsed": round(days, 2),
+        "targetDays": target_days,
+        "sections": rows,
+        "ready": bool(time_done and data_done),
+        "blockers": blockers,
+    }
+
+
+class MasterIn(BaseModel):
+    """MAC of the controller that waters sections having no node, or null."""
+    masterMac: Optional[str] = None
+
+
+@router.put("/houses/{house_id}/master")
+async def set_house_master(house_id: str, body: MasterIn):
+    """Name the controller that actuates this house's unmonitored sections.
+
+    One ESP32 on a multi-channel relay board, opening a valve per section. A
+    section with its own node is unaffected and keeps being commanded directly;
+    this only covers the ones that would otherwise have nobody listening.
+
+    Clearing it is deliberate and supported: without a master, a command for a
+    nodeless section is refused rather than written somewhere nothing reads.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    mac = (body.masterMac or "").strip().upper()
+    if mac:
+        if mac not in (_fb_get("/devices.json") or {}):
+            raise HTTPException(400, f"No device {mac} has ever registered.")
+        meta["masterMac"] = mac
+    else:
+        meta.pop("masterMac", None)
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    _DEVICE_CACHE["devices"] = None                 # force a fresh read
+
+    return {"status": "success", "masterMac": meta.get("masterMac"),
+            "maxChannels": MASTER_MAX_CHANNELS,
+            "message": (f"{mac} will water sections that have no node of their own."
+                        if mac else
+                        "Cleared. Sections without a node can no longer be watered.")}
+
+
+class PumpsIn(BaseModel):
+    """The two relay channels this house's pumps sit on."""
+    waterChannel: Optional[int] = None
+    trayChannel: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/pumps")
+async def set_house_pumps(house_id: str, body: PumpsIn):
+    """Which channels drive the watering pump and the tray pump.
+
+    This farm has TWO PUMPS, not one pump behind eight valves: watering runs off
+    IN1/D25 and the trays off IN2/D26, which are channels 1 and 2 and the same
+    pins the single-node build calls RELAY_WATER and RELAY_TRAY. They serve the
+    whole house, so they belong to the house rather than being copied into every
+    section.
+
+    Setting them is what stops Fill Tray opening the watering line. Until a tray
+    channel exists somewhere - here or on the section - tray fills are refused
+    rather than sent to whatever valve happened to be known.
+    """
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, "House not found")
+
+    for field, key in (("waterChannel", "waterChannel"), ("trayChannel", "trayChannel")):
+        val = getattr(body, field)
+        if val is None:
+            meta.pop(key, None)
+            continue
+        ch = int(val)
+        if not (1 <= ch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"{field} must be 1-{MASTER_MAX_CHANNELS}.")
+        meta[key] = ch
+
+    # One relay cannot be two pumps. Sharing a channel here would mean Fill Tray
+    # and Water Now driving the same motor, which is the bug this whole change
+    # exists to remove.
+    if (meta.get("waterChannel") is not None
+            and meta.get("waterChannel") == meta.get("trayChannel")):
+        raise HTTPException(
+            409, "The watering pump and the tray pump cannot share a channel - "
+                 "one relay drives one motor, so they would be the same pump.")
+
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "houseId": house_id,
+            "waterChannel": meta.get("waterChannel"),
+            "trayChannel": meta.get("trayChannel"),
+            "message": ("Tray fills will now use their own pump."
+                        if meta.get("trayChannel") else
+                        "No tray pump set, so tray fills stay refused.")}
+
+
+class ChannelIn(BaseModel):
+    relayChannel: Optional[int] = None
+    # The valve that fills this section's humidity tray. A SEPARATE output from
+    # the watering one - see _relay_channel. Absent means tray fills are refused
+    # for this section rather than sent to whatever valve happened to be known.
+    trayChannel: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/channel")
+async def set_section_channel(house_id: str, section_id: str, body: ChannelIn):
+    """Which relay channel on the master opens this section's valve.
+
+    This has to match the physical wiring, so it is set rather than inferred.
+    Cleared, the channel falls back to the section's position in sorted order,
+    which is predictable but only correct if the board was wired that way.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if body.relayChannel is None:
+        meta.pop("relayChannel", None)
+    else:
+        ch = int(body.relayChannel)
+        if not (1 <= ch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"Relay channel must be 1-{MASTER_MAX_CHANNELS}.")
+        # Refuse a channel another section already holds. One valve per channel:
+        # letting two sections share one means watering the wrong plants, and
+        # nothing downstream could detect it.
+        taken = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(ch, []) if sid != section_id})
+        if taken:
+            raise HTTPException(
+                409, f"Channel {ch} is already used by {', '.join(sorted(taken))}. "
+                     f"Give that section a different channel first, or pick another.")
+        meta["relayChannel"] = ch
+
+    if body.trayChannel is None:
+        meta.pop("trayChannel", None)
+    else:
+        tch = int(body.trayChannel)
+        if not (1 <= tch <= MASTER_MAX_CHANNELS):
+            raise HTTPException(400, f"Tray channel must be 1-{MASTER_MAX_CHANNELS}.")
+        # A tray valve that is also somebody's watering valve is the bug this
+        # whole change exists to stop, so it is refused here too - including
+        # against this section's own watering channel.
+        clash = (set() if _shared_pumps(house_id) else
+                 {sid for sid in _channel_map(house_id).get(tch, []) if sid != section_id})
+        if clash:
+            raise HTTPException(
+                409, f"Channel {tch} is already used by {', '.join(sorted(clash))}.")
+        if meta.get("relayChannel") == tch:
+            raise HTTPException(
+                409, f"Channel {tch} already waters this section. The tray needs its "
+                     "own valve, or filling it would water the roots - which is "
+                     "exactly what the tray loop exists to avoid.")
+        meta["trayChannel"] = tch
+    _fb_put(path, meta)
+    return {"status": "success", "relayChannel": meta.get("relayChannel"),
+            "effective": _relay_channel(house_id, section_id),
+            "conflicts": _channel_conflicts(house_id)}
+
+
+class PositionIn(BaseModel):
+    """Where a section sits on the house floor, in metres from one corner."""
+    x: float
+    y: float
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/position")
+async def set_section_position(house_id: str, section_id: str, body: PositionIn):
+    """Place a section in the house, so its microclimate can be interpolated.
+
+    Sections were purely logical until now - a name, a label and a light-exposure
+    coefficient, with nothing saying where in the building they are. Spatial
+    interpolation needs real coordinates: without them a zone cannot be related
+    to its neighbours at all.
+
+    Metres from a corner the farmer picks, consistently for the whole house. The
+    origin does not matter as long as it does not move, because kriging works on
+    distances between points rather than absolute position.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    if not (0.0 <= body.x <= 500.0) or not (0.0 <= body.y <= 500.0):
+        raise HTTPException(400, "Coordinates are metres within the house, 0-500.")
+    meta["x"] = round(float(body.x), 2)
+    meta["y"] = round(float(body.y), 2)
+    _fb_put(path, meta)
+    return {"status": "success", "meta": meta,
+            "message": f"{section_id} placed at ({meta['x']}, {meta['y']}) m."}
+
+
+class DurationsIn(BaseModel):
+    """Null means "back to automatic" - both fields are always sent."""
+    waterDurationSec: Optional[int] = None
+    trayFillSec: Optional[int] = None
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/durations")
+async def set_section_durations(house_id: str, section_id: str, body: DurationsIn):
+    """Let a grower fix the pour lengths for one section.
+
+    Only the LENGTHS. The models keep deciding the time of day and whether any
+    water is needed; a grower who disagreed with the timing would be switching
+    the model off, which is what the autonomy flag is for.
+
+    Both values are validated against the same limits the models are held to, so
+    the app cannot promise a pour the relay will cut short or a tray fill the
+    tray cannot hold.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/control/durations.json"
+    out = {}
+    if body.waterDurationSec is not None:
+        v = int(body.waterDurationSec)
+        # 1 second, not 30. The 30 s floor was a guess at what the model's own
+        # range looked like, and there is no hardware reason for it: the relay
+        # switches in milliseconds and 2 s is 600 ml at the measured 300 ml/s,
+        # which is a real amount of water. RELAY_MAX_SEC is the only limit the
+        # board actually enforces, and it clamps there regardless of this check.
+        if not (1 <= v <= RELAY_MAX_SEC):
+            raise HTTPException(400, f"Watering length must be 1-{RELAY_MAX_SEC} seconds.")
+        out["water"] = v
+    if body.trayFillSec is not None:
+        v = int(body.trayFillSec)
+        if not (1 <= v <= TRAY_MAX_SEC):
+            raise HTTPException(
+                400, f"Tray fill must be 1-{TRAY_MAX_SEC} seconds - more than that "
+                     f"overflows a {TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000:.1f} L tray.")
+        out["tray"] = v
+
+    if out:
+        _fb_put(path, out)
+    else:
+        _fb_delete(path)                     # both cleared: back to automatic
+
+    # Apply it to the STORED plan and tray straight away.
+    #
+    # Storing the preference and stopping was not enough, and looked exactly
+    # like a broken Save button: the section screen reads plan.durationSetBy and
+    # tray.manualSeconds, and both are only written when their model next runs -
+    # the tray within fifteen minutes, but the PLAN not until tomorrow's dawn.
+    # So a grower set 95 s, the card carried on saying "104s (auto)" for the
+    # rest of the day, and nothing anywhere said the number had been kept.
+    #
+    # Neither model is re-run to do this. Both blocks already carry what the
+    # model itself asked for - modelDurationSec and modelSeconds - so the
+    # override can be re-applied to that, which is the same arithmetic the
+    # model path does and cannot disagree with it.
+    base = f"/farm/houses/{house_id}/sections/{section_id}"
+    # This section's own flow rate, for the litres figures below. Read here
+    # rather than assuming PUMP_ML_PER_SEC: the endpoint rewrites what the app
+    # displays, and displaying the wrong volume is how a grower loses trust in
+    # every other number on the screen.
+    rate = _ml_per_sec({"meta": _fb_get(f"{base}/meta.json") or {}})
+
+    plan = _fb_get(f"{base}/plan.json") or {}
+    if plan.get("modelDurationSec") is not None:
+        model_dur = int(plan["modelDurationSec"])
+        dur = (max(1, min(RELAY_MAX_SEC, int(out["water"])))
+               if out.get("water") else model_dur)
+        plan["durationSec"] = dur
+        plan["durationSetBy"] = "manual" if out.get("water") else "model"
+        plan["litres"] = round(dur * rate / 1000.0, 2)
+        plan["mlPerSec"] = rate
+        _fb_put(f"{base}/plan.json", plan)
+
+    tray = _fb_get(f"{base}/tray.json") or {}
+    if tray:
+        model_secs = int(tray.get("modelSeconds") or 0)
+        # Only when the model already wants a fill, matching the tray path: a
+        # length applied to a zero would turn a preference into a standing
+        # instruction to keep filling.
+        secs = int(out["tray"]) if (model_secs > 0 and out.get("tray")) else model_secs
+        secs = min(secs, TRAY_MAX_SEC)
+        tray["fillSeconds"] = secs
+        # Written even when no fill is due, because this is the grower's setting
+        # rather than a property of the current decision - it is what the card
+        # shows when the tray is perfectly happy.
+        tray["manualSeconds"] = out.get("tray")
+        tray["decidedBy"] = ("manual" if out.get("tray") and secs > 0
+                             else "model" if secs == model_secs else "safety-override")
+        tray["litres"] = round(secs * rate / 1000.0, 2)
+        _fb_put(f"{base}/tray.json", tray)
+
+    return {"status": "success", "durations": out,
+            "limits": {"waterMin": 1, "waterMax": RELAY_MAX_SEC,
+                       "trayMin": 1, "trayMax": TRAY_MAX_SEC},
+            "message": ("Back to automatic." if not out else
+                        "Saved. The models still choose when to water; these set how long.")}
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/name")
+async def rename_section(house_id: str, section_id: str, body: RenameIn):
+    """Rename one section, touching nothing else about it."""
+    path = f"/farm/houses/{house_id}/sections/{section_id}/meta.json"
+    meta = _fb_get(path)
+    if not meta:
+        raise HTTPException(404, "Section not found")
+    meta["name"] = _clean_name(body.name)
+    _fb_put(path, meta)
+    return {"status": "success", "meta": meta}
+
+
+@router.put("/houses/{house_id}")
+async def edit_house(house_id: str, body: HouseEdit):
+    """Rename a house or change its type / plant count."""
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
+    if not meta:
+        raise HTTPException(404, f"House '{house_id}' not found")
+    for k in ("name", "type", "plantCount"):
+        v = getattr(body, k)
+        if v is not None:
+            meta[k] = v
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "meta": meta}
+
+
+@router.delete("/houses/{house_id}")
+async def delete_house(house_id: str):
+    """Remove a house, its readings, and the claim its nodes have on it.
+
+    RELEASING THE NODES IS NOT TIDYING UP - it is what makes the delete stick.
+
+    Deleting the subtree alone left every node still holding
+    `assignedTo: "H3/S4"`. Firebase creates whatever path you write to, so on
+    their next cycle those boards PUT `/farm/houses/H3/sections/S4/latest.json`
+    and the house came back - and the automation engine added `/tray` beside it.
+    What returned had no `meta`, so the app showed a nameless "H3" full of
+    sections that could not be opened, and deleting it again did nothing,
+    because the writers were never the house.
+
+    Observed on 30 Aug 2026: H3 was deleted and reappeared with six sections
+    whose only keys were `latest` and `tray`, still being written a minute
+    later.
+
+    `delete_section` has done this per-section for months and says why. This
+    endpoint never got the same treatment.
+    """
+    if not _fb_get(f"/farm/houses/{house_id}/meta.json"):
+        raise HTTPException(404, f"House '{house_id}' not found")
+
+    # Release first. A node freed before the delete cannot recreate what the
+    # delete is about to remove; the other order leaves exactly the gap above.
+    freed = []
+    try:
+        devs = _fb_get("/devices.json") or {}
+        for mac, rec in devs.items():
+            assigned = (rec or {}).get("assignedTo") or ""
+            if assigned.startswith(f"{house_id}/"):
+                _fb_delete(f"/devices/{mac}/assignedTo.json")
+                freed.append(mac)
+    except Exception:
+        # Never block the delete on registry cleanup - a stale link is
+        # recoverable, a house that refuses to delete is not.
+        pass
+
+    _fb_delete(f"/farm/houses/{house_id}.json")
+    # The archive lives outside the house subtree since the history move, so it
+    # survives the line above and would otherwise be orphaned forever.
+    _fb_delete(f"/farm/history/{house_id}.json")
+    _fb_delete(f"/farm/events/{house_id}.json")
+    _DEVICE_CACHE["devices"] = None
+    return {"status": "success", "deleted": house_id, "nodesFreed": freed}
+
+
+@router.delete("/houses/{house_id}/sections/{section_id}")
+async def delete_section(house_id: str, section_id: str):
+    """Deleting a section must also release its node.
+
+    Otherwise the device keeps `assignedTo` pointing at a section that no longer
+    exists: it never reappears in the Add Section picker, and the one-to-one
+    check still counts it as taken. The node itself then falls back to its
+    compiled-in section, so it stays alive rather than going silent.
+    """
+    try:
+        devs = _fb_get("/devices.json") or {}
+        target = f"{house_id}/{section_id}"
+        for mac, rec in devs.items():
+            if (rec or {}).get("assignedTo") == target:
+                _fb_delete(f"/devices/{mac}/assignedTo.json")
+                break
+    except Exception:
+        # Never block the delete on registry cleanup; a stale link is
+        # recoverable, a section that refuses to delete is not.
+        pass
+
+    """Remove one section (and its readings) from a house."""
+    if not _fb_get(f"/farm/houses/{house_id}/sections/{section_id}/meta.json"):
+        raise HTTPException(404, "Section not found")
+    _fb_delete(f"/farm/houses/{house_id}/sections/{section_id}.json")
+    remaining = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+    meta = _fb_get(f"/farm/houses/{house_id}/meta.json") or {}
+    meta["sectionCount"] = len(remaining)
+    _fb_put(f"/farm/houses/{house_id}/meta.json", meta)
+    return {"status": "success", "deleted": f"{house_id}-{section_id}",
+            "sectionsRemaining": len(remaining)}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/history")
+async def section_history(house_id: str, section_id: str, points: int = 48,
+                          hours: int = 24):
+    """Down-sampled history for the section's charts (oldest first).
+
+    `hours` is the window the farmer picked in the chart's range menu. Nodes
+    report every 5 minutes, so 12 samples an hour; we pull a little extra to
+    survive a device that reported late, then trim by real timestamp.
+    """
+    hours = max(1, min(int(hours), 24 * 30))
+    want  = min(int(hours * 12 * 1.2) + 12, 5000)
+
+    raw = _fb_get(f'/farm/history/{house_id}/{section_id}.json'
+                  f'?orderBy="$key"&limitToLast={want}')
+    if not raw:
+        return {"status": "success", "count": 0, "series": [], "hours": hours}
+
+    recs = []
+    for r in raw.values():
+        if not isinstance(r, dict) or r.get("timestamp") is None:
+            continue
+        c = _clean(r)
+        recs.append({"t": int(r["timestamp"]),
+                     "temperature": c["temperature"], "humidity": c["humidity"],
+                     "light": c["light"], "vpd": vpd_kpa(c["temperature"], c["humidity"])})
+    recs.sort(key=lambda x: x["t"])
+
+    # Trim to the requested window using the DEVICE clock (the newest reading),
+    # not the server's — the same reasoning as the tray cooldown, and it keeps
+    # the chart correct under the accelerated simulator.
+    if recs:
+        cutoff = recs[-1]["t"] - hours * 3600 * 1000
+        trimmed = [r for r in recs if r["t"] >= cutoff]
+        if len(trimmed) >= 2:
+            recs = trimmed
+
+    if len(recs) > points:                       # even down-sample
+        step = len(recs) / float(points)
+        recs = [recs[int(i * step)] for i in range(points)]
+
+    # A multi-day window needs the day, not just the clock time.
+    fmt = "%H:%M" if hours <= 24 else "%d %b %H:%M"
+    for r in recs:
+        r["label"] = datetime.fromtimestamp(r["t"] / 1000, tz=timezone.utc).strftime(fmt)
+
+    temps = [r["temperature"] for r in recs] or [0]
+    hums  = [r["humidity"] for r in recs] or [0]
+    return {"status": "success", "count": len(recs), "series": recs, "hours": hours,
+            "tempMin": min(temps), "tempMax": max(temps),
+            "humidityMin": min(hums), "humidityMax": max(hums)}
+
+
+@router.get("/alerts")
+async def alerts():
+    """Everything the farmer should be told about right now."""
+    houses = _fb_get("/farm/houses.json") or {}
+    items = []
+    now = datetime.now(timezone.utc)
+    farm_now = _farm_now_ms(houses)
+
+    # Each section is judged against ITS OWN node's reporting interval. Without
+    # this every node was measured by the 15 s default, so a healthy node on the
+    # 5 min production setting raised "Device stopped reporting" on every poll.
+    alert_nodes = {}
+    for mac, rec in (_fb_get("/devices.json") or {}).items():
+        assigned = (rec or {}).get("assignedTo")
+        if assigned:
+            alert_nodes[assigned] = {"mac": mac,
+                                     "readIntervalMs": (rec or {}).get("readIntervalMs")}
+
+    for hid, h in sorted(houses.items()):
+        if not isinstance(h, dict):
+            continue
+        hname = (h.get("meta") or {}).get("name", hid)
+        for sid, s in sorted((h.get("sections") or {}).items()):
+            if not isinstance(s, dict):
+                continue
+            sname = (s.get("meta") or {}).get("name", sid)
+            where = f"{hname} · {sname}"
+            latest, tray, plan = s.get("latest"), s.get("tray") or {}, s.get("plan") or {}
+
+            if not latest:
+                items.append({"id": f"{hid}-{sid}-offline", "level": "warning",
+                              "icon": "cloud-offline-outline", "title": "Device offline",
+                              "message": f"{where} has never reported. Check power and Wi-Fi.",
+                              "houseId": hid, "sectionId": sid})
+                continue
+
+            # A node that stopped reporting is the most important thing to say:
+            # every other number below it is computed from a stale reading.
+            fresh = _freshness(s, farm_now,
+                               (alert_nodes.get(f"{hid}/{sid}") or {}).get("readIntervalMs"))
+            if not fresh["trusted"]:
+                items.append({"id": f"{hid}-{sid}-stale", "level": "warning",
+                              "icon": "battery-dead-outline",
+                              "title": "Device stopped reporting",
+                              "message": f"{where}: {fresh['message']}",
+                              "houseId": hid, "sectionId": sid})
+                continue
+
+            c = _clean(latest)
+            if tray.get("status") == "fill":
+                items.append({"id": f"{hid}-{sid}-tray", "level": "action",
+                              "icon": "water-outline", "title": "Humidity low",
+                              "message": f"{where}: {c['humidity']}% RH — tray needs "
+                                         f"{tray.get('fillSeconds', 0)}s of water.",
+                              "houseId": hid, "sectionId": sid})
+            elif tray.get("trayAtLimit"):
+                # tray still has water but the air is too dry for it to cope
+                items.append({"id": f"{hid}-{sid}-limit", "level": "info",
+                              "icon": "information-circle-outline",
+                              "title": "Tray at its limit",
+                              "message": f"{where}: {c['humidity']}% RH but the tray was "
+                                         f"filled {tray.get('hoursSinceFill')}h ago — the air "
+                                         f"is very dry today, not the tray.",
+                              "houseId": hid, "sectionId": sid})
+            if c["temperature"] >= 36:
+                items.append({"id": f"{hid}-{sid}-heat", "level": "urgent",
+                              "icon": "flame-outline", "title": "Extreme heat",
+                              "message": f"{where} is at {c['temperature']}°C.",
+                              "houseId": hid, "sectionId": sid})
+            fert = s.get("fertilizer") or {}
+            if fert.get("growthNeedsAttention"):
+                items.append({"id": f"{hid}-{sid}-growth", "level": "action",
+                              "icon": "leaf-outline", "title": "Set the growth stage",
+                              "message": f"{where}: {fert.get('growthMessage')}",
+                              "houseId": hid, "sectionId": sid})
+            if fert.get("due"):
+                items.append({"id": f"{hid}-{sid}-fert", "level": "action",
+                              "icon": "flask-outline", "title": "Fertilizer due",
+                              "message": f"{where}: give {fert.get('npkType')} at "
+                                         f"{int(float(fert.get('strength', 0.5)) * 100)}% strength — "
+                                         f"it will be mixed into the next watering.",
+                              "houseId": hid, "sectionId": sid})
+            # A second watering is no longer planned at dawn, and the plan field
+            # this once tested has been removed. Before that it sat permanently
+            # false, so the farmer was never told an extra session was coming -
+            # even while the afternoon rule authorised one and the pump ran.
+            # Ask the rule instead.
+            #
+            # to_farm_time() rather than `now`: `now` here is UTC, and the rule
+            # is gated on a 15:00-17:30 FARM-local window. The local name
+            # `farm_now` is a float of epoch ms and shadows the farm_now()
+            # function, so it cannot be called in this scope.
+            second_now = second_session_due(s, to_farm_time(farm_now))
+            if second_now:
+                items.append({"id": f"{hid}-{sid}-2nd", "level": "action",
+                              "icon": "time-outline", "title": "Second watering now",
+                              "message": f"{where}: {second_now['temperature']}°C at "
+                                         f"{second_now['humidity']}% and the tray cannot cope — "
+                                         f"an extra {second_now['durationSec']}s is due.",
+                              "houseId": hid, "sectionId": sid})
+            elif plan.get("waterTime"):
+                items.append({"id": f"{hid}-{sid}-plan", "level": "info",
+                              "icon": "calendar-outline", "title": "Today's watering",
+                              "message": f"{where}: {plan['waterTime']} for {plan['durationSec']}s.",
+                              "houseId": hid, "sectionId": sid})
+
+    order = {"urgent": 0, "action": 1, "warning": 2, "info": 3}
+    items.sort(key=lambda a: order.get(a["level"], 9))
+    return {"status": "success", "count": len(items),
+            "urgent": sum(1 for a in items if a["level"] in ("urgent", "action")),
+            "alerts": items,
+            "generatedAt": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
+
+
+@router.get("/model-info")
+async def model_info():
+    """Model metrics — used by the app's About screen and for the viva."""
+    if not _ready():
+        raise HTTPException(503, "v2 models not loaded")
+    return {
+        "status": "success",
+        "version": 2,
+        "watering": {
+            "type": "RandomForestRegressor x2 + RandomForestClassifier",
+            "features": _water.get("feature_columns") or WATER_FEATURES,
+            "metrics": _water["metrics"],
+            "rule": "Once per day. Second session only in extreme heat.",
+        },
+        "tray": {
+            "type": "RandomForestRegressor",
+            "features": _tray.get("feature_columns") or TRAY_FEATURES,
+            "metrics": _tray["metrics"],
+            "target": f"{_tray['rh_target_low']}-{_tray['rh_target_high']}% RH (Vanda ideal)",
+        },
+        "growthStage": {
+            "sources": ["component2", "manual", "seasonal"],
+            "component2Path": "/farm/houses/{houseId}/sections/{sectionId}/growthPrediction",
+            "component2Schema": {"stage": "Active|Flowering|Dormant",
+                                 "confidence": "0.0-1.0",
+                                 "predictedAt": "epoch ms",
+                                 "source": "component2-cnn"},
+            "maxAgeDays": GROWTH_PREDICTION_MAX_AGE_DAYS,
+            "minConfidence": GROWTH_PREDICTION_MIN_CONF,
+            "note": ("Component 2 is not connected yet. When it writes to the path "
+                     "above this component picks it up automatically — no code change."),
+        },
+        "fertilizer": {
+            "type": "DecisionTreeClassifier",
+            "metrics": _fert["metrics"],
+            "note": _fert["note"],
+        },
+    }

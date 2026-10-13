@@ -1,0 +1,52 @@
+{
+  "compared_at": "2026-08-29T15:37:33",
+  "tensorflow_version": "2.20.0",
+  "quick_mode": false,
+  "reportable": true,
+  "scored_on": "validation",
+  "settings": {
+    "epochs": 5,
+    "batch_size": 32,
+    "lr": 0.001,
+    "dropout": 0.3,
+    "seed": 42,
+    "max_train_batches": null
+  },
+  "train_counts": {
+    "black_leaf_spot": 6588,
+    "healthy": 10368,
+    "phyllosticta_leaf_spot": 11826
+  },
+  "results": [
+    {
+      "model": "mobilenetv2",
+      "note": "Designed for mobile. Depthwise separable convolutions.",
+      "macro_f1": 0.8219607843137254,
+      "accuracy": 0.835820895522388,
+      "parameters": 2261827,
+      "size_mb": 9.7,
+      "latency_ms": 105.6,
+      "train_seconds": 572.2
+    },
+    {
+      "model": "efficientnetb0",
+      "note": "Compound scaling. Strong accuracy per parameter.",
+      "macro_f1": 0.8318331468236592,
+      "accuracy": 0.8507462686567164,
+      "parameters": 4053414,
+      "size_mb": 17.1,
+      "latency_ms": 91.8,
+      "train_seconds": 577.4
+    },
+    {
+      "model": "scratch_cnn",
+      "note": "Control: no pretraining. Shows what ImageNet buys.",
+      "macro_f1": 0.6024955436720142,
+      "accuracy": 0.746268656716418,
+      "parameters": 94531,
+      "size_mb": 1.2,
+      "latency_ms": 77.8,
+      "train_seconds": 579.7
+    }
+  ]
+}

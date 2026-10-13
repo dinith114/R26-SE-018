@@ -1,0 +1,23 @@
+# Vanda orchid disease detection -- Python dependencies.
+#
+# Install into the component venv:
+#     python -m venv .venv
+#     .venv/Scripts/python.exe -m pip install -r requirements.txt
+#
+# Versions below are the ones this component was verified against on
+# 29 August 2026 (Windows 11, Python 3.11.1). TensorFlow 2.21.0 matches the
+# version PROJECT_CONTEXT.md section 8 asks you to check Colab against -- a
+# .keras file saved by a newer TensorFlow may not load on an older one.
+
+# --- data preparation (tools/) ---
+Pillow==12.3.0
+tqdm==4.70.0
+
+# --- training and evaluation (src/) ---
+# tensorflow-cpu, not tensorflow: GPU is unavailable on native Windows for
+# TensorFlow >= 2.11 regardless of CUDA, so the CPU build is the smaller
+# download with identical behaviour. Real training runs on Colab's T4.
+tensorflow-cpu==2.21.0
+numpy==2.4.6
+scikit-learn==1.9.0     # confusion matrix, per-class precision / recall / F1
+matplotlib==3.11.1      # confusion matrix figure for the report

@@ -1,0 +1,89 @@
+======================================================================
+  DISEASE CLASSIFIER -- EVALUATION ON THE TEST SET
+  model   : /content/drive/MyDrive/orchid_models/disease_model.keras
+  classes : ['black_leaf_spot', 'healthy', 'phyllosticta_leaf_spot']
+  run at  : 2026-08-29T14:52:52
+======================================================================
+
+  These images were held out of training entirely. Verified by
+  tools/check_leakage.py -- see data/leakage_report.txt.
+
+  images: 67
+    black_leaf_spot              15
+    healthy                      24
+    phyllosticta_leaf_spot       28
+
+----------------------------------------------------------------------
+  HEADLINE
+----------------------------------------------------------------------
+  macro F1       : 0.7779   <- report this one
+  weighted F1    : 0.8026
+  overall accuracy: 0.8060  (54/67)
+  Macro F1 weights each class equally, so the 15-image class counts
+  as much as the 28-image one. Overall accuracy does not.
+
+----------------------------------------------------------------------
+  PER-CLASS METRICS
+----------------------------------------------------------------------
+                        precision    recall  f1-score   support
+
+       black_leaf_spot     0.6000    0.6000    0.6000        15
+               healthy     0.8889    1.0000    0.9412        24
+phyllosticta_leaf_spot     0.8400    0.7500    0.7925        28
+
+              accuracy                         0.8060        67
+             macro avg     0.7763    0.7833    0.7779        67
+          weighted avg     0.8038    0.8060    0.8026        67
+
+  How to read these:
+    recall    of a disease = of all plants that truly had it, how many
+                            did the system catch. Missing a diseased
+                            plant is the costly error for a grower.
+    precision of a disease = when the system says it, how often it is
+                            right. Low precision means wasted spraying.
+
+  Confusion matrix  (rows = true, columns = predicted)
+                           black_lea   healthy phyllosti   total
+  black_leaf_spot                  9         2         4      15
+  healthy                          0        24         0      24
+  phyllosticta_leaf_spot           6         1        21      28
+  --------------------------------------------------------------
+  predicted total                 15        27        25
+
+  Error types that matter to a grower:
+    diseased plants called HEALTHY : 3 of 43   <- the costly error
+    healthy plants called diseased : 0 of 24   (wasted treatment)
+
+  Misclassified images (13):
+    Black_LS_0007.jpg                  true=black_leaf_spot          pred=healthy                  conf=0.856
+    Black_LS_0008.jpg                  true=black_leaf_spot          pred=healthy                  conf=0.995
+    Black_LS_0009.jpg                  true=black_leaf_spot          pred=phyllosticta_leaf_spot   conf=0.586
+    Black_LS_0023.jpg                  true=black_leaf_spot          pred=phyllosticta_leaf_spot   conf=0.692
+    Black_LS_0027.jpg                  true=black_leaf_spot          pred=phyllosticta_leaf_spot   conf=0.781
+    Black_LS_0029.jpg                  true=black_leaf_spot          pred=phyllosticta_leaf_spot   conf=0.642
+    Phyllosticta_LS_0002.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.732
+    Phyllosticta_LS_0014.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.968
+    Phyllosticta_LS_0041.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.428
+    Phyllosticta_LS_0072.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.520
+    Phyllosticta_LS_0102.jpg           true=phyllosticta_leaf_spot   pred=healthy                  conf=0.972
+    Phyllosticta_LS_0112.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.914
+    Phyllosticta_LS_0141.jpg           true=phyllosticta_leaf_spot   pred=black_leaf_spot          conf=0.944
+
+  Confidence-threshold sweep
+   threshold       kept %    acc if kept   sent to expert
+        0.40       100.0%         0.806                0
+        0.50        98.5%         0.818                1
+        0.60        91.0%         0.836                6
+        0.65        88.1%         0.847                8
+        0.70        85.1%         0.860               10
+        0.75        82.1%         0.873               12
+        0.80        79.1%         0.887               14
+        0.90        67.2%         0.889               22
+
+  This table is descriptive only. The operating threshold must be
+  chosen from `python evaluate.py --split validation`.
+
+======================================================================
+  metrics json : /content/drive/MyDrive/orchid_models/metrics_test.json
+  figure       : /content/drive/MyDrive/orchid_models/confusion_matrix_test.png
+======================================================================

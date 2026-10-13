@@ -1,33 +1,52 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "Orchid Care",
     "slug": "mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1C591D"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "lk.ac.sliit.r26se018.orchidcare"
     },
     "android": {
+      "package": "lk.ac.sliit.r26se018.orchidcare",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      }
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
+        "backgroundColor": "#1C591D"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ],
+      "usesCleartextTraffic": true
     },
     "plugins": [
       [
-        "expo-splash-screen",
+        "expo-notifications",
         {
-          "image": "./assets/splash-icon.png",
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "icon": "./assets/adaptive-icon.png",
+          "color": "#047857"
         }
-      ],
-      "expo-status-bar"
-    ]
+      ]
+    ],
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "owner": "vitplk",
+    "extra": {
+      "eas": {
+        "projectId": "f5e8bde2-eef5-4b9c-8e5e-2134f530e88d"
+      }
+    }
   }
 }

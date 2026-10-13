@@ -1,0 +1,29 @@
+{
+  "built_at": "2026-08-30T20:48:08",
+  "model": "D:\\AI-Powered-Smart-Orchid-Care-System\\R26-SE-018\\ml-models\\disease_detection\\models\\disease_model.keras",
+  "reference_images": 533,
+  "feature_dim": 1280,
+  "k_neighbours": 5,
+  "threshold": 0.41972815990448,
+  "threshold_chosen_on": "validation",
+  "validation": {
+    "n": 67,
+    "median": 0.2958650588989258,
+    "max": 0.40972816944122314,
+    "rejected": 0
+  },
+  "test": {
+    "n": 67,
+    "median": 0.2995383143424988,
+    "max": 0.45149654150009155,
+    "rejected": 1
+  },
+  "ood_check": {
+    "folder": "d:/AI-Powered-Smart-Orchid-Care-System/ood_test",
+    "count": 17,
+    "caught": 17,
+    "min_distance": 0.4683798551559448,
+    "max_distance": 0.7238683104515076
+  },
+  "note": "Distance filter in front of the classifier. No retraining, so all reported disease metrics remain valid."
+}

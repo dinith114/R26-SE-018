@@ -24,8 +24,22 @@ pandas==2.2.2
 joblib==1.4.2
 tensorflow==2.16.2         # Required by growth_stage's src.predict (was missing - route import would fail without it). 2.16.0 doesn't exist on PyPI for Windows; 2.16.2 is the first available patch and matches Colab's Keras 3 save format
 
-# TensorFlow (CNN visual hydration model — MobileNetV2)
-tensorflow==2.20.0
+# Model inference (Component 1 -- disease detection)
+
+# TensorFlow was pinned TWICE, to 2.16.2 above and 2.20.0 here. pip cannot
+# satisfy both, so a fresh `pip install -r requirements.txt` failed or resolved
+# unpredictably - which would have stopped any deployment at the first step.
+#
+# Kept 2.16.2 (above) because Component 2's growth_stage and bloom_prediction
+# import it at module load, and their route package imports eagerly: if that
+# import raises, the WHOLE backend refuses to start.
+#
+# 2.20.0 was here for Component 3's v1 visual hydration CNN (MobileNetV2). That
+# model is loaded only by the legacy smart_watering route, is NOT in the v2
+# decision path, and already fails gracefully when absent. If it turns out to
+# need 2.20, the v1 CNN is the thing to drop - not Component 2.
+#
+# tensorflow==2.20.0
 
 # Object Detection (used by growth_stage's /identify-objects and
 # bloom_prediction endpoints, via shared/object_detection)
@@ -46,3 +60,12 @@ requests==2.32.3
 
 # Utilities
 python-dotenv==1.0.1
+PyKrige==1.7.2
+# Sparse sensor placement (Brunton lab). The PyPI name is python-sensors:
+# "pysensors" is an unrelated Linux lm-sensors binding that fails to build.
+# Imported as `pysensors`. Documented for Linux and macOS only, so house_planner
+# degrades to its kriging-variance method rather than failing when absent.
+# 0.4.1, NOT 0.4.3: from 0.4.2 the package requires numpy>=2.0, which
+# collides with the numpy==1.26.4 this project pins for its saved models.
+# 0.4.1 leaves numpy unpinned and carries the same SSPOR / SVD API.
+python-sensors==0.4.1

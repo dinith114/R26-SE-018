@@ -1,0 +1,51 @@
+======================================================================
+  SEVERITY CLASSIFIER (Model 2) -- TEST SET
+  model : /content/drive/MyDrive/orchid_models/severity_model.keras
+  run at: 2026-08-29T17:32:41
+======================================================================
+
+  Grade distribution by split (stratified by DISEASE, not grade):
+  split            mild   moderate     severe
+  train             22%        33%        45%
+  validation        42%        37%        21%
+  test              40%        28%        33%
+
+  A mismatch here caps achievable accuracy and is a real limitation,
+  not a bug. Severity was unknown when the split was made.
+
+  test images: {'mild': 17, 'moderate': 12, 'severe': 14}
+
+----------------------------------------------------------------------
+  HEADLINE
+----------------------------------------------------------------------
+  macro F1               : 0.4500
+  exact-grade accuracy   : 0.4651  (20/43)
+  within-one-grade       : 0.9070  <- ordered scale, so this matters
+  random baseline        : 0.3333 (three grades)
+
+  'Within one grade' counts moderate-called-severe as near-correct.
+  The serious error is a SEVERE leaf called MILD -- the grower then
+  under-treats a badly infected plant. That count is below.
+
+----------------------------------------------------------------------
+  PER-GRADE METRICS
+----------------------------------------------------------------------
+              precision    recall  f1-score   support
+
+        mild     0.5556    0.5882    0.5714        17
+    moderate     0.2308    0.2500    0.2400        12
+      severe     0.5833    0.5000    0.5385        14
+
+    accuracy                         0.4651        43
+   macro avg     0.4566    0.4461    0.4500        43
+weighted avg     0.4740    0.4651    0.4682        43
+
+  Confusion matrix (rows = true, columns = predicted)
+                    mild  moderate    severe   total
+  mild                10         5         2      17
+  moderate             6         3         3      12
+  severe               2         5         7      14
+
+  Dangerous errors:
+    SEVERE called MILD   : 2 of 14   <- grower under-treats
+    MILD called SEVERE   : 2 of 17   (over-treats, wasteful not harmful)

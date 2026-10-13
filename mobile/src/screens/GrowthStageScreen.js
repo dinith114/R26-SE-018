@@ -19,7 +19,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ref, onValue } from 'firebase/database';
 import * as ImagePicker from 'expo-image-picker';
-import { File } from 'expo-file-system';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { API_CONFIG } from '../config/api';
 import { database } from '../config/firebase';
@@ -351,7 +350,7 @@ const GrowthStageScreen = ({ navigation }) => {
                 const blob = await fileResponse.blob();
                 formData.append('file', blob, fileName);
             } else {
-                formData.append('file', new File(uri));
+                formData.append('file', { uri: uri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(`${API_BASE_URL}/api/v1/growth/identify`, {

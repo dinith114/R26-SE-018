@@ -3,7 +3,6 @@
  * Component 2: Orchid Growth Stage Recognition & Bloom Prediction
  */
 import { Platform } from 'react-native';
-import { File } from 'expo-file-system';
 import { API_CONFIG } from '../config/api';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -23,7 +22,7 @@ class GrowthStageService {
                 formData.append('file', blob, fileName);
             } else {
                 // For mobile
-                formData.append('file', new File(imageUri));
+                formData.append('file', { uri: imageUri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(
@@ -65,7 +64,7 @@ class GrowthStageService {
                 const blob = await fileResponse.blob();
                 formData.append('file', blob, fileName);
             } else {
-                formData.append('file', new File(imageUri));
+                formData.append('file', { uri: imageUri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(

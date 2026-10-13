@@ -1,0 +1,51 @@
+{
+  "trained_at": "2026-08-29T17:30:20",
+  "tensorflow_version": "2.20.0",
+  "model": "severity",
+  "class_names": [
+    "mild",
+    "moderate",
+    "severe"
+  ],
+  "graded_originals": 427,
+  "grade_mix_originals": {
+    "mild": 109,
+    "moderate": 140,
+    "severe": 178
+  },
+  "train_files": 18414,
+  "validation_files": 43,
+  "train_counts": {
+    "mild": 3996,
+    "moderate": 6048,
+    "severe": 8370
+  },
+  "class_weight": {
+    "mild": 1.536,
+    "moderate": 1.0149,
+    "severe": 0.7333
+  },
+  "input_range": "0-255 raw RGB; scaling is inside the model",
+  "smoke_test": false,
+  "reportable": true,
+  "best_val_loss": 1.0513945817947388,
+  "best_val_accuracy": 0.6279069781303406,
+  "args": {
+    "data": "/content/data/split_augmented",
+    "labels": "/content/data/severity_labels.csv",
+    "out": "/content/drive/MyDrive/orchid_models",
+    "epochs": 12,
+    "fine_tune_epochs": 10,
+    "batch_size": 32,
+    "lr": 0.001,
+    "fine_tune_lr": 1e-05,
+    "fine_tune_layers": 30,
+    "dropout": 0.3,
+    "patience": 5,
+    "seed": 42,
+    "min_per_class": 15,
+    "no_fine_tune": true,
+    "check": false,
+    "smoke_test": false
+  }
+}

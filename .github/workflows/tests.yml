@@ -1,0 +1,85 @@
+name: tests
+
+# Runs on every pull request into main, and on pushes to any component branch.
+#
+# The point is to catch a break before it reaches the shared backend. Four
+# students push to this repository and one hosted server runs the result, so a
+# merge that breaks an import takes the whole API down for everyone - which has
+# already happened once, from a path hardcoded to one machine.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: backend logic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-ci.txt
+
+      - name: Install test dependencies
+        working-directory: backend
+        run: pip install -q -r requirements-ci.txt
+
+      - name: Run the pure-logic tests
+        working-directory: backend
+        # Only the tests that need nothing outside this checkout. The other two
+        # files talk to the live Firebase and a running API, so they cannot pass
+        # on a runner and are covered by the integration job below instead.
+        run: |
+          pytest -q --no-header \
+            tests/test_freshness.py \
+            tests/test_farm_clock.py \
+            tests/test_auto_switch.py \
+            tests/test_alarm_repeat.py
+
+  deps:
+    name: dependencies resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check requirements.txt can actually be installed
+        working-directory: backend
+        # --dry-run resolves the whole graph without downloading gigabytes.
+        # This is the check that would have caught tensorflow being pinned to
+        # both 2.16.2 and 2.20.0, which made a fresh install fail on the server.
+        run: pip install --dry-run --quiet --report /dev/null -r requirements.txt
+
+  integration:
+    name: integration (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Never automatic. These tests write real commands to the real Firebase and
+    # expect a live API, so running them on every push would issue watering
+    # commands to actual hardware.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        working-directory: backend
+        run: pip install -q -r requirements-ci.txt
+      - name: Run integration tests
+        working-directory: backend
+        env:
+          ORCHID_API_BASE: ${{ secrets.ORCHID_API_BASE }}
+          ORCHID_API_KEY: ${{ secrets.ORCHID_API_KEY }}
+        run: pytest -q --no-header tests/test_command_status.py tests/test_e2e_pipeline.py

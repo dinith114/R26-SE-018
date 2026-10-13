@@ -1,0 +1,49 @@
+{
+  "trained_at": "2026-08-29T14:21:50",
+  "tensorflow_version": "2.20.0",
+  "class_names": [
+    "black_leaf_spot",
+    "healthy",
+    "phyllosticta_leaf_spot"
+  ],
+  "num_classes": 3,
+  "image_size": [
+    224,
+    224
+  ],
+  "input_range": "0-255 raw RGB; preprocess_input is inside the model",
+  "train_counts": {
+    "black_leaf_spot": 6588,
+    "healthy": 10368,
+    "phyllosticta_leaf_spot": 11826
+  },
+  "validation_counts": {
+    "black_leaf_spot": 15,
+    "healthy": 24,
+    "phyllosticta_leaf_spot": 28
+  },
+  "class_weight": {
+    "black_leaf_spot": 1.4563,
+    "healthy": 0.9253,
+    "phyllosticta_leaf_spot": 0.8113
+  },
+  "stage1_epochs_run": 16,
+  "total_epochs_run": 21,
+  "args": {
+    "data": "/content/data/split_augmented",
+    "out": "/content/drive/MyDrive/orchid_models",
+    "epochs": 25,
+    "fine_tune_epochs": 12,
+    "batch_size": 32,
+    "lr": 0.001,
+    "fine_tune_lr": 1e-05,
+    "fine_tune_layers": 30,
+    "dropout": 0.3,
+    "patience": 5,
+    "seed": 42,
+    "no_fine_tune": false,
+    "smoke_test": false
+  },
+  "best_val_loss": 0.4381973445415497,
+  "best_val_accuracy": 0.8805969953536987
+}
