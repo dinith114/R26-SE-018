@@ -13,13 +13,15 @@ import {
     Platform,
     Alert,
     Modal,
-    SafeAreaView,
     Share
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { ref, onValue } from 'firebase/database';
 import * as ImagePicker from 'expo-image-picker';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { API_CONFIG } from '../config/api';
+import { database } from '../config/firebase';
 import ScreenHeader from '../components/ScreenHeader';
 import BloomPredictionService from '../services/bloomPredictionService';
 
@@ -154,6 +156,10 @@ const GrowthStageScreen = ({ navigation }) => {
     const [bloomPrediction, setBloomPrediction] = useState(null);
     const [bloomLoading, setBloomLoading] = useState(false);
     const [bloomError, setBloomError] = useState('');
+    // Latest IoT readings from Firebase. A field keeps following the live
+    // sensor value until the user edits it; "Use sensor values" resets that.
+    const [sensorData, setSensorData] = useState(null);
+    const [manualFields, setManualFields] = useState({ temperature: false, humidity: false, light: false });
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const progressAnim = useRef(new Animated.Value(0)).current;
 
@@ -172,6 +178,40 @@ const GrowthStageScreen = ({ navigation }) => {
             }),
         ]).start();
     }, []);
+
+    // Subscribe to live sensor readings (same node HomeScreen uses)
+    useEffect(() => {
+        const unsub = onValue(ref(database, 'latest'), (snapshot) => {
+            const val = snapshot.val();
+            if (val) setSensorData(val);
+        });
+        return () => unsub();
+    }, []);
+
+    // -999 is the firmware's "sensor error" marker
+    const sensorValue = (value, decimals) =>
+        typeof value === 'number' && value !== -999 ? value.toFixed(decimals) : null;
+    const sensorTemperature = sensorValue(sensorData?.temperature, 1);
+    const sensorHumidity = sensorValue(sensorData?.humidity, 1);
+    const sensorLight = sensorValue(sensorData?.light, 0);
+    const hasSensorValues = Boolean(sensorTemperature || sensorHumidity || sensorLight);
+    const anyManual = manualFields.temperature || manualFields.humidity || manualFields.light;
+
+    // Keep fields the user hasn't touched in sync with the latest sensor values
+    useEffect(() => {
+        if (!manualFields.temperature && sensorTemperature !== null) setTemperature(sensorTemperature);
+        if (!manualFields.humidity && sensorHumidity !== null) setHumidity(sensorHumidity);
+        if (!manualFields.light && sensorLight !== null) setLightIntensity(sensorLight);
+    }, [sensorTemperature, sensorHumidity, sensorLight, manualFields]);
+
+    const editField = (field, setter) => (text) => {
+        setManualFields((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
+        setter(text);
+    };
+
+    const useSensorValues = () => {
+        setManualFields({ temperature: false, humidity: false, light: false });
+    };
 
     // Stages data
     const stages = [
@@ -254,8 +294,8 @@ const GrowthStageScreen = ({ navigation }) => {
         }
 
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
+            mediaTypes: ['images'],
+            allowsEditing: false,
             quality: 0.9,
         });
 
@@ -282,7 +322,7 @@ const GrowthStageScreen = ({ navigation }) => {
         }
 
         const result = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
+            allowsEditing: false,
             quality: 0.9,
         });
 
@@ -304,19 +344,13 @@ const GrowthStageScreen = ({ navigation }) => {
         try {
             const formData = new FormData();
             const fileName = uri.split('/').pop() || 'orchid.jpg';
-            const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-            const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
             if (Platform.OS === 'web') {
                 const fileResponse = await fetch(uri);
                 const blob = await fileResponse.blob();
                 formData.append('file', blob, fileName);
             } else {
-                formData.append('file', {
-                    uri: uri,
-                    name: fileName,
-                    type: mimeType,
-                });
+                formData.append('file', { uri: uri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(`${API_BASE_URL}/api/v1/growth/identify`, {
@@ -402,17 +436,21 @@ const GrowthStageScreen = ({ navigation }) => {
 
         const stageName = prediction.data?.stage_label || predictedStage.name;
         const confidence = prediction.data?.confidence || predictedStage.confidence || 0;
-        
+        const bloom = bloomPrediction?.data;
+        const bloomLines = bloom
+            ? `\n\n🌸 Bloom Prediction:\n⏳ Days until bloom: ${bloom.days_until_bloom}\n📅 Predicted bloom date: ${bloom.predicted_bloom_date}`
+            : '';
+
         const message = `🌺 Orchid Growth Stage Result:
         
 📸 Growth Stage: ${stageName}
 📊 Confidence: ${(confidence * 100).toFixed(1)}%
 
 🌿 Care Protocol:
-💧 Water: ${predictedCare.water || 'N/A'}
-☀️ Light: ${predictedCare.light || 'N/A'}
-🌡️ Temperature: ${predictedCare.temp || 'N/A'}
-🧪 Fertilizer: ${predictedCare.fert || 'N/A'}
+💧 Water: ${predictedCare.water || care.water || 'N/A'}
+☀️ Light: ${predictedCare.light || care.light || 'N/A'}
+🌡️ Temperature: ${predictedCare.temp || care.temp || 'N/A'}
+🧪 Fertilizer: ${predictedCare.fert || care.fert || 'N/A'}${bloomLines}
 
 Powered by AI-Powered Smart Orchid Care System 🌺`;
 
@@ -618,9 +656,6 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
                                     <Text style={styles.metaText}>Confidence</Text>
                                     {renderConfidenceBar(prediction.data?.confidence || 0)}
                                 </View>
-                                <Text style={styles.metaText}>
-                                    Source: {prediction.data?.inference_source === 'trained_model' ? 'ML model' : 'Fallback logic'}
-                                </Text>
                             </View>
                         )}
                     </View>
@@ -654,6 +689,111 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
                             })}
                         </View>
                     )}
+
+                    {/* Bloom Date Prediction */}
+                    <Text style={styles.sectionTitle}>
+                        <Ionicons name="calendar-outline" size={16} color={COLORS.primary} /> Bloom Date Prediction
+                    </Text>
+                    <View style={[styles.bloomCard, SHADOW.sm]}>
+                        <Text style={styles.bloomHint}>
+                            {selectedImage
+                                ? 'Growing conditions are filled from your sensors. Edit any value to override it.'
+                                : 'Upload an orchid photo above. Growing conditions are filled from your sensors and can be edited.'}
+                        </Text>
+
+                        <View style={styles.sensorStatusRow}>
+                            <View style={styles.sensorStatusLeft}>
+                                <Ionicons
+                                    name={hasSensorValues ? 'radio-outline' : 'cloud-offline-outline'}
+                                    size={14}
+                                    color={hasSensorValues ? COLORS.success : COLORS.textTertiary}
+                                />
+                                <Text style={[styles.sensorStatusText, hasSensorValues && { color: COLORS.success }]}>
+                                    {!hasSensorValues
+                                        ? 'No sensor data - enter values manually'
+                                        : anyManual ? 'Some values edited manually' : 'Live from sensors'}
+                                </Text>
+                            </View>
+                            {hasSensorValues && anyManual && (
+                                <TouchableOpacity onPress={useSensorValues} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                    <Text style={styles.sensorResetText}>Use sensor values</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+
+                        <View style={styles.bloomInputRow}>
+                            <View style={styles.bloomInputGroup}>
+                                <Text style={styles.bloomInputLabel}>Temp (°C)</Text>
+                                <TextInput
+                                    style={[styles.bloomInput, manualFields.temperature && styles.bloomInputManual]}
+                                    keyboardType="numeric"
+                                    placeholder="27"
+                                    placeholderTextColor={COLORS.textTertiary}
+                                    value={temperature}
+                                    onChangeText={editField('temperature', setTemperature)}
+                                />
+                            </View>
+                            <View style={styles.bloomInputGroup}>
+                                <Text style={styles.bloomInputLabel}>Humidity (%)</Text>
+                                <TextInput
+                                    style={[styles.bloomInput, manualFields.humidity && styles.bloomInputManual]}
+                                    keyboardType="numeric"
+                                    placeholder="77"
+                                    placeholderTextColor={COLORS.textTertiary}
+                                    value={humidity}
+                                    onChangeText={editField('humidity', setHumidity)}
+                                />
+                            </View>
+                            <View style={styles.bloomInputGroup}>
+                                <Text style={styles.bloomInputLabel}>Light (lux)</Text>
+                                <TextInput
+                                    style={[styles.bloomInput, manualFields.light && styles.bloomInputManual]}
+                                    keyboardType="numeric"
+                                    placeholder="35728"
+                                    placeholderTextColor={COLORS.textTertiary}
+                                    value={lightIntensity}
+                                    onChangeText={editField('light', setLightIntensity)}
+                                />
+                            </View>
+                        </View>
+
+                        <TouchableOpacity
+                            style={[styles.bloomButton, !canPredictBloom && styles.bloomButtonDisabled]}
+                            onPress={predictBloom}
+                            disabled={!canPredictBloom || bloomLoading}
+                            activeOpacity={0.8}
+                        >
+                            {bloomLoading ? (
+                                <ActivityIndicator color="#FFF" />
+                            ) : (
+                                <>
+                                    <Ionicons name="flower-outline" size={18} color="#FFF" />
+                                    <Text style={styles.bloomButtonText}>Predict Bloom Date</Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
+
+                        {bloomError ? <Text style={styles.bloomErrorText}>{bloomError}</Text> : null}
+
+                        {bloomPrediction?.data && (
+                            <View style={styles.bloomResult}>
+                                <View style={styles.bloomResultRow}>
+                                    <Ionicons name="hourglass-outline" size={18} color={COLORS.primary} />
+                                    <Text style={styles.bloomResultLabel}>Days until bloom</Text>
+                                    <Text style={styles.bloomResultValue}>
+                                        {bloomPrediction.data.days_until_bloom}
+                                    </Text>
+                                </View>
+                                <View style={styles.bloomResultRow}>
+                                    <Ionicons name="calendar" size={18} color={COLORS.primary} />
+                                    <Text style={styles.bloomResultLabel}>Predicted bloom date</Text>
+                                    <Text style={styles.bloomResultValue}>
+                                        {bloomPrediction.data.predicted_bloom_date}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+                    </View>
 
                     {/* Care Protocol */}
                     <Text style={styles.sectionTitle}>
@@ -696,91 +836,6 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
                                 <Text style={[styles.careValue, { color: row.color }]}>{row.value}</Text>
                             </View>
                         ))}
-                    </View>
-
-                    {/* Bloom Date Prediction */}
-                    <Text style={styles.sectionTitle}>
-                        <Ionicons name="calendar-outline" size={16} color={COLORS.primary} /> Bloom Date Prediction
-                    </Text>
-                    <View style={[styles.bloomCard, SHADOW.sm]}>
-                        <Text style={styles.bloomHint}>
-                            {selectedImage
-                                ? 'Enter the growing conditions at the time of the photo above to predict a bloom date.'
-                                : 'Upload an orchid photo above, then enter the growing conditions to predict a bloom date.'}
-                        </Text>
-
-                        <View style={styles.bloomInputRow}>
-                            <View style={styles.bloomInputGroup}>
-                                <Text style={styles.bloomInputLabel}>Temp (°C)</Text>
-                                <TextInput
-                                    style={styles.bloomInput}
-                                    keyboardType="numeric"
-                                    placeholder="27"
-                                    placeholderTextColor={COLORS.textTertiary}
-                                    value={temperature}
-                                    onChangeText={setTemperature}
-                                />
-                            </View>
-                            <View style={styles.bloomInputGroup}>
-                                <Text style={styles.bloomInputLabel}>Humidity (%)</Text>
-                                <TextInput
-                                    style={styles.bloomInput}
-                                    keyboardType="numeric"
-                                    placeholder="77"
-                                    placeholderTextColor={COLORS.textTertiary}
-                                    value={humidity}
-                                    onChangeText={setHumidity}
-                                />
-                            </View>
-                            <View style={styles.bloomInputGroup}>
-                                <Text style={styles.bloomInputLabel}>Light (lux)</Text>
-                                <TextInput
-                                    style={styles.bloomInput}
-                                    keyboardType="numeric"
-                                    placeholder="35728"
-                                    placeholderTextColor={COLORS.textTertiary}
-                                    value={lightIntensity}
-                                    onChangeText={setLightIntensity}
-                                />
-                            </View>
-                        </View>
-
-                        <TouchableOpacity
-                            style={[styles.bloomButton, !canPredictBloom && styles.bloomButtonDisabled]}
-                            onPress={predictBloom}
-                            disabled={!canPredictBloom || bloomLoading}
-                            activeOpacity={0.8}
-                        >
-                            {bloomLoading ? (
-                                <ActivityIndicator color="#FFF" />
-                            ) : (
-                                <>
-                                    <Ionicons name="flower-outline" size={18} color="#FFF" />
-                                    <Text style={styles.bloomButtonText}>Predict Bloom Date</Text>
-                                </>
-                            )}
-                        </TouchableOpacity>
-
-                        {bloomError ? <Text style={styles.bloomErrorText}>{bloomError}</Text> : null}
-
-                        {bloomPrediction?.data && (
-                            <View style={styles.bloomResult}>
-                                <View style={styles.bloomResultRow}>
-                                    <Ionicons name="hourglass-outline" size={18} color={COLORS.primary} />
-                                    <Text style={styles.bloomResultLabel}>Days until bloom</Text>
-                                    <Text style={styles.bloomResultValue}>
-                                        {bloomPrediction.data.days_until_bloom}
-                                    </Text>
-                                </View>
-                                <View style={styles.bloomResultRow}>
-                                    <Ionicons name="calendar" size={18} color={COLORS.primary} />
-                                    <Text style={styles.bloomResultLabel}>Predicted bloom date</Text>
-                                    <Text style={styles.bloomResultValue}>
-                                        {bloomPrediction.data.predicted_bloom_date}
-                                    </Text>
-                                </View>
-                            </View>
-                        )}
                     </View>
 
                     {/* Share Results Button */}
@@ -1229,6 +1284,31 @@ const styles = StyleSheet.create({
         paddingVertical: SPACE.sm,
         color: COLORS.text,
         fontSize: FONT.sm,
+    },
+    bloomInputManual: {
+        borderColor: COLORS.warning,
+    },
+    sensorStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: SPACE.md,
+    },
+    sensorStatusLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: SPACE.xs,
+        flexShrink: 1,
+    },
+    sensorStatusText: {
+        color: COLORS.textTertiary,
+        fontSize: FONT.xs,
+        fontWeight: '600',
+    },
+    sensorResetText: {
+        color: COLORS.primary,
+        fontSize: FONT.xs,
+        fontWeight: '700',
     },
     bloomButton: {
         flexDirection: 'row',

@@ -3,7 +3,7 @@ Model architecture for growth stage classification.
 """
 import tensorflow as tf
 from tensorflow.keras import layers, models
-from tensorflow.keras.applications import EfficientNetB3, MobileNetV2, ResNet50
+from tensorflow.keras.applications import EfficientNetB0, MobileNetV2, ResNet50
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from typing import Tuple, Optional
@@ -16,7 +16,13 @@ def create_base_model(model_type: str = 'efficientnet',
     Create base model with transfer learning.
     """
     if model_type == 'efficientnet':
-        base_model = EfficientNetB3(
+        # B0 (not B3): B3's ImageNet weights are tuned for 300x300 input, but
+        # this pipeline trains/serves at 224x224 (MODEL_CONFIG['target_size']).
+        # Feeding 224x224 into B3 works but wastes its extra capacity outside
+        # its intended resolution and made overfitting worse on this dataset's
+        # ~2000 images/class; B0 is natively a 224x224 model with ~4x fewer
+        # params, matching bloom_prediction/src/model.py's choice too.
+        base_model = EfficientNetB0(
             weights='imagenet',
             include_top=False,
             input_shape=input_shape

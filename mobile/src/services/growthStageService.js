@@ -14,8 +14,6 @@ class GrowthStageService {
         try {
             const formData = new FormData();
             const fileName = imageUri.split('/').pop() || 'orchid.jpg';
-            const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-            const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
             // For web
             if (Platform.OS === 'web') {
@@ -24,11 +22,7 @@ class GrowthStageService {
                 formData.append('file', blob, fileName);
             } else {
                 // For mobile
-                formData.append('file', {
-                    uri: imageUri,
-                    name: fileName,
-                    type: mimeType,
-                });
+                formData.append('file', { uri: imageUri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(
@@ -64,19 +58,13 @@ class GrowthStageService {
         try {
             const formData = new FormData();
             const fileName = imageUri.split('/').pop() || 'orchid.jpg';
-            const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-            const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
             if (Platform.OS === 'web') {
                 const fileResponse = await fetch(imageUri);
                 const blob = await fileResponse.blob();
                 formData.append('file', blob, fileName);
             } else {
-                formData.append('file', {
-                    uri: imageUri,
-                    name: fileName,
-                    type: mimeType,
-                });
+                formData.append('file', { uri: imageUri, name: fileName, type: fileName.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg' });
             }
 
             const response = await fetch(
@@ -172,7 +160,7 @@ class GrowthStageService {
             }
 
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ['images'],
                 allowsEditing: true,
                 quality: 0.9,
             });
