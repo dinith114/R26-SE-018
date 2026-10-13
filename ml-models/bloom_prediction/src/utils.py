@@ -8,7 +8,6 @@ from typing import Any, Dict, Union
 
 import joblib
 import numpy as np
-import tensorflow as tf
 from PIL import Image
 
 from .config import MODEL_CONFIG
@@ -97,6 +96,11 @@ def load_model_artifacts(model_dir: Path) -> tuple:
     """
     Load the trained model, tabular feature scaler, and training config.
     """
+    # Deferred so this module (and preprocess_pil_image/compute_bloom_date,
+    # which don't need TensorFlow) stays importable without it - only actual
+    # model loading needs it.
+    import tensorflow as tf
+
     model_dir = Path(model_dir)
 
     # compile=False: inference only needs the architecture + weights, not the

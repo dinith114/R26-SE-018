@@ -3,6 +3,7 @@
  * Component 2: Orchid Growth Stage Recognition & Bloom Prediction
  */
 import { Platform } from 'react-native';
+import { File } from 'expo-file-system';
 import { API_CONFIG } from '../config/api';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -14,8 +15,6 @@ class GrowthStageService {
         try {
             const formData = new FormData();
             const fileName = imageUri.split('/').pop() || 'orchid.jpg';
-            const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-            const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
             // For web
             if (Platform.OS === 'web') {
@@ -24,11 +23,7 @@ class GrowthStageService {
                 formData.append('file', blob, fileName);
             } else {
                 // For mobile
-                formData.append('file', {
-                    uri: imageUri,
-                    name: fileName,
-                    type: mimeType,
-                });
+                formData.append('file', new File(imageUri));
             }
 
             const response = await fetch(
@@ -64,19 +59,13 @@ class GrowthStageService {
         try {
             const formData = new FormData();
             const fileName = imageUri.split('/').pop() || 'orchid.jpg';
-            const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-            const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
             if (Platform.OS === 'web') {
                 const fileResponse = await fetch(imageUri);
                 const blob = await fileResponse.blob();
                 formData.append('file', blob, fileName);
             } else {
-                formData.append('file', {
-                    uri: imageUri,
-                    name: fileName,
-                    type: mimeType,
-                });
+                formData.append('file', new File(imageUri));
             }
 
             const response = await fetch(
@@ -172,7 +161,7 @@ class GrowthStageService {
             }
 
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ['images'],
                 allowsEditing: true,
                 quality: 0.9,
             });

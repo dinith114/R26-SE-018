@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { File } from 'expo-file-system';
 
 /**
  * API Client Service
@@ -27,15 +28,7 @@ export const assessSuitability = async (imageUri, traits = {}) => {
     const blob = await response.blob();
     formData.append('image', blob, 'photo.jpg');
   } else {
-    const filename = imageUri.split('/').pop() || 'photo.jpg';
-    const match = /\.(\w+)$/.exec(filename);
-    const type = match ? `image/${match[1]}` : 'image/jpeg';
-
-    formData.append('image', {
-      uri: imageUri,
-      name: filename,
-      type: type,
-    });
+    formData.append('image', new File(imageUri));
   }
 
   // Append traits

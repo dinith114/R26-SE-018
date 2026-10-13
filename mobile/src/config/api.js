@@ -9,7 +9,7 @@ const ENV = {
     DEV: {
         BASE_URL: 'http://localhost:8000',        // For iOS simulator
         ANDROID_URL: 'http://10.0.2.2:8000',      // For Android emulator
-        LOCAL_URL: 'http://192.168.1.100:8000'    // Replace with your local IP
+        LOCAL_URL: 'http://192.168.113.51:8000'      // Your PC's Wi-Fi IP (ipconfig)
     },
     PROD: {
         BASE_URL: 'https://your-api-domain.com'   // For production
@@ -18,18 +18,26 @@ const ENV = {
 
 // Detect platform
 const isAndroid = Platform.OS === 'android';
+const isWeb = Platform.OS === 'web';
 
-// Choose base URL
-// react-native-device-info isn't a project dependency, so emulator vs. physical
-// device can't be auto-detected. Defaults to the Android emulator address;
-// switch to ENV.DEV.LOCAL_URL manually when testing on a physical Android device.
+// react-native-device-info isn't a project dependency, so an Android
+// emulator vs. a physical Android device can't be auto-detected - set this
+// manually if you switch to emulator testing.
+// true:  running in the Android emulator on this machine (uses ENV.DEV.ANDROID_URL)
+// false: running via Expo Go on a real phone (uses ENV.DEV.LOCAL_URL)
+const USE_ANDROID_EMULATOR = false;
+
+// Choose base URL. Web always uses localhost since the browser runs on the
+// same machine as the backend; native (phone) needs the PC's LAN IP because
+// "localhost" on the phone means the phone itself, not this computer.
 let BASE_URL;
 if (__DEV__) {
-    if (isAndroid) {
+    if (isWeb) {
+        BASE_URL = ENV.DEV.BASE_URL;
+    } else if (isAndroid && USE_ANDROID_EMULATOR) {
         BASE_URL = ENV.DEV.ANDROID_URL;
     } else {
-        // iOS or web
-        BASE_URL = ENV.DEV.BASE_URL;
+        BASE_URL = ENV.DEV.LOCAL_URL;
     }
 } else {
     BASE_URL = ENV.PROD.BASE_URL;

@@ -89,8 +89,11 @@ const SplashScreen = ({ onFinish }) => {
           </Animated.View>
         </Animated.View>
 
-        {/* Stem */}
-        <Animated.View style={[styles.stem, { height: stemH, opacity: stemOpacity }]} />
+        {/* Stem — opacity (native driver) and height (JS driver) must live on
+            separate views, or the native animated module rejects the mix */}
+        <Animated.View style={{ opacity: stemOpacity }}>
+          <Animated.View style={[styles.stem, { height: stemH }]} />
+        </Animated.View>
       </View>
 
       {/* Title */}

@@ -3,6 +3,7 @@
  * Component 2: Orchid Growth Stage Recognition & Bloom Prediction
  */
 import { Platform } from 'react-native';
+import { File } from 'expo-file-system';
 import { API_CONFIG } from '../config/api';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -14,17 +15,11 @@ class BloomPredictionService {
     static _buildFormData(imageUri, { temperature, humidity, lightIntensity, captureDate }) {
         const formData = new FormData();
         const fileName = imageUri.split('/').pop() || 'orchid.jpg';
-        const extension = (fileName.split('.').pop() || 'jpg').toLowerCase();
-        const mimeType = extension === 'png' ? 'image/png' : 'image/jpeg';
 
         if (Platform.OS === 'web') {
             // Web needs an async blob fetch, so the caller appends 'file' itself after this returns
         } else {
-            formData.append('file', {
-                uri: imageUri,
-                name: fileName,
-                type: mimeType,
-            });
+            formData.append('file', new File(imageUri));
         }
 
         formData.append('temperature', String(temperature));
@@ -146,7 +141,7 @@ class BloomPredictionService {
             }
 
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                mediaTypes: ['images'],
                 allowsEditing: true,
                 quality: 0.9,
             });

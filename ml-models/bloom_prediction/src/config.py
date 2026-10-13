@@ -20,9 +20,12 @@ MODEL_CONFIG = {
     'learning_rate': 0.001,
     'batch_size': 16,
     'epochs': 50,
-    'patience': 10,
+    'patience': 5,
     'target_size': (224, 224),
-    'validation_split': 0.2,
+    # Train/validation/test split ratios (must sum to 1.0). Split by row
+    # (see preprocess.split_dataset), not grouped by Plant ID.
+    'validation_split': 0.15,
+    'test_split': 0.15,
 }
 
 # Sensor/environment columns read from the .xlsx logs, in the exact order fed
