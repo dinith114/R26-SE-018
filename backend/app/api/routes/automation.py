@@ -50,7 +50,7 @@ from app.api.routes.smart_care_v2 import (
     second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
-    _command_refusal, SETUP_HINT, settle_pending_feeds, _relay_channel,
+    _command_refusal, SETUP_HINT, settle_pending_feeds, settle_pending_acks, _relay_channel,
 )
 from app.services import fallback as _fallback
 from app.api.deps import require_auth, require_role
@@ -1074,6 +1074,12 @@ def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False
                              f"controller did not run that watering ({u['outcome']}). The section is "
                              f"due again and the next watering will carry it.",
                              u["houseId"], u["sectionId"])
+            # And every run, automatic ones included, learns from the same acks
+            # whether the master carried it out - nothing else confirms those.
+            try:
+                settle_pending_acks()
+            except Exception as e:           # cosmetic: never stop the clock for it
+                print(f"[ACKS] settle skipped: {e}")
         # Only on a farm that actually downloaded: a failed fetch is not an
         # empty farm, and treating it as one wiped every standing fault.
         if raw_houses is None:

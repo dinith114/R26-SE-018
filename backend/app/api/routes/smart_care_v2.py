@@ -2221,6 +2221,35 @@ def settle_pending_feeds() -> List[dict]:
     return undone
 
 
+PENDING_ACK_MAX_MS = 24 * 3600_000
+
+
+def settle_pending_acks() -> int:
+    """Confirm history events from the master's own acknowledgement.
+
+    /farm/pendingAcks holds every logged run still waiting for its answer
+    (see _log_event). For each one the master has acked, the event is stamped -
+    confirmed if water moved, the refusal if not - and the entry dropped. An
+    entry nobody answers for a day is let go and the event stays "sent": a lost
+    ack is not evidence that the run happened. Returns how many were answered."""
+    answered = 0
+    pend = _fb_get("/farm/pendingAcks.json") or {}
+    for cid, p in pend.items():
+        if not isinstance(p, dict):
+            _fb_delete(f"/farm/pendingAcks/{cid}.json")
+            continue
+        ack = _fb_get(f"/farm/masters/{p.get('master')}/acks/{cid}.json") or {}
+        if ack.get("id") != cid:
+            if _server_now_ms() - float(p.get("issuedAtMs") or 0) > PENDING_ACK_MAX_MS:
+                _fb_delete(f"/farm/pendingAcks/{cid}.json")
+            continue
+        # Writes nothing if the phone already stamped it from command-status.
+        _stamp_event_outcome(p.get("houseId"), p.get("sectionId"), cid, ack)
+        _fb_delete(f"/farm/pendingAcks/{cid}.json")
+        answered += 1
+    return answered
+
+
 def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict) -> None:
     """Write what the controller did onto the event that asked for it.
 
@@ -2275,6 +2304,24 @@ def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optio
     base = f"/farm/events/{house_id}/{section_id}"
     if not _fb_put(f"{base}/{key}.json", ev):
         return None
+
+    # WAIT FOR THE MASTER'S ANSWER, whoever started the run.
+    #
+    # The only thing that ever confirmed an event was the command-status poll,
+    # and only the phone polls - for the manual run it is watching. On 14 Oct the
+    # engine filled a tray by itself, the master acked "done, 15 s", and the
+    # history said "sent" for good. settle_pending_acks() reads this list on the
+    # engine's master-queue pass (every 5 min) and stamps the event from the ack.
+    cid = fields.get("commandId")
+    if cid and fields.get("outcome") is None:
+        try:
+            master = _master_for_house(house_id)
+            if master:
+                _fb_put(f"/farm/pendingAcks/{cid}.json",
+                        {"houseId": house_id, "sectionId": section_id, "master": master,
+                         "issuedAtMs": int(_server_now_ms())})
+        except Exception:
+            pass      # the run is logged; a confirmation that never comes is only cosmetic
 
     # Prune oldest beyond EVENT_KEEP. `shallow=true` returns keys only, so this
     # costs a few hundred bytes rather than the whole log.
