@@ -52,16 +52,26 @@ export const getOverview = () => req('/overview');
 export const getHouse    = (h) => req(`/houses/${h}`);
 export const getModelInfo= () => req('/model-info');
 export const getAlerts   = () => req('/alerts');
-export const getHistory  = (h, s, points = 48, hours = 24) =>
-  req(`/houses/${h}/sections/${s}/history?points=${points}&hours=${hours}`);
+/** The chart's points for [start, end] (epoch ms). The ranges are in
+ *  services/historyRange.js, which works them out in farm time. */
+export const getHistory  = (h, s, points, start, end) =>
+  req(`/houses/${h}/sections/${s}/history?points=${points}&start=${start}&end=${end}`);
 
-/** Ranges offered in the chart's dropdown. */
-export const HISTORY_RANGES = [
-  { label: 'Last 6 hours', hours: 6,   points: 36 },
-  { label: 'Last 24 hours', hours: 24, points: 48 },
-  { label: 'Last 3 days',  hours: 72,  points: 60 },
-  { label: 'Last 7 days',  hours: 168, points: 70 },
-];
+const timelineQuery = ({ start, end, before, limit = 100, types = 'reading,water,feed,tray' }) =>
+  `start=${start}&end=${end}&limit=${limit}&types=${types}` + (before ? `&before=${before}` : '');
+
+/**
+ * Everything recorded in [start, end]: every reading, watering, feed and tray
+ * fill, newest first, a page at a time. Pass the previous page's `nextBefore`
+ * as `before` for the next one. The first page also carries the counts.
+ */
+export const getTimeline = (h, s, opts = {}) =>
+  req(`/houses/${h}/sections/${s}/timeline?${timelineQuery(opts)}`);
+
+/** A download link for the range as a CSV file, good for 15 minutes. */
+export const exportTimeline = (h, s, { start, end, types }) =>
+  req(`/houses/${h}/sections/${s}/timeline/export`,
+      { method: 'POST', body: JSON.stringify({ start, end, types }) });
 
 /* ── rename (name only — never touches other settings) ── */
 /**
