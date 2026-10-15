@@ -486,7 +486,13 @@ export default function FarmDashboardScreen({ navigation }) {
               // isFault, not !trusted: an estimated zone carries trusted:false
               // because it is not a measurement, and counting those made a
               // correctly working house report "4 not reporting".
-              const bad  = secs.filter(z => isFault(z.freshness)).length;
+              /* A section with no board is not "not reporting": there is
+                 nothing there to report. House "1" read "4 not reporting" while
+                 the status line above said 3 for the farm (15 Oct), because
+                 isFault counts 'nonode' and the Needs-you list rightly does not. */
+              const bad  = secs.filter(z => isFault(z.freshness)
+                                         && z.freshness?.state !== 'nonode').length;
+              const bare = secs.filter(z => z.freshness?.state === 'nonode').length;
               const est  = secs.filter(z => z.freshness?.state === 'estimated').length;
               const need = secs.filter(z => z.tray?.status === 'fill').length;
 
@@ -607,6 +613,7 @@ export default function FarmDashboardScreen({ navigation }) {
                       const bits = [];
                       if (bad)  bits.push(`${bad} not reporting`);
                       if (need) bits.push(`${need} need water`);
+                      if (bare) bits.push(`${bare} without a sensor`);
                       // Stated, but as a fact rather than a problem - and only
                       // when there is nothing wrong to say instead.
                       if (!bits.length && est) return `${est} estimated, the rest are fine`;
