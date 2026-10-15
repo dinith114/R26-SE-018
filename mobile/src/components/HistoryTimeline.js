@@ -23,7 +23,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
 import { getTimeline, exportTimeline, BASE_URL } from '../services/careV2';
 import {
-  HISTORY_TYPES, typesFor, groupByDay, clockOf, spanDays, MAX_EXPORT_DAYS,
+  HISTORY_TYPES, typesFor, groupByDay, clockOf, spanDays, localStamp, MAX_EXPORT_DAYS,
 } from '../services/historyRange';
 
 const PAGE = 100;
@@ -186,24 +186,25 @@ export default function HistoryTimeline({ houseId, sectionId, win, onToast }) {
       <View style={s.lastFed}>
         <Ionicons name="flask" size={14} color={COLORS.fertilizer} />
         <Text style={s.lastFedTxt}>
-          Last fed in this range: <Text style={s.lastFedV}>{counts?.lastFed || 'not in this range'}</Text>
+          Last fed: <Text style={s.lastFedV}>
+            {counts?.lastFed ? localStamp(counts.lastFed) : 'not in this range'}
+          </Text>
         </Text>
       </View>
 
-      {/* Filter by type. */}
+      {/* Filter by type: one row of five equal parts, so no label sizes itself. */}
       <View style={s.chips} accessibilityRole="tablist">
         {HISTORY_TYPES.map((t) => {
           const on = t.key === typeKey;
           return (
             <TouchableOpacity key={t.key}
-              style={[s.chip, on && s.chipOn,
-                      { minWidth: Math.ceil(t.label.length * FONT.sm * FONT_SCALE * 0.66) + 18 }]}
+              style={[s.chip, on && s.chipOn]}
               onPress={() => setTypeKey(t.key)}
               activeOpacity={0.7}
               accessibilityRole="tab"
               accessibilityState={{ selected: on }}
               accessibilityLabel={`Show ${t.label.toLowerCase()}`}>
-              <Text style={[s.chipTxt, on && s.chipTxtOn]} maxFontSizeMultiplier={1.3}>{t.label}</Text>
+              <Text style={[s.chipTxt, on && s.chipTxtOn]} maxFontSizeMultiplier={1.15}>{t.label}</Text>
             </TouchableOpacity>
           );
         })}
@@ -301,12 +302,12 @@ const s = StyleSheet.create({
   lastFedTxt: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm },
   lastFedV: { color: COLORS.text, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
-  chips:  { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm,
+  chips:  { flexDirection: 'row', padding: 3, borderRadius: RADIUS.full,
+            backgroundColor: COLORS.bgCard, borderWidth: 1, borderColor: COLORS.border,
             marginTop: SPACE.lg, marginBottom: SPACE.md },
-  chip:   { flexGrow: 1, alignItems: 'center', paddingVertical: 7, paddingHorizontal: SPACE.sm,
-            borderRadius: RADIUS.full, backgroundColor: COLORS.bgCard,
-            borderWidth: 1, borderColor: COLORS.border },
-  chipOn: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  chip:   { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 36,
+            paddingHorizontal: 2, borderRadius: RADIUS.full },
+  chipOn: { backgroundColor: COLORS.primary },
   chipTxt: { alignSelf: 'stretch', textAlign: 'center',
              color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700' },
   chipTxtOn: { color: COLORS.textInverse },

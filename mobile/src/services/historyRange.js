@@ -91,10 +91,19 @@ export function rangeWindow(choice, now) {
   return { start: now - hours * 3600000, end: now, label: c.label, live: true };
 }
 
-/** "14 Oct" or "10 Oct - 14 Oct". */
+/** "14 Oct", "10-14 Oct", or "28 Sep - 3 Oct". Short enough for a button. */
 export function customLabel(from, to) {
-  const one = (ymd) => { const [, m, d] = ymd.split('-').map(Number); return `${d} ${MONTHS[m - 1]}`; };
-  return from === to ? one(from) : `${one(from)} - ${one(to)}`;
+  const [, m1, d1] = from.split('-').map(Number);
+  const [, m2, d2] = to.split('-').map(Number);
+  if (from === to) return `${d1} ${MONTHS[m1 - 1]}`;
+  if (m1 === m2) return `${d1}-${d2} ${MONTHS[m2 - 1]}`;
+  return `${d1} ${MONTHS[m1 - 1]} - ${d2} ${MONTHS[m2 - 1]}`;
+}
+
+/** "Wed 14 Oct 08:55" out of the server's farm-time "2026-10-14 08:55". */
+export function localStamp(local) {
+  if (typeof local !== 'string' || local.length < 16) return '';
+  return `${dayTitle(local.slice(0, 10))} ${local.slice(11, 16)}`;
 }
 
 /** How many points the chart asks for: enough to show a day's shape, few

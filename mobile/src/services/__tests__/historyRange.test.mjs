@@ -47,12 +47,19 @@ test('a custom range covers whole farm days and never runs past now', () => {
   assert.equal(w.start, hr.farmMidnight('2026-10-10'));
   assert.equal(w.end, hr.farmMidnight('2026-10-13') - 1);
   assert.equal(hr.spanDays(w), 3);
-  assert.equal(w.label, '10 Oct - 12 Oct');
+  assert.equal(w.label, '10-12 Oct');
   const upToToday = hr.rangeWindow({ kind: 'custom', from: '2026-10-15', to: '2026-10-15' }, NOW);
   assert.equal(upToToday.end, NOW);
   assert.equal(upToToday.label, '15 Oct');
   const reversed = hr.rangeWindow({ kind: 'custom', from: '2026-10-12', to: '2026-10-10' }, NOW);
   assert.equal(reversed.start, w.start);
+});
+
+test('labels stay short enough for a button', () => {
+  assert.equal(hr.customLabel('2026-09-28', '2026-10-03'), '28 Sep - 3 Oct');
+  assert.equal(hr.customLabel('2026-10-14', '2026-10-14'), '14 Oct');
+  assert.equal(hr.localStamp('2026-10-14 08:55'), 'Wed 14 Oct 08:55');
+  assert.equal(hr.localStamp(null), '');
 });
 
 test('timeline items group into days in the order they came', () => {
