@@ -161,6 +161,9 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Team" component={TeamGuarded} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        {/* The Growth screen again, pushed over a section to check its stage
+            with a photo, so Back returns to that section. */}
+        <Stack.Screen name="GrowthCheck" component={GrowthStageScreen} />
         <Stack.Screen name="FarmDashboard" component={FarmDashboardScreen} />
         <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />
         <Stack.Screen name="Run" component={RunScreen} />

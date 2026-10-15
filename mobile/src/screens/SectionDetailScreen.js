@@ -29,10 +29,11 @@ import {
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
-  setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
+  setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus, setGrowthStage,
 } from '../services/careV2';
 import { sectionIssues, farmClock } from '../services/deviceHealth';
 import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
+import { FEED_STAGES, isFeedStage } from '../services/growthStage';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -335,6 +336,28 @@ export default function SectionDetailScreen({ route, navigation }) {
   // rolls back if the write fails, because the node itself takes up to one full
   // interval to actually adopt the new value and we do not want the UI to look
   // frozen for five minutes.
+  /* Growth stage: by hand from the sheet, or from a photo on the Growth screen
+     (which saves it itself and comes back here). The server dates it and works
+     the plant food out again, so the new food shows at once. */
+  const [savingStage, setSavingStage] = useState(false);
+  const applyStage = async (stage) => {
+    setSheet(null);
+    setSavingStage(true);
+    try {
+      const r = await setGrowthStage(houseId, sectionId, { stage, by: 'manual' });
+      if (r?.fertilizer) setFert(r.fertilizer);
+      setToast({ text: `Growth stage set to ${stage}`, kind: 'success' });
+      load();
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setSavingStage(false);
+    }
+  };
+  const checkStageWithPhoto = () => navigation.navigate('GrowthCheck', {
+    forSection: { houseId, sectionId, name: meta.name || sectionId },
+  });
+
   const applyInterval = async (ms) => {
     if (!device) return;
     const prev = device.readIntervalMs;
@@ -729,6 +752,19 @@ export default function SectionDetailScreen({ route, navigation }) {
 
   // Skeleton, not a spinner: this screen takes a second or two to load and a
   // bare spinner on a blank page reads as a hang.
+  /* The stage in use and where it came from. The fertilizer record carries the
+     server's verdict; a section the engine has not planned yet only has what
+     was chosen when it was created. */
+  const fRec = fert || sec?.fertilizer || {};
+  const stageNow = isFeedStage(fRec.growthStage) ? fRec.growthStage
+                 : isFeedStage(meta.growthStage) ? meta.growthStage : 'Active';
+  const stageSource = fRec.growthSource
+    || (meta.growthStageBy === 'photo' ? 'photo' : meta.growthStageSetAt ? 'manual' : 'setup');
+  const stageNote = fRec.growthMessage
+    || (meta.growthStageSetAt ? null : 'Chosen when this section was set up, and not checked since.');
+  const stagePill = { photo: 'from a photo', manual: 'set by you', component2: 'camera',
+                      seasonal: 'a guess', setup: 'from setup' }[stageSource] || stageSource;
+
   if (loading) return (
     <View style={styles.container}>
       <ScreenHeader title="Loading…" subtitle={houseName || houseId}
@@ -1028,6 +1064,19 @@ export default function SectionDetailScreen({ route, navigation }) {
         onCancel={() => setSheet(null)}
         onConfirm={(key) =>
           applyOverride((CONTROL_OPTIONS.find((o) => o.key === key) || CONTROL_OPTIONS[0]).override)}
+      />
+
+      <SelectSheet
+        visible={sheet === 'stage'}
+        title="Growth stage"
+        subtitle="Decides which plant food this section gets. Not sure? Check with a photo instead."
+        options={FEED_STAGES.map((o) => ({ key: o.key, label: o.label, sub: o.sub }))}
+        value={stageNow}
+        confirmOnSelect={false}
+        confirmLabel="Save"
+        busy={savingStage}
+        onCancel={() => setSheet(null)}
+        onConfirm={(key) => applyStage(key)}
       />
 
       <SelectSheet
@@ -1593,10 +1642,20 @@ export default function SectionDetailScreen({ route, navigation }) {
                     </View>
                     <View style={styles.fertRow}>
                       <Text style={styles.fertKey}>Feeds every</Text>
-                      <Text style={styles.fertVal}>
-                        {every} days \u00b7 {f.growthStage || 'Active'}
-                      </Text>
+                      <Text style={styles.fertVal}>{every} days</Text>
                     </View>
+                    {/* The stage decides the food, so it can be changed right
+                        here as well as in Setup. */}
+                    <TouchableOpacity style={styles.fertRow} activeOpacity={0.7}
+                      disabled={!can('setGrowthStage')}
+                      onPress={can('setGrowthStage') ? () => setSheet('stage') : undefined}
+                      accessibilityRole={can('setGrowthStage') ? 'button' : undefined}
+                      accessibilityLabel={`Growth stage ${stageNow}${can('setGrowthStage') ? '. Tap to change.' : ''}`}>
+                      <Text style={styles.fertKey}>Growth stage</Text>
+                      <Text style={[styles.fertVal, can('setGrowthStage') && { color: COLORS.primary }]}>
+                        {stageNow}{can('setGrowthStage') ? '  \u203a' : ''}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
 
                   {/* How far through the feeding cycle this section is. A date
@@ -1821,6 +1880,44 @@ export default function SectionDetailScreen({ route, navigation }) {
                   <Text style={styles.viewOnly}>An admin can link one here.</Text>
                 )}
               </>
+            )}
+          </View>
+
+          {/* ── GROWTH STAGE ────────────────────────────────────────────
+              Decides which plant food the section gets. It used to be chosen
+              once, at setup, with no date and no way to change it (15 Oct). */}
+          <SectionHead icon="leaf-outline" title="Growth stage"
+            tint={COLORS.fertilizer} tintDim={COLORS.fertilizerDim}
+            status={stagePill}
+            statusTone={stageSource === 'seasonal' || stageSource === 'setup'
+                        ? COLORS.warning : COLORS.fertilizer} />
+          <View style={[styles.card, SHADOW.sm]}>
+            <View style={styles.stageTop}>
+              <Text style={styles.stageName}>{stageNow}</Text>
+              {savingStage && <ActivityIndicator color={COLORS.fertilizer} />}
+            </View>
+            <Text style={styles.stageFeed}>
+              {(FEED_STAGES.find((o) => o.key === stageNow) || FEED_STAGES[0]).sub}
+            </Text>
+            {!!stageNote && <Text style={styles.stageNote}>{stageNote}</Text>}
+            {can('setGrowthStage') ? (
+              <View style={styles.stageBtns}>
+                <TouchableOpacity style={[styles.stageBtn, styles.stageBtnMain]}
+                  onPress={checkStageWithPhoto} disabled={savingStage} activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Check the growth stage with a photo">
+                  <Ionicons name="camera-outline" size={17} color={COLORS.textInverse} />
+                  <Text style={[styles.stageBtnTxt, { color: COLORS.textInverse }]}>Check with a photo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.stageBtn}
+                  onPress={() => setSheet('stage')} disabled={savingStage} activeOpacity={0.8}
+                  accessibilityRole="button" accessibilityLabel="Choose the growth stage by hand">
+                  <Ionicons name="list-outline" size={17} color={COLORS.fertilizer} />
+                  <Text style={[styles.stageBtnTxt, { color: COLORS.fertilizer }]}>Choose</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={styles.stageNote}>Only an admin or operator can change it.</Text>
             )}
           </View>
 
@@ -2162,6 +2259,18 @@ const styles = StyleSheet.create({
   fertVal:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
   fertHint: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
               marginTop: SPACE.sm },
+  stageTop:  { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  stageName: { flex: 1, color: COLORS.fertilizer, fontSize: FONT.xl, fontWeight: '800' },
+  stageFeed: { color: COLORS.text, fontSize: FONT.sm, lineHeight: 19, marginTop: SPACE.xs },
+  stageNote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.sm },
+  stageBtns: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.md },
+  // Equal halves with the label stretched across: sized to its words, a label
+  // clips on a phone with Bold text on.
+  stageBtn:  { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+               gap: 6, minHeight: 44, paddingHorizontal: SPACE.sm, borderRadius: RADIUS.md,
+               borderWidth: 1.5, borderColor: COLORS.fertilizer },
+  stageBtnMain: { flex: 1.4, backgroundColor: COLORS.fertilizer },
+  stageBtnTxt:  { flexShrink: 1, fontSize: FONT.sm, fontWeight: '800' },
   wLbl:   { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700',
             marginTop: SPACE.md, marginBottom: SPACE.xs },
   wHead:  { flexDirection: 'row', alignItems: 'center',

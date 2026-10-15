@@ -708,6 +708,11 @@ GROWTH_PREDICTION_MAX_AGE_DAYS = 21   # a stage lasts weeks; older than this is 
 GROWTH_PREDICTION_MIN_CONF     = 0.50 # below this we do not trust it over the farmer
 GROWTH_MANUAL_STALE_DAYS       = 60   # farmer's setting this old is probably outdated
 VALID_STAGES = ("Active", "Flowering", "Dormant")
+# The six stages the growth-stage photo check (ml-models/growth_stage) can name.
+# The farmer confirms which feeding stage a photo result counts as, so only the
+# names are checked here; the app proposes the mapping (services/growthStage.js).
+PHOTO_STAGES = ("vegetative", "budding", "pre_bloom", "full_bloom", "wilting",
+                "seed_formation")
 
 
 # The exact feature order these models were trained on.
@@ -1448,7 +1453,13 @@ def _resolve_growth_stage(section: dict) -> dict:
     # 1 ── Component 2's prediction
     pred = (section or {}).get("growthPrediction") or {}
     stage = pred.get("stage")
-    if stage in VALID_STAGES:
+    # The farmer's choice made AFTER a prediction wins: setting the stage in the
+    # app is an answer to what the plant looks like now (15 Oct 2026).
+    try:
+        chosen_later = (float(meta.get("growthStageSetAt")) > float(pred.get("predictedAt")))
+    except (TypeError, ValueError):
+        chosen_later = False
+    if stage in VALID_STAGES and not chosen_later:
         try:
             conf = float(pred.get("confidence", 0))
         except (TypeError, ValueError):
@@ -1470,18 +1481,30 @@ def _resolve_growth_stage(section: dict) -> dict:
     else:
         reason = None
 
-    # 2 ── the farmer's manual setting
+    # 2 ── the farmer's setting, by hand or confirmed from a photo
     manual = meta.get("growthStage")
     if manual in VALID_STAGES:
-        set_h = _hours_since(meta.get("growthStageSetAt"), real_now)
+        set_at = meta.get("growthStageSetAt")
+        set_h = _hours_since(set_at, real_now)
         set_d = (set_h / 24.0) if set_h is not None else None
         stale = set_d is not None and set_d > GROWTH_MANUAL_STALE_DAYS
-        msg = f"Growth stage set by you: {manual}."
+        on = f" on {to_farm_time(set_at).strftime('%d %b')}" if set_h is not None else ""
+        photo = meta.get("growthStagePhoto") or {}
+        by_photo = meta.get("growthStageBy") == "photo" and photo.get("stage") in PHOTO_STAGES
+        if by_photo:
+            try:
+                pc = f" ({round(float(photo.get('confidence')) * 100)}%)"
+            except (TypeError, ValueError):
+                pc = ""
+            msg = (f"Set from a photo{on}: {photo['stage'].replace('_', ' ')}{pc}, "
+                   f"fed as {manual}.")
+        else:
+            msg = f"Growth stage set by you{on}: {manual}."
         if reason:
             msg = f"Camera prediction unusable ({reason}) — using your setting: {manual}."
         if stale:
             msg += f" You set it {round(set_d)} days ago — please check it is still correct."
-        return {"stage": manual, "source": "manual", "confidence": None,
+        return {"stage": manual, "source": "photo" if by_photo else "manual", "confidence": None,
                 "ageDays": round(set_d, 1) if set_d is not None else None,
                 "needsAttention": bool(stale),
                 "message": msg}
@@ -2541,6 +2564,68 @@ async def update_section(house_id: str, section_id: str, s: SectionIn, ctx: Auth
                  "growthStage": s.growthStage, "lightExposure": s.lightExposure})
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/meta.json", meta)
     return {"status": "success", "meta": meta}
+
+
+class GrowthStageIn(BaseModel):
+    stage: str                                   # Active | Flowering | Dormant
+    by: str = "manual"                           # manual | photo
+    photoStage: Optional[str] = None             # one of PHOTO_STAGES, when by=photo
+    photoConfidence: Optional[float] = None      # 0..1, when by=photo
+
+
+@router.put("/houses/{house_id}/sections/{section_id}/growth-stage")
+def set_growth_stage(house_id: str, section_id: str, body: GrowthStageIn,
+                     ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
+    """Set a section's growth stage, by hand or from a photo the farmer confirmed.
+
+    Growth stage decides which plant food a section gets, and until 15 Oct 2026
+    it could only be chosen when the section was created: no screen could
+    change it, nothing wrote the camera prediction, and the stage never carried
+    a date, so the 60-day "please check it" could never fire. This records the
+    stage, when, and how; the feeding decision is worked out again at once so
+    the app shows the new food without waiting for dawn.
+
+    Operators may do it: they do the daily care, and feeding is theirs already.
+    """
+    if body.stage not in VALID_STAGES:
+        raise HTTPException(400, f"Growth stage must be one of {', '.join(VALID_STAGES)}.")
+    if body.by not in ("manual", "photo"):
+        raise HTTPException(400, "by must be 'manual' or 'photo'.")
+    if body.by == "photo":
+        if body.photoStage not in PHOTO_STAGES:
+            raise HTTPException(400, "photoStage must be a stage the photo check names.")
+        if body.photoConfidence is not None and not 0.0 <= body.photoConfidence <= 1.0:
+            raise HTTPException(400, "photoConfidence is a fraction from 0 to 1.")
+    base = f"/farm/houses/{house_id}/sections/{section_id}"
+    if not _fb_get(f"{base}/meta.json?shallow=true"):
+        raise HTTPException(404, "Section not found")
+
+    at = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # Field by field, so a rename or anything else writing meta at the same
+    # moment is not overwritten by a stale copy of the whole record.
+    _fb_put(f"{base}/meta/growthStage.json", body.stage)
+    _fb_put(f"{base}/meta/growthStageSetAt.json", at)
+    _fb_put(f"{base}/meta/growthStageBy.json", body.by)
+    if body.by == "photo":
+        _fb_put(f"{base}/meta/growthStagePhoto.json",
+                {"stage": body.photoStage, "confidence": body.photoConfidence})
+    else:
+        _fb_delete(f"{base}/meta/growthStagePhoto.json")   # PUT None would not clear it
+
+    fert = None
+    if _ready():
+        try:
+            section = _fb_get(f"{base}.json") or {}
+            fert = _fert_decision(section)
+            existing = section.get("fertilizer") or {}
+            merged = {**existing, **{k: v for k, v in fert.items() if v is not None},
+                      "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+            _fb_put(f"{base}/fertilizer.json", merged)
+        except Exception as e:                       # the stage is saved either way;
+            print(f"[WARN] fertilizer not refreshed for {house_id}-{section_id}: {e}")
+            fert = None                              # dawn will work it out
+    return {"status": "success", "houseId": house_id, "sectionId": section_id,
+            "growthStage": body.stage, "setAt": at, "by": body.by, "fertilizer": fert}
 
 
 # ═══════════════════════ Read endpoints ═══════════════════════════════════════

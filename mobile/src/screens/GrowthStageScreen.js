@@ -24,6 +24,7 @@ import { API_CONFIG } from '../config/api';
 import { database } from '../config/firebase';
 import ScreenHeader from '../components/ScreenHeader';
 import BloomPredictionService from '../services/bloomPredictionService';
+import UseStageForSection from '../components/UseStageForSection';
 
 const { width } = Dimensions.get('window');
 const API_BASE_URL = API_CONFIG.BASE_URL;
@@ -141,7 +142,10 @@ const extractErrorMessage = (payload) => {
     return String(payload);
 };
 
-const GrowthStageScreen = ({ navigation }) => {
+const GrowthStageScreen = ({ navigation, route }) => {
+    // Set when a section's Setup tab opened this screen to check its stage
+    // (smart watering and fertilization, 15 Oct 2026). Absent on the Growth tab.
+    const forSection = route?.params?.forSection;
     const [currentStage, setCurrentStage] = useState(0);
     const [selectedImage, setSelectedImage] = useState(null);
     const [prediction, setPrediction] = useState(null);
@@ -513,8 +517,9 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
         <View style={styles.container}>
             <ScreenHeader 
                 title="Growth Stage" 
-                subtitle="Recognition & Bloom Prediction" 
+                subtitle={forSection ? `For ${forSection.name || forSection.sectionId}` : 'Recognition & Bloom Prediction'} 
                 navigation={navigation} 
+                showBack={!!forSection}
             />
             
             <ScrollView 
@@ -595,6 +600,10 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
                             </TouchableOpacity>
                         </View>
                     ) : null}
+
+                    {/* Opened from a section: offer to use the result for it */}
+                    <UseStageForSection forSection={forSection} prediction={prediction}
+                        navigation={navigation} />
 
                     {/* Timeline */}
                     <View style={[styles.timelineCard, SHADOW.sm]}>

@@ -227,6 +227,14 @@ export const addSection  = (h, s)     => req(`/houses/${h}/sections`, { method: 
 export const updateSection = (h, s, body) =>
   req(`/houses/${h}/sections/${s}`, { method: 'PUT', body: JSON.stringify(body) });
 
+/**
+ * Set a section's growth stage (Active, Flowering or Dormant), by hand or from
+ * a photo the farmer confirmed: { stage, by: 'manual' | 'photo', photoStage,
+ * photoConfidence }. The server dates it and works the plant food out again.
+ */
+export const setGrowthStage = (h, s, body) =>
+  req(`/houses/${h}/sections/${s}/growth-stage`, { method: 'PUT', body: JSON.stringify(body) });
+
 /* ── ML ── */
 export const planSection = (h, s) => req(`/houses/${h}/sections/${s}/plan`, { method: 'POST' });
 export const planAll     = ()     => req('/plan-all', { method: 'POST' });
