@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, RefreshControl, Switch, Dimensions, TextInput,
@@ -18,19 +18,21 @@ import NodePicker from '../components/NodePicker';
 import Sheet from '../components/Sheet';
 import { FreshnessBadge, StaleWarning } from '../components/Freshness';
 import LineChart from '../components/LineChart';
-import RangePicker from '../components/RangePicker';
+import HistoryRangePicker from '../components/HistoryRangePicker';
+import HistoryTimeline from '../components/HistoryTimeline';
 import {
   getHouse, waterSection, fillTray, setMode,
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
-  setSectionOverride, getAutoMode, HISTORY_RANGES, RH_LOW, RH_HIGH,
+  setSectionOverride, getAutoMode, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
   getHouseHealth,
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
-  stopSection, setNodeWifi, requestDeviceScan, getDeviceScan, getSectionEvents,
+  stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
   setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
 } from '../services/careV2';
 import { sectionIssues, farmClock } from '../services/deviceHealth';
+import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -148,7 +150,14 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [trayOn,  setTrayOn]  = useState(true);
   const [series,  setSeries]  = useState([]);
   const [renaming, setRenaming] = useState(false);
-  const [range,    setRange]    = useState(HISTORY_RANGES[1]);   // Last 24 hours
+  /* The History tab's range. One choice drives the chart, the timeline and
+     the export. `histAt` is the moment a "last N hours" range is measured
+     back from: it moves when the tab opens, the range changes or the farmer
+     pulls to refresh, and not on a timer, so a timeline the farmer has paged
+     back through is not reset under them. */
+  const [histChoice, setHistChoice] = useState(HISTORY_PRESETS[1]);   // Last 24 hours
+  const [histAt,     setHistAt]     = useState(() => Date.now());
+  const histWin = useMemo(() => rangeWindow(histChoice, histAt), [histChoice, histAt]);
   // 'auto' | 'manual' | null. null means "follow the farm switch".
   const [override, setOverride] = useState(null);
   const [farmAuto, setFarmAuto] = useState(true);
@@ -183,8 +192,6 @@ export default function SectionDetailScreen({ route, navigation }) {
      here; this only stops the screen offering a button that would 403. */
   const can = useCan();
   const [tab,      setTab]      = useState('now');
-  const [events,   setEvents]   = useState(null);
-  const [evLoading, setEvLoading] = useState(false);
   const [blinking,  setBlinking]  = useState(false);
   const [ping,      setPing]      = useState(null);   // { state: asking|ok|timeout }
   /* Manual pour lengths. null in either slot means "let the model decide".
@@ -231,7 +238,7 @@ export default function SectionDetailScreen({ route, navigation }) {
       try { setFarmAuto((await getAutoMode()).autoMode !== false); } catch (_) {}
     } catch (e) { setToast({ text: e.message, kind: 'error' }); }
     finally { setLoading(false); setRefresh(false); }
-  }, [houseId, sectionId, range]);
+  }, [houseId, sectionId]);
 
   const removeSection = async () => {
     setSheet(null);
@@ -544,19 +551,25 @@ export default function SectionDetailScreen({ route, navigation }) {
     return () => clearInterval(id);
   }, [load]));
 
-  // The chart, on its own much slower schedule. See the note in load().
-  useFocusEffect(useCallback(() => {
+  // The chart, on its own much slower schedule. See the note in load(). Only
+  // while History is open: nothing else on the screen draws it. A range that
+  // ends now is redrawn every 5 minutes up to a day long; a longer one barely
+  // changes in that time, and a past one never does.
+  useEffect(() => {
+    if (tab !== 'history') return undefined;
     let alive = true;
     const pull = async () => {
+      const w = rangeWindow(histChoice, histWin.live ? Date.now() : histAt);
       try {
-        const h = await getHistory(houseId, sectionId, range.points, range.hours);
+        const h = await getHistory(houseId, sectionId, chartPoints(w.end - w.start), w.start, w.end);
         if (alive) setSeries(h?.series || []);
       } catch (_) { /* the readings above are what matter; a chart gap is cosmetic */ }
     };
     pull();
-    const id = setInterval(pull, 120000);
-    return () => { alive = false; clearInterval(id); };
-  }, [houseId, sectionId, range]));
+    const live = histWin.live && histWin.end - histWin.start <= 26 * 3600000;
+    const id = live ? setInterval(pull, 300000) : null;
+    return () => { alive = false; if (id) clearInterval(id); };
+  }, [tab, houseId, sectionId, histChoice, histAt, histWin.live, histWin.start, histWin.end]);
 
   /* Start a pour and hand it to the live run state.
      Nothing here waits for the node - `runWatch` below does that, so the screen
@@ -663,19 +676,6 @@ export default function SectionDetailScreen({ route, navigation }) {
     tick();
     return () => { alive = false; clearInterval(id); clearTimeout(giveUp); };
   }, [run?.id, houseId, sectionId]);
-
-  // History is fetched only when its tab is opened, and again after any run
-  // finishes — there is no reason to pay for it while the farmer is on Now.
-  useEffect(() => {
-    if (tab !== 'history') return undefined;
-    let alive = true;
-    setEvLoading(true);
-    getSectionEvents(houseId, sectionId, 40)
-      .then((r) => { if (alive) setEvents(r); })
-      .catch(() => { if (alive) setEvents(null); })
-      .finally(() => { if (alive) setEvLoading(false); });
-    return () => { alive = false; };
-  }, [tab, houseId, sectionId, run?.id]);
 
   // Local 1 s countdown between server polls, so the number moves smoothly.
   useEffect(() => {
@@ -1184,7 +1184,7 @@ export default function SectionDetailScreen({ route, navigation }) {
       />
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refresh} tintColor={COLORS.primary}
-          onRefresh={() => { setRefresh(true); load(); }} />}>
+          onRefresh={() => { setRefresh(true); load(); if (tab === 'history') setHistAt(Date.now()); }} />}>
 
         {/* Something wrong with the hardware goes first, above the tabs: the
             push about it brings the farmer to this screen, and a reading from
@@ -1213,7 +1213,13 @@ export default function SectionDetailScreen({ route, navigation }) {
             ['settings', 'Setup', 'options-outline']].map(([k, label, ic]) => (
             <TouchableOpacity key={k}
               style={[styles.tab, tab === k && styles.tabOn]}
-              onPress={() => setTab(k)}
+              onPress={() => {
+                // Opening History measures "the last 24 hours" from now, not
+                // from when the screen first opened. Set in the same press as
+                // the tab, so the chart and the timeline load once.
+                if (k === 'history' && tab !== 'history') setHistAt(Date.now());
+                setTab(k);
+              }}
               activeOpacity={0.8}
               accessibilityRole="tab"
               accessibilityState={{ selected: tab === k }}
@@ -1624,17 +1630,15 @@ export default function SectionDetailScreen({ route, navigation }) {
         </>)}
 
         {tab === 'history' && (<>
-          {/* history, over a range the farmer chooses */}
-          <View style={styles.chartHead}>
-            <SectionHead first style={{ flex: 1, marginBottom: 0 }}
-              icon="analytics-outline" title="Conditions over time"
-              tint={COLORS.temperature} tintDim={COLORS.temperatureDim} />
-            <RangePicker
-              options={HISTORY_RANGES}
-              value={range.hours}
-              onChange={(o) => setRange(o)}
-            />
-          </View>
+          {/* One range for everything below: the chart, the timeline, the export. */}
+          <HistoryRangePicker
+            choice={histChoice}
+            win={histWin}
+            now={histAt}
+            onChange={(c) => { setHistChoice(c); setHistAt(Date.now()); }} />
+
+          <SectionHead icon="analytics-outline" title="Conditions over time"
+            tint={COLORS.temperature} tintDim={COLORS.temperatureDim} />
           <View style={[styles.card, SHADOW.sm]}>
             <LineChart series={series} band={{ low: RH_LOW, high: RH_HIGH }} width={CHART_W} />
           </View>
@@ -1644,6 +1648,7 @@ export default function SectionDetailScreen({ route, navigation }) {
           {fcast?.hours?.length > 1 && (
             <>
               <View style={styles.chartHead}>
+                {/* `first`: the row carries the group's top margin, not the head */}
                 <SectionHead first style={{ flex: 1, marginBottom: 0 }}
                   icon="partly-sunny-outline" title="Expected today"
                   tint={COLORS.light} tintDim={COLORS.lightDim} />
@@ -1674,72 +1679,14 @@ export default function SectionDetailScreen({ route, navigation }) {
             </>
           )}
 
-          {/* What actually happened, from the node's own acknowledgements. */}
-          <SectionHead first icon="list-outline" title="Watering and feeding"
-            tint={COLORS.primary} tintDim={COLORS.primaryDim}
-            status={events?.counts ? `${events.counts.waterings} runs` : undefined} />
-          {evLoading && !events ? (
-            <View style={[styles.card, SHADOW.sm, { alignItems: 'center', paddingVertical: SPACE.xl }]}>
-              <ActivityIndicator color={COLORS.primary} />
-            </View>
-          ) : !events?.events?.length ? (
-            <View style={[styles.card, SHADOW.sm]}>
-              <Text style={styles.none}>
-                Nothing recorded yet. Every watering and tray fill from now on is logged here,
-                with how long it ran and whether plant food went in.
-              </Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.evSummary}>
-                <View style={styles.evStat}>
-                  <Text style={styles.evStatV}>{events.counts?.waterings ?? 0}</Text>
-                  <Text style={styles.evStatK}>waterings</Text>
-                </View>
-                <View style={styles.evStat}>
-                  <Text style={styles.evStatV}>{events.counts?.feeds ?? 0}</Text>
-                  <Text style={styles.evStatK}>with food</Text>
-                </View>
-                <View style={[styles.evStat, { flex: 1.6 }]}>
-                  <Text style={styles.evStatV} numberOfLines={1}>{events.lastFed || 'never'}</Text>
-                  <Text style={styles.evStatK}>last fed</Text>
-                </View>
-              </View>
-
-              <View style={[styles.card, SHADOW.sm, { paddingVertical: SPACE.sm }]}>
-                {events.events.map((e, i) => (
-                  <View key={e.id || i}
-                    style={[styles.evRow, i > 0 && styles.evRowDiv]}>
-                    <Ionicons
-                      name={e.action === 'tray' ? 'add-circle-outline' : 'rainy-outline'}
-                      size={16}
-                      color={e.action === 'tray' ? COLORS.info : COLORS.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.evWhen}>{e.atLocal}</Text>
-                      <Text style={styles.evWhat}>
-                        {e.action === 'tray' ? 'Tray fill' : 'Watered'} {e.durationSec}s
-                        {e.withFertilizer && e.npkType && e.npkType !== 'None'
-                          ? `  \u00b7  ${e.npkType}`
-                          : ''}
-                        {`  \u00b7  ${e.by === 'auto' ? 'automatic' : 'by you'}`}
-                      </Text>
-                    </View>
-                    {e.withFertilizer && (
-                      <Ionicons name="flask" size={13} color={COLORS.fertilizer} />
-                    )}
-                    <Text style={[styles.evOk,
-                                  { color: e.confirmed ? COLORS.success : COLORS.textTertiary }]}>
-                      {e.stoppedEarly ? 'stopped' : e.confirmed ? 'confirmed' : 'sent'}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-              <Text style={styles.evNote}>
-                “Confirmed” means the node reported back that the relay ran. “Sent” means the
-                command was written but no acknowledgement has arrived.
-              </Text>
-            </>
-          )}
+          {/* Every reading, watering, feed and tray fill in the range, with times. */}
+          <SectionHead icon="list-outline" title="Everything recorded"
+            tint={COLORS.primary} tintDim={COLORS.primaryDim} />
+          <HistoryTimeline
+            houseId={houseId}
+            sectionId={sectionId}
+            win={histWin}
+            onToast={setToast} />
         </>)}
 
         {tab === 'settings' && (<>
@@ -2154,9 +2101,12 @@ const styles = StyleSheet.create({
   hotPillTxt: { fontSize: 12, fontWeight: '800', color: COLORS.danger },
   fcLead:  { fontSize: 14, color: COLORS.text, lineHeight: 20, marginBottom: SPACE.md },
   fcNote:  { fontSize: 11, color: COLORS.textTertiary, lineHeight: 16, marginTop: SPACE.md },
+  // Spaced exactly like `shead`, so a head with a pill beside it sits the same
+  // distance from the card above as one without (15 Oct: History's heads used
+  // `first` and sat flush against the card before them).
   chartHead: { flexDirection: 'row', alignItems: 'center',
                justifyContent: 'space-between',
-               marginTop: SPACE.lg, marginBottom: SPACE.md },
+               marginTop: SPACE.xl, marginBottom: SPACE.sm },
   container: { flex: 1, backgroundColor: COLORS.bg },
   center:    { alignItems: 'center', justifyContent: 'center' },
   scroll:    { padding: SPACE.xl },
@@ -2190,21 +2140,6 @@ const styles = StyleSheet.create({
   tabTxt:  { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '700' },
   tabTxtOn:{ color: COLORS.primary },
 
-  evSummary: { flexDirection: 'row', gap: SPACE.sm, marginBottom: SPACE.sm },
-  evStat:  { flex: 1, backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm,
-             paddingVertical: SPACE.md, paddingHorizontal: SPACE.md },
-  evStatV: { color: COLORS.text, fontSize: FONT.lg, fontWeight: '800',
-             fontVariant: ['tabular-nums'] },
-  evStatK: { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
-  evRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
-             paddingVertical: SPACE.md },
-  evRowDiv:{ borderTopWidth: 1, borderTopColor: COLORS.border },
-  evWhen:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700',
-             fontVariant: ['tabular-nums'] },
-  evWhat:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 1 },
-  evOk:    { fontSize: FONT.xs, fontWeight: '700' },
-  evNote:  { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
-             marginTop: SPACE.sm },
 
   fsBox:   { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.md,
              padding: SPACE.md, marginTop: SPACE.md, gap: 6 },

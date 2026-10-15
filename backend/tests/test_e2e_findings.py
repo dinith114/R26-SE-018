@@ -699,3 +699,74 @@ def test_a_refused_command_is_not_a_confirmed_watering_in_the_history(farm_clock
     sc._stamp_event_outcome("H2", "S2", "c1", {"outcome": "stale", "ranSec": 0})
     assert db["/farm/events/H2/S2/1/confirmed.json"] is False
     assert db["/farm/events/H2/S2/1/outcome.json"] == "stale"
+
+
+# ── 14 Oct: an automatic run stayed "sent" in the history forever ──────────
+
+def test_an_automatic_tray_fill_is_confirmed_from_the_masters_ack(farm_clock, monkeypatch):
+    """14 Oct, live: the engine filled West side's tray at 15:44, the master acked
+    it done after 15 s, and the history still said "Tray fill 15s - automatic -
+    sent". Only the phone's command-status poll ever confirmed a run, and nobody
+    polls an automatic one."""
+    db = {"/farm/events/H3/S2.json": {"1791972818584": {
+              "action": "tray", "by": "auto", "commandId": "d05faa62573c", "confirmed": False}},
+          "/farm/pendingAcks.json": {"d05faa62573c": {
+              "houseId": "H3", "sectionId": "S2", "master": "5E5E5E5E00FF",
+              "issuedAtMs": PLAN_NOW.timestamp() * 1000}},
+          "/farm/masters/5E5E5E5E00FF/acks/d05faa62573c.json": {
+              "id": "d05faa62573c", "outcome": "done", "ranSec": 15}}
+    sc = _fake_fb(monkeypatch, db)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    assert sc.settle_pending_acks() == 1
+    ev = "/farm/events/H3/S2/1791972818584"
+    assert db[f"{ev}/confirmed.json"] is True
+    assert db[f"{ev}/outcome.json"] == "done" and db[f"{ev}/ranSec.json"] == 15
+    assert "/farm/pendingAcks/d05faa62573c.json" not in db
+
+
+def test_a_logged_routed_command_is_parked_until_the_master_answers(farm_clock, monkeypatch):
+    db = {"/farm/houses/H3/meta.json": {"name": "Demo", "masterMac": "5E5E5E5E00FF"},
+          "/farm/events/H3/S2.json?shallow=true": {}}
+    sc = _fake_fb(monkeypatch, db)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    section = {"latest": _rd(PLAN_NOW, 31.6, 45.2)}
+    sc._log_event("H3", "S2", section, action="tray", durationSec=15, by="auto",
+                  commandId="c0ffee000002", confirmed=False)
+    parked = db["/farm/pendingAcks/c0ffee000002.json"]
+    assert (parked["houseId"], parked["sectionId"], parked["master"]) == ("H3", "S2", "5E5E5E5E00FF")
+    # No master, or no command id: nothing to wait for, nothing parked.
+    db["/farm/houses/H4/meta.json"] = {"name": "No master"}
+    sc._log_event("H4", "S1", section, action="water", durationSec=60, by="auto",
+                  commandId="c0ffee000003", confirmed=False)
+    sc._log_event("H3", "S2", section, action="water", durationSec=60, by="fallback")
+    assert [k for k in db if k.startswith("/farm/pendingAcks/")] == ["/farm/pendingAcks/c0ffee000002.json"]
+
+
+def test_an_unanswered_command_waits_a_day_then_is_let_go(farm_clock, monkeypatch):
+    now = {"ms": PLAN_NOW.timestamp() * 1000}
+    p = {"houseId": "H3", "sectionId": "S1", "master": "M1", "issuedAtMs": now["ms"]}
+    db = {"/farm/pendingAcks.json": {"late": dict(p)},
+          "/farm/events/H3/S1.json": {"1": {"commandId": "late", "confirmed": False}}}
+    sc = _fake_fb(monkeypatch, db)
+    db["/farm/pendingAcks/late.json"] = dict(p)
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: now["ms"])
+    assert sc.settle_pending_acks() == 0
+    assert "/farm/pendingAcks/late.json" in db                  # an hour's silence is not an answer
+    now["ms"] += 25 * 3600_000
+    assert sc.settle_pending_acks() == 0
+    assert "/farm/pendingAcks/late.json" not in db              # a day's silence is: stop asking
+    assert "/farm/events/H3/S1/1/confirmed.json" not in db      # and never claim it ran
+
+
+def test_a_run_the_phone_already_confirmed_is_not_stamped_twice(farm_clock, monkeypatch):
+    db = {"/farm/events/H3/S2.json": {"1": {"commandId": "c4", "confirmed": True,
+                                            "outcome": "stopped", "ranSec": 30}},
+          "/farm/pendingAcks.json": {"c4": {"houseId": "H3", "sectionId": "S2", "master": "M1",
+                                             "issuedAtMs": PLAN_NOW.timestamp() * 1000}},
+          "/farm/masters/M1/acks/c4.json": {"id": "c4", "outcome": "stopped", "ranSec": 30}}
+    sc = _fake_fb(monkeypatch, db)
+    db["/farm/pendingAcks/c4.json"] = db["/farm/pendingAcks.json"]["c4"]
+    monkeypatch.setattr(sc, "_server_now_ms", lambda: PLAN_NOW.timestamp() * 1000)
+    assert sc.settle_pending_acks() == 1
+    assert "/farm/events/H3/S2/1/outcome.json" not in db         # left exactly as the phone wrote it
+    assert "/farm/pendingAcks/c4.json" not in db

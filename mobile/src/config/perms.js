@@ -68,6 +68,7 @@ export const PERMS = {
   waterSection:      ['admin', 'operator'],
 
   /* ---- anyone signed in ---- */
+  exportTimeline:       ['admin', 'operator', 'viewer'],
   getAlarms:            ['admin', 'operator', 'viewer'],
   getAlerts:            ['admin', 'operator', 'viewer'],
   getAutoMode:          ['admin', 'operator', 'viewer'],
@@ -86,6 +87,7 @@ export const PERMS = {
   getSectionDevice:     ['admin', 'operator', 'viewer'],
   getSectionEvents:     ['admin', 'operator', 'viewer'],
   getShadehouseCheck:   ['admin', 'operator', 'viewer'],
+  getTimeline:          ['admin', 'operator', 'viewer'],
   getUnassignedDevices: ['admin', 'operator', 'viewer'],
   getWateringValidation: ['admin', 'operator', 'viewer'],
   registerPushToken:    ['admin', 'operator', 'viewer'],

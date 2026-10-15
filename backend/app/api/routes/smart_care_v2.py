@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 import requests as _req
@@ -60,7 +60,7 @@ from app.api.routes.devices import mine_only as _mine_only
 from app.api.deps import require_auth, require_role
 from app.services.firebase_auth import ROLE_ADMIN, ROLE_OPERATOR, AuthContext
 from app.services.tenant_context import (
-    NoTenantInContext, current_tenant, scoped,
+    NoTenantInContext, current_tenant, scoped, tenant_scope,
 )
 
 router = APIRouter()
@@ -2221,6 +2221,35 @@ def settle_pending_feeds() -> List[dict]:
     return undone
 
 
+PENDING_ACK_MAX_MS = 24 * 3600_000
+
+
+def settle_pending_acks() -> int:
+    """Confirm history events from the master's own acknowledgement.
+
+    /farm/pendingAcks holds every logged run still waiting for its answer
+    (see _log_event). For each one the master has acked, the event is stamped -
+    confirmed if water moved, the refusal if not - and the entry dropped. An
+    entry nobody answers for a day is let go and the event stays "sent": a lost
+    ack is not evidence that the run happened. Returns how many were answered."""
+    answered = 0
+    pend = _fb_get("/farm/pendingAcks.json") or {}
+    for cid, p in pend.items():
+        if not isinstance(p, dict):
+            _fb_delete(f"/farm/pendingAcks/{cid}.json")
+            continue
+        ack = _fb_get(f"/farm/masters/{p.get('master')}/acks/{cid}.json") or {}
+        if ack.get("id") != cid:
+            if _server_now_ms() - float(p.get("issuedAtMs") or 0) > PENDING_ACK_MAX_MS:
+                _fb_delete(f"/farm/pendingAcks/{cid}.json")
+            continue
+        # Writes nothing if the phone already stamped it from command-status.
+        _stamp_event_outcome(p.get("houseId"), p.get("sectionId"), cid, ack)
+        _fb_delete(f"/farm/pendingAcks/{cid}.json")
+        answered += 1
+    return answered
+
+
 def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict) -> None:
     """Write what the controller did onto the event that asked for it.
 
@@ -2242,9 +2271,8 @@ def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: d
         pass
 
 
-# How many events are kept per section. Events are written a handful of times a
-# day, so this is roughly a month of history - enough to answer "when was this
-# last watered and fed" without the document growing without bound.
+# Events used to be capped at this many per section. They are now kept forever
+# (see _log_event); the constant stays for anything that still imports it.
 EVENT_KEEP = 60
 
 
@@ -2276,15 +2304,29 @@ def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optio
     if not _fb_put(f"{base}/{key}.json", ev):
         return None
 
-    # Prune oldest beyond EVENT_KEEP. `shallow=true` returns keys only, so this
-    # costs a few hundred bytes rather than the whole log.
-    try:
-        keys = _fb_get(f"{base}.json?shallow=true") or {}
-        if len(keys) > EVENT_KEEP:
-            for old_key in sorted(keys, key=lambda k: int(k) if k.isdigit() else 0)[:len(keys) - EVENT_KEEP]:
-                _fb_delete(f"{base}/{old_key}.json")
-    except Exception:
-        pass          # a failed prune must never fail the watering
+    # WAIT FOR THE MASTER'S ANSWER, whoever started the run.
+    #
+    # The only thing that ever confirmed an event was the command-status poll,
+    # and only the phone polls - for the manual run it is watching. On 14 Oct the
+    # engine filled a tray by itself, the master acked "done, 15 s", and the
+    # history said "sent" for good. settle_pending_acks() reads this list on the
+    # engine's master-queue pass (every 5 min) and stamps the event from the ack.
+    cid = fields.get("commandId")
+    if cid and fields.get("outcome") is None:
+        try:
+            master = _master_for_house(house_id)
+            if master:
+                _fb_put(f"/farm/pendingAcks/{cid}.json",
+                        {"houseId": house_id, "sectionId": section_id, "master": master,
+                         "issuedAtMs": int(_server_now_ms())})
+        except Exception:
+            pass      # the run is logged; a confirmation that never comes is only cosmetic
+
+    # KEPT FOREVER (15 Oct 2026). The oldest beyond EVENT_KEEP used to be deleted
+    # here, which with tray fills left only two or three weeks of history. An
+    # event is about 200 bytes, so a section's whole year is tens of kilobytes,
+    # and every reader now asks for a key RANGE (section_timeline, section_events)
+    # rather than the whole list, so keeping them costs nothing per request.
     return key
 
 
@@ -2815,7 +2857,10 @@ def section_events(house_id: str, section_id: str, limit: int = 40, ctx: AuthCon
     pour the hardware actually ran are different claims, and the history has to
     show which one it is holding.
     """
-    raw = _fb_get(f"/farm/events/{house_id}/{section_id}.json") or {}
+    # The latest `limit` by key (keys are epoch ms). Reading the whole list was
+    # fine while it was capped at 60; events are kept forever now.
+    lim = max(1, min(int(limit), 200))
+    raw = _fb_get(f'/farm/events/{house_id}/{section_id}.json?orderBy="$key"&limitToLast={lim}') or {}
     items = []
     for k, v in raw.items():
         if isinstance(v, dict):
@@ -2825,12 +2870,228 @@ def section_events(house_id: str, section_id: str, limit: int = 40, ctx: AuthCon
     waters = [x for x in items if x.get("action") == "water"]
     feeds  = [x for x in waters if x.get("withFertilizer")]
     return {"status": "success",
-            "events": items[:max(1, min(limit, 200))],
+            "events": items[:lim],
             "counts": {"total": len(items),
                        "waterings": len(waters),
                        "feeds": len(feeds)},
             "lastWatered": waters[0]["atLocal"] if waters else None,
             "lastFed": feeds[0]["atLocal"] if feeds else None}
+
+
+# ── All history: readings and events in one timeline (15 Oct 2026) ─────────
+#
+# The History tab showed a 48-point chart and the latest 40 events. The farmer
+# asked for EVERYTHING in a date range: every reading with its time, and every
+# watering, feed and tray fill. Readings are read by push-id KEY RANGE and pages
+# are limited, so a page costs only what it shows - the farm pays Firebase for
+# every byte (replay traffic report, 15 Oct). Events are read by their epoch-ms keys.
+
+TIMELINE_PAGE_MAX = 300
+TIMELINE_KINDS = ("reading", "water", "feed", "tray")
+EXPORT_MAX_DAYS = 8
+EXPORT_TTL_S = 900
+_exports: Dict[str, dict] = {}
+_exports_lock = threading.Lock()
+
+
+def _readings_between(house_id: str, section_id: str, start_ms: int, end_ms: int,
+                      last: Optional[int] = None, raw_count: Optional[list] = None) -> List[Tuple[int, str, dict]]:
+    """(reading time, key, record) for every reading timed inside [start_ms, end_ms].
+
+    Keys are push ids - Firebase's own (the firmware POSTs, so about ten seconds
+    after the reading) or built from the reading time (store-and-forward flush).
+    Either way a key is within a couple of minutes of the reading's timestamp, so
+    the key range is widened by two minutes each side and the body decides."""
+    lo = _push_key_prefix(start_ms - 120_000)
+    hi = _push_key_prefix(end_ms + 120_000) + "~"
+    q = f'?orderBy="$key"&startAt="{lo}"&endAt="{hi}"'
+    if last:
+        q += f"&limitToLast={int(last)}"
+    raw = _fb_get(f"/farm/history/{house_id}/{section_id}.json{q}") or {}
+    if raw_count is not None:
+        # Before the body-time filter. A page can lose a reading or two to the
+        # two-minute widening, so "was the page full?" must be asked of this.
+        raw_count.append(len(raw))
+    out = []
+    for k, r in (raw or {}).items():
+        if not isinstance(r, dict):
+            continue
+        try:
+            t = int(r.get("timestamp"))
+        except (TypeError, ValueError):
+            continue
+        if start_ms <= t <= end_ms:
+            out.append((t, k, r))
+    return out
+
+
+def _events_between(house_id: str, section_id: str, start_ms: int, end_ms: int) -> List[Tuple[int, dict]]:
+    """Every event in [start_ms, end_ms]. Keys are the event's epoch ms (13 digits,
+    so string order is time order). Bounded by the range: a few a day."""
+    raw = _fb_get(f'/farm/events/{house_id}/{section_id}.json'
+                  f'?orderBy="$key"&startAt="{int(start_ms)}"&endAt="{int(end_ms)}"') or {}
+    out = []
+    for k, e in (raw or {}).items():
+        if not isinstance(e, dict):
+            continue
+        try:
+            t = int(e.get("at") or k)
+        except (TypeError, ValueError):
+            continue
+        if start_ms <= t <= end_ms:
+            out.append((t, e))
+    return out
+
+
+def _reading_item(t: int, r: dict) -> dict:
+    T, RH = _measured(r, "temperature"), _measured(r, "humidity")
+    return {"t": t, "local": to_farm_time(t).strftime("%Y-%m-%d %H:%M:%S"), "kind": "reading",
+            "temperature": T, "humidity": RH, "light": _measured(r, "light"),
+            "vpd": round(vpd_kpa(T, RH), 3) if T is not None and RH is not None else None,
+            "fault": bool(r.get("sensorFault"))}
+
+
+def _event_item(t: int, e: dict) -> dict:
+    return {"t": t, "local": to_farm_time(t).strftime("%Y-%m-%d %H:%M:%S"),
+            "kind": "tray" if e.get("action") == "tray" else "water",
+            "durationSec": e.get("durationSec"), "ranSec": e.get("ranSec"),
+            "withFertilizer": bool(e.get("withFertilizer")), "npkType": e.get("npkType"),
+            "strength": e.get("strength"), "by": e.get("by"), "confirmed": e.get("confirmed"),
+            "outcome": e.get("outcome"), "stoppedEarly": bool(e.get("stoppedEarly"))}
+
+
+def _event_wanted(e: dict, kinds: set) -> bool:
+    a = e.get("action")
+    if a == "tray":
+        return "tray" in kinds
+    if a == "water":
+        # A feed IS a watering that carried plant food: "water" shows every
+        # watering, "feed" only the ones that fed.
+        return "water" in kinds or ("feed" in kinds and bool(e.get("withFertilizer")))
+    return False
+
+
+def _kinds(types: str) -> set:
+    k = {x.strip() for x in (types or "").split(",") if x.strip() in TIMELINE_KINDS}
+    return k or set(TIMELINE_KINDS)
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/timeline")
+def section_timeline(house_id: str, section_id: str, start: int, end: int,
+                     before: Optional[int] = None, limit: int = 100,
+                     types: str = "reading,water,feed,tray",
+                     ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Readings and events in [start, end] (epoch ms), newest first, a page at a time.
+
+    `before` is the `nextBefore` of the previous page. The first page also carries
+    the range's counts (waterings, feeds, tray fills, last fed)."""
+    if end < start:
+        raise HTTPException(400, "The end of the range is before its start.")
+    kinds = _kinds(types)
+    limit = max(1, min(int(limit), TIMELINE_PAGE_MAX))
+    hi = min(int(end), int(before) - 1) if before else int(end)
+    items, full, floor_t, evs = [], False, None, []
+    if hi >= start:
+        if "reading" in kinds:
+            got = []
+            rs = _readings_between(house_id, section_id, int(start), hi, last=limit, raw_count=got)
+            full = (got[0] if got else len(rs)) >= limit
+            if full and rs:
+                # Older readings exist that this page did not fetch, so nothing older
+                # than the oldest fetched one may go on it: an older event here would
+                # move the next page's start past those readings and they would never
+                # be shown (caught by test_paging_covers_everything_once).
+                floor_t = min(t for t, _, _ in rs)
+            items += [_reading_item(t, r) for t, _, r in rs]
+        if kinds & {"water", "feed", "tray"} or before is None:
+            evs = _events_between(house_id, section_id, int(start), hi)
+            items += [_event_item(t, e) for t, e in evs if _event_wanted(e, kinds)]
+    if floor_t is not None:
+        items = [x for x in items if x["t"] >= floor_t]
+    items.sort(key=lambda x: (x["t"], 0 if x["kind"] == "reading" else 1), reverse=True)
+    page = items[:limit]
+    more = bool(page) and (len(items) > limit or full)
+    out = {"status": "success", "start": int(start), "end": int(end), "items": page,
+           "nextBefore": page[-1]["t"] if more else None}
+    if before is None:
+        waters = [e for _, e in evs if e.get("action") == "water"]
+        feeds = sorted((t for t, e in evs if e.get("action") == "water" and e.get("withFertilizer")),
+                       reverse=True)
+        out["counts"] = {"waterings": len(waters), "feeds": len(feeds),
+                         "trays": sum(1 for _, e in evs if e.get("action") == "tray"),
+                         "lastFed": to_farm_time(feeds[0]).strftime("%Y-%m-%d %H:%M") if feeds else None}
+    return out
+
+
+class TimelineExportIn(BaseModel):
+    start: int
+    end: int
+    types: str = "reading,water,feed,tray"
+
+
+@router.post("/houses/{house_id}/sections/{section_id}/timeline/export")
+def timeline_export(house_id: str, section_id: str, body: TimelineExportIn,
+                    ctx: AuthContext = Depends(require_auth)) -> dict:
+    """A short-lived download link for the range as a CSV file.
+
+    A link rather than a body, because the app has no file-sharing module and
+    eight days of readings is about 10,000 rows: the phone's browser downloads the
+    file properly. The token in the link is the authorisation: random, bound to
+    this tenant and section, and gone after EXPORT_TTL_S."""
+    if body.end <= body.start:
+        raise HTTPException(400, "The end of the range is before its start.")
+    if body.end - body.start > EXPORT_MAX_DAYS * 86_400_000:
+        raise HTTPException(400, f"Export at most {EXPORT_MAX_DAYS} days at a time.")
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    now = time.time()
+    with _exports_lock:
+        for k in [k for k, v in _exports.items() if v["exp"] < now]:
+            del _exports[k]
+        _exports[token] = {"tenant": current_tenant(), "h": house_id, "s": section_id,
+                           "start": int(body.start), "end": int(body.end), "types": body.types,
+                           "exp": now + EXPORT_TTL_S}
+    name = (f"{house_id}-{section_id}_{to_farm_time(body.start).strftime('%Y%m%d')}"
+            f"-{to_farm_time(body.end).strftime('%Y%m%d')}.csv")
+    return {"status": "success", "path": f"/api/v2/care/exports/{token}/{name}",
+            "filename": name, "expiresInSec": EXPORT_TTL_S}
+
+
+@router.get("/exports/{token}/{filename}")
+def timeline_export_file(token: str, filename: str):
+    """The CSV behind an export link. No bearer token: the link's own token is the key."""
+    with _exports_lock:
+        job = _exports.get(token)
+    if not job or job["exp"] < time.time():
+        raise HTTPException(404, "This download link has expired. Export again from the app.")
+    import csv
+    import io
+    kinds = _kinds(job["types"])
+    with tenant_scope(job["tenant"]):
+        rows = []
+        if "reading" in kinds:
+            rows += [_reading_item(t, r) for t, _, r in
+                     _readings_between(job["h"], job["s"], job["start"], job["end"])]
+        rows += [_event_item(t, e) for t, e in _events_between(job["h"], job["s"], job["start"], job["end"])
+                 if _event_wanted(e, kinds)]
+    rows.sort(key=lambda x: (x["t"], 0 if x["kind"] == "reading" else 1))
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["local_time", "epoch_ms", "type", "temperature_c", "humidity_pct", "light_lux", "vpd_kpa",
+                "sensor_fault", "duration_s", "ran_s", "with_food", "npk", "strength", "by", "status"])
+    for x in rows:
+        if x["kind"] == "reading":
+            w.writerow([x["local"], x["t"], "reading", x["temperature"], x["humidity"], x["light"], x["vpd"],
+                        "yes" if x["fault"] else "", "", "", "", "", "", "", ""])
+        else:
+            status = ("stopped early" if x["stoppedEarly"] else "confirmed" if x["confirmed"]
+                      else (x["outcome"] or "sent"))
+            by = "automatic" if x["by"] == "auto" else "fallback" if x["by"] == "fallback" else "by you"
+            w.writerow([x["local"], x["t"], x["kind"], "", "", "", "", "", x["durationSec"], x["ranSec"],
+                        "yes" if x["withFertilizer"] else "", x["npkType"] or "", x["strength"] or "",
+                        by, status])
+    safe = "".join(c for c in filename if c.isalnum() or c in "-_.") or "history.csv"
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}"'})
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/command-status")
@@ -4111,52 +4372,41 @@ async def delete_section(house_id: str, section_id: str, ctx: AuthContext = Depe
 
 @router.get("/houses/{house_id}/sections/{section_id}/history")
 async def section_history(house_id: str, section_id: str, points: int = 48,
-                          hours: int = 24, ctx: AuthContext = Depends(require_auth)):
+                          hours: int = 24, start: Optional[int] = None, end: Optional[int] = None,
+                          ctx: AuthContext = Depends(require_auth)):
     """Down-sampled history for the section's charts (oldest first).
 
-    `hours` is the window the farmer picked in the chart's range menu. Nodes
-    report every 5 minutes, so 12 samples an hour; we pull a little extra to
-    survive a device that reported late, then trim by real timestamp.
+    The window is `hours` back from now, or [start, end] in epoch ms when the
+    farmer picked dates. Readings are fetched by push-id KEY RANGE for exactly that
+    window. This used to take the last `hours * 12 * 1.2` readings, on the belief
+    that nodes report every 5 minutes; they report about every 72 s, so "Last 24
+    hours" showed about 7 hours and "Last 7 days" about 2 days (seen on the phone,
+    15 Oct 2026). Labels are farm time; they were UTC, 5.5 h off.
     """
-    hours = max(1, min(int(hours), 24 * 30))
-    want  = min(int(hours * 12 * 1.2) + 12, 5000)
-
-    raw = _fb_get(f'/farm/history/{house_id}/{section_id}.json'
-                  f'?orderBy="$key"&limitToLast={want}')
-    if not raw:
-        return {"status": "success", "count": 0, "series": [], "hours": hours}
-
+    if start is not None and end is not None and int(end) > int(start):
+        s_ms, e_ms = int(start), int(end)
+    else:
+        hours = max(1, min(int(hours), 24 * 31))
+        e_ms = int(_server_now_ms())
+        s_ms = e_ms - hours * 3_600_000
+    s_ms = max(s_ms, e_ms - 31 * 86_400_000)
+    span_h = (e_ms - s_ms) / 3_600_000
     recs = []
-    for r in raw.values():
-        if not isinstance(r, dict) or r.get("timestamp") is None:
-            continue
+    for t, _, r in _readings_between(house_id, section_id, s_ms, e_ms):
         c = _clean(r)
-        recs.append({"t": int(r["timestamp"]),
-                     "temperature": c["temperature"], "humidity": c["humidity"],
+        recs.append({"t": t, "temperature": c["temperature"], "humidity": c["humidity"],
                      "light": c["light"], "vpd": vpd_kpa(c["temperature"], c["humidity"])})
     recs.sort(key=lambda x: x["t"])
-
-    # Trim to the requested window using the DEVICE clock (the newest reading),
-    # not the server's — the same reasoning as the tray cooldown, and it keeps
-    # the chart correct under the accelerated simulator.
-    if recs:
-        cutoff = recs[-1]["t"] - hours * 3600 * 1000
-        trimmed = [r for r in recs if r["t"] >= cutoff]
-        if len(trimmed) >= 2:
-            recs = trimmed
-
-    if len(recs) > points:                       # even down-sample
-        step = len(recs) / float(points)
-        recs = [recs[int(i * step)] for i in range(points)]
-
-    # A multi-day window needs the day, not just the clock time.
-    fmt = "%H:%M" if hours <= 24 else "%d %b %H:%M"
+    if len(recs) > points >= 2:                  # even down-sample, keeping both ends
+        n = len(recs) - 1
+        recs = [recs[round(i * n / (points - 1))] for i in range(points)]
+    fmt = "%H:%M" if span_h <= 24 else "%d %b %H:%M"
     for r in recs:
-        r["label"] = datetime.fromtimestamp(r["t"] / 1000, tz=timezone.utc).strftime(fmt)
-
+        r["label"] = to_farm_time(r["t"]).strftime(fmt)
     temps = [r["temperature"] for r in recs] or [0]
     hums  = [r["humidity"] for r in recs] or [0]
-    return {"status": "success", "count": len(recs), "series": recs, "hours": hours,
+    return {"status": "success", "count": len(recs), "series": recs, "hours": round(span_h, 1),
+            "start": s_ms, "end": e_ms,
             "tempMin": min(temps), "tempMax": max(temps),
             "humidityMin": min(hums), "humidityMax": max(hums)}
 
