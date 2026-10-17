@@ -29,10 +29,16 @@ import {
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
-  setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus,
+  setDeviceInterval, intervalLabel, getCommandStatus, setGrowthStage,
 } from '../services/careV2';
 import { sectionIssues, farmClock } from '../services/deviceHealth';
 import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
+import { FEED_STAGES, isFeedStage } from '../services/growthStage';
+import { READ_PRESETS, isPreset, formatInterval } from '../services/readInterval';
+import IntervalDialog from '../components/IntervalDialog';
+import UnitToggle from '../components/UnitToggle';
+import { usePrefs } from '../config/prefs';
+import { editText, parseLength, convertText, formatLength } from '../services/lengthUnits';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -335,6 +341,31 @@ export default function SectionDetailScreen({ route, navigation }) {
   // rolls back if the write fails, because the node itself takes up to one full
   // interval to actually adopt the new value and we do not want the UI to look
   // frozen for five minutes.
+  /* Growth stage: by hand from the sheet, or from a photo on the Growth screen
+     (which saves it itself and comes back here). The server dates it and works
+     the plant food out again, so the new food shows at once. */
+  const [savingStage, setSavingStage] = useState(false);
+  const { lengthUnit } = usePrefs();
+  const applyStage = async (stage) => {
+    setSheet(null);
+    setSavingStage(true);
+    try {
+      const r = await setGrowthStage(houseId, sectionId, { stage, by: 'manual' });
+      if (r?.fertilizer) setFert(r.fertilizer);
+      setToast({ text: `Growth stage set to ${stage}`, kind: 'success' });
+      load();
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally {
+      setSavingStage(false);
+    }
+  };
+  const checkStageWithPhoto = () => navigation.navigate('GrowthCheck', {
+    forSection: { houseId, sectionId, name: meta.name || sectionId },
+  });
+
+  const openCustomInterval = () => setSheet('intervalCustom');
+
   const applyInterval = async (ms) => {
     if (!device) return;
     const prev = device.readIntervalMs;
@@ -473,24 +504,22 @@ export default function SectionDetailScreen({ route, navigation }) {
   /* Save where this section sits. Metres, so a plain number is the whole
      input - a map picker can replace this later without the API changing. */
   const savePosition = async () => {
-    const x = parseFloat(String(posEdit?.x ?? '').trim());
-    const y = parseFloat(String(posEdit?.y ?? '').trim());
-    if (Number.isNaN(x) || Number.isNaN(y)) {
-      setToast({ text: 'Enter both X and Y in metres, for example 3.5 and 8.',
-                 kind: 'error' });
+    // Typed in metres or feet (the app-wide choice); the server keeps metres.
+    const px = parseLength(posEdit?.x, lengthUnit, { min: 0, max: 500, what: 'X' });
+    const py = parseLength(posEdit?.y, lengthUnit, { min: 0, max: 500, what: 'Y' });
+    if (px.error || py.error) {
+      setToast({ text: px.error || py.error, kind: 'error' });
       return;
     }
-    if (x < 0 || y < 0 || x > 500 || y > 500) {
-      setToast({ text: 'Coordinates are metres inside the house, 0 to 500.',
-                 kind: 'error' });
-      return;
-    }
+    const x = px.m;
+    const y = py.m;
     try {
       setPosSaving(true);
       await setSectionPosition(houseId, sectionId, x, y);
       setPosEdit(null);
       load();
-      setToast({ text: `Placed at ${x} m, ${y} m`, kind: 'success' });
+      setToast({ text: `Placed at ${formatLength(x, lengthUnit)}, ${formatLength(y, lengthUnit)}`,
+                 kind: 'success' });
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
@@ -729,6 +758,19 @@ export default function SectionDetailScreen({ route, navigation }) {
 
   // Skeleton, not a spinner: this screen takes a second or two to load and a
   // bare spinner on a blank page reads as a hang.
+  /* The stage in use and where it came from. The fertilizer record carries the
+     server's verdict; a section the engine has not planned yet only has what
+     was chosen when it was created. */
+  const fRec = fert || sec?.fertilizer || {};
+  const stageNow = isFeedStage(fRec.growthStage) ? fRec.growthStage
+                 : isFeedStage(meta.growthStage) ? meta.growthStage : 'Active';
+  const stageSource = fRec.growthSource
+    || (meta.growthStageBy === 'photo' ? 'photo' : meta.growthStageSetAt ? 'manual' : 'setup');
+  const stageNote = fRec.growthMessage
+    || (meta.growthStageSetAt ? null : 'Chosen when this section was set up, and not checked since.');
+  const stagePill = { photo: 'from a photo', manual: 'set by you', component2: 'camera',
+                      seasonal: 'a guess', setup: 'from setup' }[stageSource] || stageSource;
+
   if (loading) return (
     <View style={styles.container}>
       <ScreenHeader title="Loading…" subtitle={houseName || houseId}
@@ -1031,19 +1073,45 @@ export default function SectionDetailScreen({ route, navigation }) {
       />
 
       <SelectSheet
+        visible={sheet === 'stage'}
+        title="Growth stage"
+        subtitle="Decides which plant food this section gets. Not sure? Check with a photo instead."
+        options={FEED_STAGES.map((o) => ({ key: o.key, label: o.label, sub: o.sub }))}
+        value={stageNow}
+        confirmOnSelect={false}
+        confirmLabel="Save"
+        busy={savingStage}
+        onCancel={() => setSheet(null)}
+        onConfirm={(key) => applyStage(key)}
+      />
+
+      <SelectSheet
         visible={sheet === 'interval'}
         title="How often should this node read?"
-        subtitle="Faster suits a demo, slower saves battery. The node picks the change up on its next cycle."
-        options={READ_INTERVALS.map((o) => ({
-          key: String(o.ms), label: o.label, sub: o.hint,
-        }))}
-        value={String(device?.readIntervalMs ?? '')}
+        subtitle="The node picks the change up on its next reading."
+        options={[
+          ...READ_PRESETS.map((ms) => ({ key: String(ms), label: `Every ${formatInterval(ms)}` })),
+          { key: 'custom',
+            label: device?.readIntervalMs && !isPreset(device.readIntervalMs)
+              ? `Custom: every ${formatInterval(device.readIntervalMs)}` : 'Custom',
+            sub: 'Any time from 5 seconds to 60 minutes' },
+        ]}
+        value={device?.readIntervalMs == null ? null
+               : isPreset(device.readIntervalMs) ? String(device.readIntervalMs) : 'custom'}
         confirmOnSelect={false}
         confirmLabel="Save"
         busy={savingIv != null}
         onCancel={() => setSheet(null)}
-        onConfirm={(key) => applyInterval(Number(key))}
+        onConfirm={(key) => (key === 'custom' ? openCustomInterval() : applyInterval(Number(key)))}
       />
+
+      {/* A value of the farmer's own, between the firmware's limits. */}
+      <IntervalDialog
+        visible={sheet === 'intervalCustom'}
+        initialMs={device?.readIntervalMs}
+        busy={savingIv != null}
+        onCancel={() => setSheet(null)}
+        onSave={(ms) => applyInterval(ms)} />
 
       {/* Two fields and a warning. Deliberately not a scan-and-pick list: the
           node cannot report the networks IT can see, only the ones this phone
@@ -1593,10 +1661,20 @@ export default function SectionDetailScreen({ route, navigation }) {
                     </View>
                     <View style={styles.fertRow}>
                       <Text style={styles.fertKey}>Feeds every</Text>
-                      <Text style={styles.fertVal}>
-                        {every} days \u00b7 {f.growthStage || 'Active'}
-                      </Text>
+                      <Text style={styles.fertVal}>{every} days</Text>
                     </View>
+                    {/* The stage decides the food, so it can be changed right
+                        here as well as in Setup. */}
+                    <TouchableOpacity style={styles.fertRow} activeOpacity={0.7}
+                      disabled={!can('setGrowthStage')}
+                      onPress={can('setGrowthStage') ? () => setSheet('stage') : undefined}
+                      accessibilityRole={can('setGrowthStage') ? 'button' : undefined}
+                      accessibilityLabel={`Growth stage ${stageNow}${can('setGrowthStage') ? '. Tap to change.' : ''}`}>
+                      <Text style={styles.fertKey}>Growth stage</Text>
+                      <Text style={[styles.fertVal, can('setGrowthStage') && { color: COLORS.primary }]}>
+                        {stageNow}{can('setGrowthStage') ? '  \u203a' : ''}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
 
                   {/* How far through the feeding cycle this section is. A date
@@ -1824,6 +1902,44 @@ export default function SectionDetailScreen({ route, navigation }) {
             )}
           </View>
 
+          {/* ── GROWTH STAGE ────────────────────────────────────────────
+              Decides which plant food the section gets. It used to be chosen
+              once, at setup, with no date and no way to change it (15 Oct). */}
+          <SectionHead icon="leaf-outline" title="Growth stage"
+            tint={COLORS.fertilizer} tintDim={COLORS.fertilizerDim}
+            status={stagePill}
+            statusTone={stageSource === 'seasonal' || stageSource === 'setup'
+                        ? COLORS.warning : COLORS.fertilizer} />
+          <View style={[styles.card, SHADOW.sm]}>
+            <View style={styles.stageTop}>
+              <Text style={styles.stageName}>{stageNow}</Text>
+              {savingStage && <ActivityIndicator color={COLORS.fertilizer} />}
+            </View>
+            <Text style={styles.stageFeed}>
+              {(FEED_STAGES.find((o) => o.key === stageNow) || FEED_STAGES[0]).sub}
+            </Text>
+            {!!stageNote && <Text style={styles.stageNote}>{stageNote}</Text>}
+            {can('setGrowthStage') ? (
+              <View style={styles.stageBtns}>
+                <TouchableOpacity style={[styles.stageBtn, styles.stageBtnMain]}
+                  onPress={checkStageWithPhoto} disabled={savingStage} activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Check the growth stage with a photo">
+                  <Ionicons name="camera-outline" size={17} color={COLORS.textInverse} />
+                  <Text style={[styles.stageBtnTxt, { color: COLORS.textInverse }]}>Check with a photo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.stageBtn}
+                  onPress={() => setSheet('stage')} disabled={savingStage} activeOpacity={0.8}
+                  accessibilityRole="button" accessibilityLabel="Choose the growth stage by hand">
+                  <Ionicons name="list-outline" size={17} color={COLORS.fertilizer} />
+                  <Text style={[styles.stageBtnTxt, { color: COLORS.fertilizer }]}>Choose</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={styles.stageNote}>Only an admin or operator can change it.</Text>
+            )}
+          </View>
+
           {/* ── POSITION ────────────────────────────────────────────────
               Metres from whichever corner of the house the farmer picks, used
               consistently for every section. The origin is arbitrary because
@@ -1836,9 +1952,12 @@ export default function SectionDetailScreen({ route, navigation }) {
           <View style={[styles.card, SHADOW.sm]}>
             {posEdit ? (
               <>
+                <UnitToggle style={{ marginBottom: SPACE.md }}
+                  onChange={(from, to) => setPosEdit((p) => ({
+                    ...p, x: convertText(p.x, from, to), y: convertText(p.y, from, to) }))} />
                 <View style={styles.durRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>X (metres)</Text>
+                    <Text style={styles.durLabel}>X ({lengthUnit === 'ft' ? 'feet' : 'metres'})</Text>
                     <TextInput style={styles.durInput} value={posEdit.x}
                       onChangeText={(v) => setPosEdit({ ...posEdit, x: v })}
                       keyboardType="numbers-and-punctuation" placeholder="0.0"
@@ -1846,7 +1965,7 @@ export default function SectionDetailScreen({ route, navigation }) {
                       maxFontSizeMultiplier={1.15} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>Y (metres)</Text>
+                    <Text style={styles.durLabel}>Y ({lengthUnit === 'ft' ? 'feet' : 'metres'})</Text>
                     <TextInput style={styles.durInput} value={posEdit.y}
                       onChangeText={(v) => setPosEdit({ ...posEdit, y: v })}
                       keyboardType="numbers-and-punctuation" placeholder="0.0"
@@ -1875,8 +1994,8 @@ export default function SectionDetailScreen({ route, navigation }) {
               <TouchableOpacity style={styles.durView} activeOpacity={0.7}
                 disabled={!can('setSectionPosition')}
                 onPress={can('setSectionPosition') ? () => setPosEdit({
-                  x: meta.x != null ? String(meta.x) : '',
-                  y: meta.y != null ? String(meta.y) : '',
+                  x: editText(meta.x, lengthUnit),
+                  y: editText(meta.y, lengthUnit),
                 }) : undefined}
                 accessibilityRole={can('setSectionPosition') ? 'button' : 'text'}
                 accessibilityLabel="Set where this section is in the house">
@@ -1884,7 +2003,9 @@ export default function SectionDetailScreen({ route, navigation }) {
                   color={meta.x != null ? COLORS.primary : COLORS.textTertiary} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.durValue}>
-                    {meta.x != null ? `${meta.x} m, ${meta.y} m` : 'Not placed'}
+                    {meta.x != null
+                      ? `${formatLength(meta.x, lengthUnit)}, ${formatLength(meta.y, lengthUnit)}`
+                      : 'Not placed'}
                   </Text>
                   <Text style={styles.durSub}>
                     {meta.x != null
@@ -2162,6 +2283,18 @@ const styles = StyleSheet.create({
   fertVal:  { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
   fertHint: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16,
               marginTop: SPACE.sm },
+  stageTop:  { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  stageName: { flex: 1, color: COLORS.fertilizer, fontSize: FONT.xl, fontWeight: '800' },
+  stageFeed: { color: COLORS.text, fontSize: FONT.sm, lineHeight: 19, marginTop: SPACE.xs },
+  stageNote: { color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 16, marginTop: SPACE.sm },
+  stageBtns: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.md },
+  // Equal halves with the label stretched across: sized to its words, a label
+  // clips on a phone with Bold text on.
+  stageBtn:  { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+               gap: 6, minHeight: 44, paddingHorizontal: SPACE.sm, borderRadius: RADIUS.md,
+               borderWidth: 1.5, borderColor: COLORS.fertilizer },
+  stageBtnMain: { flex: 1.4, backgroundColor: COLORS.fertilizer },
+  stageBtnTxt:  { flexShrink: 1, fontSize: FONT.sm, fontWeight: '800' },
   wLbl:   { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700',
             marginTop: SPACE.md, marginBottom: SPACE.xs },
   wHead:  { flexDirection: 'row', alignItems: 'center',

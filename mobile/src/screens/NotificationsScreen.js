@@ -54,14 +54,18 @@ const NotificationsScreen = ({ navigation }) => {
         ) : (
           <>
             <View style={styles.topRow}>
+              {/* Not "Nothing needs you" above a card of waiting alarms: on
+                  the phone it said exactly that over "22 alarms are waiting". */}
               <View style={[styles.summary, {
-                backgroundColor: problems ? COLORS.warningDim : COLORS.successDim }]}>
-                <Ionicons name={problems ? 'alert-circle' : 'checkmark-circle'} size={18}
-                  color={problems ? COLORS.warning : COLORS.success} />
-                <Text style={[styles.summaryTxt, { color: problems ? COLORS.warning : COLORS.success }]}>
+                backgroundColor: problems || waiting ? COLORS.warningDim : COLORS.successDim }]}>
+                <Ionicons name={problems || waiting ? 'alert-circle' : 'checkmark-circle'} size={18}
+                  color={problems || waiting ? COLORS.warning : COLORS.success} />
+                <Text style={[styles.summaryTxt,
+                              { color: problems || waiting ? COLORS.warning : COLORS.success }]}>
                   {problems
                     ? `${problems} ${problems === 1 ? 'needs' : 'need'} attention`
-                    : 'Nothing needs you'}
+                    : waiting ? 'Only the alarms need you'
+                      : n.hidden.length ? 'All cleared' : 'Nothing needs you'}
                 </Text>
               </View>
               {items.length > 0 && (
@@ -76,7 +80,7 @@ const NotificationsScreen = ({ navigation }) => {
 
             {waiting > 0 && (
               <TouchableOpacity activeOpacity={0.75}
-                style={[styles.card, SHADOW.sm, { borderLeftColor: COLORS.danger }]}
+                style={[styles.card, styles.alarmCard, SHADOW.sm, { borderLeftColor: COLORS.danger }]}
                 onPress={() => navigation.navigate('Alarm')}>
                 <View style={[styles.icon, { backgroundColor: COLORS.dangerDim }]}>
                   <Ionicons name="alarm" size={17} color={COLORS.danger} />
@@ -209,11 +213,14 @@ const styles = StyleSheet.create({
   clearAllTxt:{ color: COLORS.primary, fontSize: FONT.md, fontWeight: '800' },
 
   empty:    { alignItems: 'center', gap: SPACE.md, paddingVertical: 40 },
-  emptyTxt: { color: COLORS.textTertiary, fontSize: FONT.sm, textAlign: 'center', lineHeight: 19 },
+  emptyTxt: { alignSelf: 'stretch', color: COLORS.textTertiary, fontSize: FONT.sm,
+              textAlign: 'center', lineHeight: 19 },
 
   card:  { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.bgCard,
            borderRadius: RADIUS.sm, marginBottom: SPACE.sm, borderLeftWidth: 3 },
   cardCleared: { opacity: 0.7, borderWidth: 1, borderColor: COLORS.border },
+  // the alarm card has no clear button, so it carries its own padding
+  alarmCard: { gap: SPACE.md, padding: SPACE.md },
   cardBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
               paddingVertical: SPACE.md, paddingLeft: SPACE.md },
   sideBtn: { width: 44, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },

@@ -19,10 +19,15 @@
  * Needs-you list) before the first house. Now:
  *
  *   1. One status line           -> how many things need you; tap to jump
- *   2. The farm                  -> houses, collapsed, urgent sections first;
- *                                   a house's own problem (no master) inside it
- *   3. Water Now / Fill Tray, then Automation and what is scheduled next
- *   4. Needs you                 -> the full list, each with its house
+ *   2. The farm in one line      -> houses, sections, sensors
+ *   3. Automation                -> the mode, and what is scheduled next
+ *   4. Water Now / Fill Tray
+ *   5. Add another house
+ *   6. The houses                -> collapsed, urgent sections first; a house's
+ *                                   own problem (no master) inside it
+ *   7. Needs you                 -> the full list, each with its house
+ *
+ * Steps 3 to 5 above the houses is the grower's order (15 Oct, second pass).
  *
  * Nothing is hidden by this: the status line names the count and links to the
  * list, and every house still says what is wrong inside it.
@@ -53,8 +58,11 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import {
   getOverview, deleteHouse,
   renameFarm, renameHouse, getAlarms, humidityStatus, vpdStatus,
-  getDevices, setHouseMaster, setHousePumps,
+  getDevices, setHouseMaster, setHousePumps, setHouseDimensions,
 } from '../services/careV2';
+import HouseSizeDialog from '../components/HouseSizeDialog';
+import { usePrefs } from '../config/prefs';
+import { formatLength } from '../services/lengthUnits';
 
 /** "GOOD" shouted at the farmer; "Good" just tells them. */
 const titleCase = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : t);
@@ -189,6 +197,27 @@ export default function FarmDashboardScreen({ navigation }) {
      a house whose master was chosen in the app still refused every Water Now
      with "no watering pump channel is set". Found in the end-to-end run. */
   const [pumps, setPumps] = useState(null);
+  /* The house whose size is being corrected, and whether it is saving. A size
+     could only be typed when a house was planned (17 Oct 2026). */
+  const [sizing, setSizing] = useState(null);
+  const [savingSize, setSavingSize] = useState(false);
+  const { lengthUnit } = usePrefs();
+  const saveSize = async (width, length, scaleSections) => {
+    const h = sizing;
+    setSavingSize(true);
+    try {
+      const r = await setHouseDimensions(h.houseId, width, length, scaleSections);
+      setSizing(null);
+      const n = Object.keys(r?.moved || {}).length;
+      Alert.alert('House size saved',
+        `${h.meta?.name || h.houseId} is now ${formatLength(width, lengthUnit)} x `
+        + `${formatLength(length, lengthUnit)}.`
+        + (n ? ` ${n} section${n === 1 ? '' : 's'} moved to fit.` : ''));
+      await load();
+    } catch (e) {
+      Alert.alert('Could not save the size', e.message);
+    } finally { setSavingSize(false); }
+  };
   /* What this account may do. The server refuses the rest whatever happens
      here; this only stops the screen offering a control that would 403. */
   const can = useCan();
@@ -474,6 +503,78 @@ export default function FarmDashboardScreen({ navigation }) {
               {' · '}{nodes} sensor{nodes === 1 ? '' : 's'}
               {estimated > 0 ? ` · ${estimated} estimated` : ''}
             </Text>
+            {/* ── 3. Automation, as the grower asked (15 Oct): is the farm
+                running itself, then the two manual actions, then a new house,
+                then the houses themselves. ─────────────────────────────── */}
+            <View style={[styles.card, SHADOW.sm]}>
+              <Text style={styles.cardTitle}>Automation</Text>
+              {/* ModeToggle and AutoControls used to sit eighty lines apart with
+                  four unrelated blocks between them, so the farmer had to know
+                  which of two switches did what. They are one control surface
+                  and now read as one. */}
+              <ModeToggle style={styles.modeInCard} />
+              <AutoControls autoMode={auto?.autoMode} pendingAction={auto?.pendingAction || 0}
+                onChanged={refreshAuto} />
+
+              {nextUp ? (
+                <TouchableOpacity
+                  style={styles.nextRow}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Next watering: ${nextUp.name} at ${nextUp.at} for ${nextUp.secs} seconds.`}
+                  onPress={() => navigation.navigate('SectionDetail', {
+                    houseId: nextUp.houseId, sectionId: nextUp.sectionId })}>
+                  <Ionicons name="alarm-outline" size={15} color={COLORS.info} />
+                  <Text style={styles.nextText} numberOfLines={1}>
+                    Next: <Text style={styles.nextStrong}>{nextUp.name}</Text> at{' '}
+                    <Text style={styles.nextStrong}>{nextUp.at}</Text>
+                    {nextUp.secs ? ` for ${nextUp.secs}s` : ''}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={COLORS.textTertiary} />
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.nextNone}>
+                  {doneToday
+                    ? "Nothing more is planned for today. Tomorrow's plan is worked out at dawn from that morning's readings."
+                    : "No watering planned yet — the plan is worked out at dawn from that morning's readings."}
+                </Text>
+              )}
+            </View>
+
+            {/* ── 4. The two actions ─────────────────────────────────────── */}
+            <View style={styles.actRow}>
+              {/* These two look like siblings but are not: watering soaks the
+                  roots, filling a tray only raises the air humidity around the
+                  plants. The labels have to carry that difference. */}
+              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.primary }, SHADOW.md]}
+                onPress={() => startFlow('water')}
+                disabled={!sections || !can('waterSection')} activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Water. Choose which sections, then watch each one run.">
+                <Ionicons name="rainy-outline" size={17} color="#FFF" />
+                <Text style={styles.actText}>Water Now</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.info }, SHADOW.md]}
+                onPress={() => startFlow('tray')}
+                disabled={!sections || !can('fillTray')} activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Fill humidity trays. Choose which sections, then watch each one run.">
+                <Ionicons name="add-circle-outline" size={17} color="#FFF" />
+                <Text style={styles.actText}>Fill Tray</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* ── 5. A new house ─────────────────────────────────────────── */}
+            {can('addHouse') && (
+            <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
+              onPress={() => setAdding(true)} activeOpacity={0.8}
+              accessibilityRole="button" accessibilityLabel="Add another house">
+              <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
+              <Text style={styles.addHouseText}>Add another house</Text>
+            </TouchableOpacity>
+            )}
+
+            {/* ── 6. The houses ────────────────────────────────────────────── */}
             {houses.map(h => {
               /* Urgent sections first, so a farmer who opens a house can stop
                  reading once the rows stop being coloured. Within a rank the
@@ -486,7 +587,13 @@ export default function FarmDashboardScreen({ navigation }) {
               // isFault, not !trusted: an estimated zone carries trusted:false
               // because it is not a measurement, and counting those made a
               // correctly working house report "4 not reporting".
-              const bad  = secs.filter(z => isFault(z.freshness)).length;
+              /* A section with no board is not "not reporting": there is
+                 nothing there to report. House "1" read "4 not reporting" while
+                 the status line above said 3 for the farm (15 Oct), because
+                 isFault counts 'nonode' and the Needs-you list rightly does not. */
+              const bad  = secs.filter(z => isFault(z.freshness)
+                                         && z.freshness?.state !== 'nonode').length;
+              const bare = secs.filter(z => z.freshness?.state === 'nonode').length;
               const est  = secs.filter(z => z.freshness?.state === 'estimated').length;
               const need = secs.filter(z => z.tray?.status === 'fill').length;
 
@@ -607,6 +714,7 @@ export default function FarmDashboardScreen({ navigation }) {
                       const bits = [];
                       if (bad)  bits.push(`${bad} not reporting`);
                       if (need) bits.push(`${need} need water`);
+                      if (bare) bits.push(`${bare} without a sensor`);
                       // Stated, but as a fact rather than a problem - and only
                       // when there is nothing wrong to say instead.
                       if (!bits.length && est) return `${est} estimated, the rest are fine`;
@@ -764,65 +872,7 @@ export default function FarmDashboardScreen({ navigation }) {
               );
             })}
 
-            {/* ── 3. The two actions, then Automation ─────────────────────── */}
-            <View style={styles.actRow}>
-              {/* These two look like siblings but are not: watering soaks the
-                  roots, filling a tray only raises the air humidity around the
-                  plants. The labels have to carry that difference. */}
-              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.primary }, SHADOW.md]}
-                onPress={() => startFlow('water')}
-                disabled={!sections || !can('waterSection')} activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Water. Choose which sections, then watch each one run.">
-                <Ionicons name="rainy-outline" size={17} color="#FFF" />
-                <Text style={styles.actText}>Water Now</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.info }, SHADOW.md]}
-                onPress={() => startFlow('tray')}
-                disabled={!sections || !can('fillTray')} activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Fill humidity trays. Choose which sections, then watch each one run.">
-                <Ionicons name="add-circle-outline" size={17} color="#FFF" />
-                <Text style={styles.actText}>Fill Tray</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={[styles.card, SHADOW.sm]}>
-              <Text style={styles.cardTitle}>Automation</Text>
-              {/* ModeToggle and AutoControls used to sit eighty lines apart with
-                  four unrelated blocks between them, so the farmer had to know
-                  which of two switches did what. They are one control surface
-                  and now read as one. */}
-              <ModeToggle style={styles.modeInCard} />
-              <AutoControls autoMode={auto?.autoMode} pendingAction={auto?.pendingAction || 0}
-                onChanged={refreshAuto} />
-
-              {nextUp ? (
-                <TouchableOpacity
-                  style={styles.nextRow}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Next watering: ${nextUp.name} at ${nextUp.at} for ${nextUp.secs} seconds.`}
-                  onPress={() => navigation.navigate('SectionDetail', {
-                    houseId: nextUp.houseId, sectionId: nextUp.sectionId })}>
-                  <Ionicons name="alarm-outline" size={15} color={COLORS.info} />
-                  <Text style={styles.nextText} numberOfLines={1}>
-                    Next: <Text style={styles.nextStrong}>{nextUp.name}</Text> at{' '}
-                    <Text style={styles.nextStrong}>{nextUp.at}</Text>
-                    {nextUp.secs ? ` for ${nextUp.secs}s` : ''}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={14} color={COLORS.textTertiary} />
-                </TouchableOpacity>
-              ) : (
-                <Text style={styles.nextNone}>
-                  {doneToday
-                    ? "Nothing more is planned for today. Tomorrow's plan is worked out at dawn from that morning's readings."
-                    : "No watering planned yet — the plan is worked out at dawn from that morning's readings."}
-                </Text>
-              )}
-            </View>
-
-            {/* ── 4. Everything that wants something, each with its house ─ */}
+            {/* ── 7. Everything that wants something, each with its house ─ */}
             {problems > 0 && (
               <View style={[styles.card, SHADOW.sm]}
                 onLayout={(e) => setNeedsY(e.nativeEvent.layout.y)}>
@@ -871,16 +921,6 @@ export default function FarmDashboardScreen({ navigation }) {
                   </TouchableOpacity>
                 ))}
               </View>
-            )}
-
-
-            {can('addHouse') && (
-            <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
-              onPress={() => setAdding(true)} activeOpacity={0.8}
-              accessibilityRole="button" accessibilityLabel="Add another house">
-              <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
-              <Text style={styles.addHouseText}>Add another house</Text>
-            </TouchableOpacity>
             )}
 
 
@@ -942,6 +982,11 @@ export default function FarmDashboardScreen({ navigation }) {
         options={[
           can('renameHouse') && { key: 'rename', label: 'Rename house',
             sub: 'Only the name changes. Sections and readings are untouched.' },
+          can('setHouseDimensions') && { key: 'size', label: 'House size',
+            sub: houseMenu?.meta?.width != null && houseMenu?.meta?.length != null
+              ? `${formatLength(houseMenu.meta.width, lengthUnit)} x `
+                + `${formatLength(houseMenu.meta.length, lengthUnit)}. Change it in metres or feet.`
+              : 'Not set. The map and the estimates need it.' },
           can('setHousePumps') && { key: 'pumps', label: 'Pump channels',
             sub: houseMenu?.meta?.waterChannel != null || houseMenu?.meta?.trayChannel != null
               ? `Watering pump on channel ${houseMenu?.meta?.waterChannel ?? '-'}, `
@@ -957,6 +1002,8 @@ export default function FarmDashboardScreen({ navigation }) {
           setHouseMenu(null);
           if (k === 'rename') {
             setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else if (k === 'size') {
+            setSizing(h);
           } else if (k === 'pumps') {
             setPumps({ houseId: h.houseId, name: h.meta?.name || h.houseId, step: 'water',
                        water: h.meta?.waterChannel ?? null, tray: h.meta?.trayChannel ?? null });
@@ -964,6 +1011,9 @@ export default function FarmDashboardScreen({ navigation }) {
             setConfirmDel(h);
           }
         }} />
+
+      <HouseSizeDialog visible={!!sizing} house={sizing} busy={savingSize}
+        onCancel={() => setSizing(null)} onSave={saveSize} />
 
       {/* Pump channels, one pump at a time. The tray step leaves out the
           watering pump's channel: one relay drives one motor, and the server
@@ -1260,7 +1310,8 @@ const styles = StyleSheet.create({
                    borderColor: COLORS.borderLight, gap: 6 },
   addSecOffText: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '600' },
 
-  addHouse:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, borderWidth: 1, borderColor: COLORS.primaryDim },
+  addHouse:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, borderWidth: 1, borderColor: COLORS.primaryDim,
+                  marginBottom: SPACE.lg },   // it sits above the houses now
   addHouseText: { color: COLORS.primary, fontSize: FONT.md, fontWeight: '700' },
 
   renameFarm:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

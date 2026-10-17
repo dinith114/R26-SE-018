@@ -62,6 +62,7 @@ export const PERMS = {
   planAll:           ['admin', 'operator'],
   planSection:       ['admin', 'operator'],
   requestDeviceScan: ['admin', 'operator'],
+  setGrowthStage:    ['admin', 'operator'],
   stopSection:       ['admin', 'operator'],
   trayCheck:         ['admin', 'operator'],
   trayCheckAll:      ['admin', 'operator'],
