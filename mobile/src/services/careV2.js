@@ -120,9 +120,11 @@ export const setupFarm   = (cfg)      => req('/setup',  { method: 'POST', body: 
 export const addHouse    = (house)    => req('/houses', { method: 'POST', body: JSON.stringify(house) });
 
 /** Give an existing house its size in metres, so it can be drawn to scale. */
-export const setHouseDimensions = (h, width, length) =>
+/** A house's size in METRES (the app converts feet before calling). With
+ *  scaleSections, every placed section moves in proportion. */
+export const setHouseDimensions = (h, width, length, scaleSections = false) =>
   req(`/houses/${h}/dimensions`, {
-    method: 'PUT', body: JSON.stringify({ width, length }),
+    method: 'PUT', body: JSON.stringify({ width, length, scaleSections }),
   });
 
 /**

@@ -36,6 +36,9 @@ import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRa
 import { FEED_STAGES, isFeedStage } from '../services/growthStage';
 import { READ_PRESETS, isPreset, formatInterval } from '../services/readInterval';
 import IntervalDialog from '../components/IntervalDialog';
+import UnitToggle from '../components/UnitToggle';
+import { usePrefs } from '../config/prefs';
+import { editText, parseLength, convertText, formatLength } from '../services/lengthUnits';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -342,6 +345,7 @@ export default function SectionDetailScreen({ route, navigation }) {
      (which saves it itself and comes back here). The server dates it and works
      the plant food out again, so the new food shows at once. */
   const [savingStage, setSavingStage] = useState(false);
+  const { lengthUnit } = usePrefs();
   const applyStage = async (stage) => {
     setSheet(null);
     setSavingStage(true);
@@ -500,24 +504,22 @@ export default function SectionDetailScreen({ route, navigation }) {
   /* Save where this section sits. Metres, so a plain number is the whole
      input - a map picker can replace this later without the API changing. */
   const savePosition = async () => {
-    const x = parseFloat(String(posEdit?.x ?? '').trim());
-    const y = parseFloat(String(posEdit?.y ?? '').trim());
-    if (Number.isNaN(x) || Number.isNaN(y)) {
-      setToast({ text: 'Enter both X and Y in metres, for example 3.5 and 8.',
-                 kind: 'error' });
+    // Typed in metres or feet (the app-wide choice); the server keeps metres.
+    const px = parseLength(posEdit?.x, lengthUnit, { min: 0, max: 500, what: 'X' });
+    const py = parseLength(posEdit?.y, lengthUnit, { min: 0, max: 500, what: 'Y' });
+    if (px.error || py.error) {
+      setToast({ text: px.error || py.error, kind: 'error' });
       return;
     }
-    if (x < 0 || y < 0 || x > 500 || y > 500) {
-      setToast({ text: 'Coordinates are metres inside the house, 0 to 500.',
-                 kind: 'error' });
-      return;
-    }
+    const x = px.m;
+    const y = py.m;
     try {
       setPosSaving(true);
       await setSectionPosition(houseId, sectionId, x, y);
       setPosEdit(null);
       load();
-      setToast({ text: `Placed at ${x} m, ${y} m`, kind: 'success' });
+      setToast({ text: `Placed at ${formatLength(x, lengthUnit)}, ${formatLength(y, lengthUnit)}`,
+                 kind: 'success' });
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
@@ -1950,9 +1952,12 @@ export default function SectionDetailScreen({ route, navigation }) {
           <View style={[styles.card, SHADOW.sm]}>
             {posEdit ? (
               <>
+                <UnitToggle style={{ marginBottom: SPACE.md }}
+                  onChange={(from, to) => setPosEdit((p) => ({
+                    ...p, x: convertText(p.x, from, to), y: convertText(p.y, from, to) }))} />
                 <View style={styles.durRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>X (metres)</Text>
+                    <Text style={styles.durLabel}>X ({lengthUnit === 'ft' ? 'feet' : 'metres'})</Text>
                     <TextInput style={styles.durInput} value={posEdit.x}
                       onChangeText={(v) => setPosEdit({ ...posEdit, x: v })}
                       keyboardType="numbers-and-punctuation" placeholder="0.0"
@@ -1960,7 +1965,7 @@ export default function SectionDetailScreen({ route, navigation }) {
                       maxFontSizeMultiplier={1.15} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>Y (metres)</Text>
+                    <Text style={styles.durLabel}>Y ({lengthUnit === 'ft' ? 'feet' : 'metres'})</Text>
                     <TextInput style={styles.durInput} value={posEdit.y}
                       onChangeText={(v) => setPosEdit({ ...posEdit, y: v })}
                       keyboardType="numbers-and-punctuation" placeholder="0.0"
@@ -1989,8 +1994,8 @@ export default function SectionDetailScreen({ route, navigation }) {
               <TouchableOpacity style={styles.durView} activeOpacity={0.7}
                 disabled={!can('setSectionPosition')}
                 onPress={can('setSectionPosition') ? () => setPosEdit({
-                  x: meta.x != null ? String(meta.x) : '',
-                  y: meta.y != null ? String(meta.y) : '',
+                  x: editText(meta.x, lengthUnit),
+                  y: editText(meta.y, lengthUnit),
                 }) : undefined}
                 accessibilityRole={can('setSectionPosition') ? 'button' : 'text'}
                 accessibilityLabel="Set where this section is in the house">
@@ -1998,7 +2003,9 @@ export default function SectionDetailScreen({ route, navigation }) {
                   color={meta.x != null ? COLORS.primary : COLORS.textTertiary} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.durValue}>
-                    {meta.x != null ? `${meta.x} m, ${meta.y} m` : 'Not placed'}
+                    {meta.x != null
+                      ? `${formatLength(meta.x, lengthUnit)}, ${formatLength(meta.y, lengthUnit)}`
+                      : 'Not placed'}
                   </Text>
                   <Text style={styles.durSub}>
                     {meta.x != null

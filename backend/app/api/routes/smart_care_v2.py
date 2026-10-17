@@ -3746,23 +3746,58 @@ async def set_section_flow(house_id: str, section_id: str, body: FlowIn, ctx: Au
 class DimensionsIn(BaseModel):
     width: float = Field(..., gt=1.0, le=200.0)
     length: float = Field(..., gt=1.0, le=200.0)
+    # Move every placed section in proportion to the new size. For positions
+    # that were PLANNED for the old size (the planner's even grid); measured
+    # positions are real metres and must stay where they are, so this is off
+    # unless the farmer asks for it.
+    scaleSections: bool = False
 
 
 @router.put("/houses/{house_id}/dimensions")
 async def set_house_dimensions(house_id: str, body: DimensionsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
-    """Give an existing house its size in metres.
+    """Give a house its size in metres, optionally moving its sections to fit.
 
     Houses created before dimensions were stored have none, and every spatial
     feature needs them - the map cannot place a section at (7, 9) without
-    knowing whether the house is eight metres across or forty.
+    knowing whether the house is eight metres across or forty. The app could
+    only set a size when the house was planned, so a wrong guess (10 x 14 m for
+    a 4.99 x 9.7 m house, 17 Oct 2026) stayed wrong; it can now be corrected.
     """
     meta = _fb_get(f"/farm/houses/{house_id}/meta.json")
     if not meta:
         raise HTTPException(404, "House not found")
-    meta["width"] = round(float(body.width), 2)
-    meta["length"] = round(float(body.length), 2)
+    try:
+        old_w, old_l = float(meta.get("width")), float(meta.get("length"))
+    except (TypeError, ValueError):
+        old_w = old_l = None
+    new_w, new_l = round(float(body.width), 2), round(float(body.length), 2)
+
+    moved = {}
+    if body.scaleSections:
+        if not old_w or not old_l:
+            raise HTTPException(400, "This house had no size before, so there is nothing to scale "
+                                     "from. Save the size without moving the sections.")
+        sections = _fb_get(f"/farm/houses/{house_id}/sections.json") or {}
+        for sid, sec in sorted(sections.items()):
+            m = (sec or {}).get("meta") or {}
+            try:
+                x, y = float(m["x"]), float(m["y"])
+            except (KeyError, TypeError, ValueError):
+                continue                               # not placed: nothing to move
+            nx = round(min(max(x * new_w / old_w, 0.0), new_w), 2)
+            ny = round(min(max(y * new_l / old_l, 0.0), new_l), 2)
+            moved[sid] = {"from": {"x": x, "y": y}, "to": {"x": nx, "y": ny}}
+
+    # The size first: if a section write then fails, saving again scales from
+    # the NEW size (a ratio of 1) and moves nothing, where the other order
+    # would move the sections twice.
+    meta["width"], meta["length"] = new_w, new_l
     _put_or_502(f"/farm/houses/{house_id}/meta.json", meta)
-    return {"status": "success", "width": meta["width"], "length": meta["length"]}
+    for sid, mv in moved.items():
+        # field by field, so the rest of the section's meta is not rewritten
+        _put_or_502(f"/farm/houses/{house_id}/sections/{sid}/meta/x.json", mv["to"]["x"])
+        _put_or_502(f"/farm/houses/{house_id}/sections/{sid}/meta/y.json", mv["to"]["y"])
+    return {"status": "success", "width": new_w, "length": new_l, "moved": moved}
 
 
 class LifecycleIn(BaseModel):

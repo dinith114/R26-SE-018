@@ -68,6 +68,7 @@ jobs:
             tests/test_fallback.py \
             tests/test_history_timeline.py \
             tests/test_growth_stage_setting.py \
+            tests/test_house_dimensions.py \
             tests/test_ci_workflow_is_runnable.py
 
   mobile:

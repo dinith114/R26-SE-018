@@ -58,8 +58,11 @@ import ConfirmSheet from '../components/ConfirmSheet';
 import {
   getOverview, deleteHouse,
   renameFarm, renameHouse, getAlarms, humidityStatus, vpdStatus,
-  getDevices, setHouseMaster, setHousePumps,
+  getDevices, setHouseMaster, setHousePumps, setHouseDimensions,
 } from '../services/careV2';
+import HouseSizeDialog from '../components/HouseSizeDialog';
+import { usePrefs } from '../config/prefs';
+import { formatLength } from '../services/lengthUnits';
 
 /** "GOOD" shouted at the farmer; "Good" just tells them. */
 const titleCase = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : t);
@@ -194,6 +197,27 @@ export default function FarmDashboardScreen({ navigation }) {
      a house whose master was chosen in the app still refused every Water Now
      with "no watering pump channel is set". Found in the end-to-end run. */
   const [pumps, setPumps] = useState(null);
+  /* The house whose size is being corrected, and whether it is saving. A size
+     could only be typed when a house was planned (17 Oct 2026). */
+  const [sizing, setSizing] = useState(null);
+  const [savingSize, setSavingSize] = useState(false);
+  const { lengthUnit } = usePrefs();
+  const saveSize = async (width, length, scaleSections) => {
+    const h = sizing;
+    setSavingSize(true);
+    try {
+      const r = await setHouseDimensions(h.houseId, width, length, scaleSections);
+      setSizing(null);
+      const n = Object.keys(r?.moved || {}).length;
+      Alert.alert('House size saved',
+        `${h.meta?.name || h.houseId} is now ${formatLength(width, lengthUnit)} x `
+        + `${formatLength(length, lengthUnit)}.`
+        + (n ? ` ${n} section${n === 1 ? '' : 's'} moved to fit.` : ''));
+      await load();
+    } catch (e) {
+      Alert.alert('Could not save the size', e.message);
+    } finally { setSavingSize(false); }
+  };
   /* What this account may do. The server refuses the rest whatever happens
      here; this only stops the screen offering a control that would 403. */
   const can = useCan();
@@ -958,6 +982,11 @@ export default function FarmDashboardScreen({ navigation }) {
         options={[
           can('renameHouse') && { key: 'rename', label: 'Rename house',
             sub: 'Only the name changes. Sections and readings are untouched.' },
+          can('setHouseDimensions') && { key: 'size', label: 'House size',
+            sub: houseMenu?.meta?.width != null && houseMenu?.meta?.length != null
+              ? `${formatLength(houseMenu.meta.width, lengthUnit)} x `
+                + `${formatLength(houseMenu.meta.length, lengthUnit)}. Change it in metres or feet.`
+              : 'Not set. The map and the estimates need it.' },
           can('setHousePumps') && { key: 'pumps', label: 'Pump channels',
             sub: houseMenu?.meta?.waterChannel != null || houseMenu?.meta?.trayChannel != null
               ? `Watering pump on channel ${houseMenu?.meta?.waterChannel ?? '-'}, `
@@ -973,6 +1002,8 @@ export default function FarmDashboardScreen({ navigation }) {
           setHouseMenu(null);
           if (k === 'rename') {
             setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else if (k === 'size') {
+            setSizing(h);
           } else if (k === 'pumps') {
             setPumps({ houseId: h.houseId, name: h.meta?.name || h.houseId, step: 'water',
                        water: h.meta?.waterChannel ?? null, tray: h.meta?.trayChannel ?? null });
@@ -980,6 +1011,9 @@ export default function FarmDashboardScreen({ navigation }) {
             setConfirmDel(h);
           }
         }} />
+
+      <HouseSizeDialog visible={!!sizing} house={sizing} busy={savingSize}
+        onCancel={() => setSizing(null)} onSave={saveSize} />
 
       {/* Pump channels, one pump at a time. The tray step leaves out the
           watering pump's channel: one relay drives one motor, and the server
