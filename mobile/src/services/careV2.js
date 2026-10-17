@@ -421,21 +421,11 @@ export const getDeviceScan = (mac) => devReq(`/${mac}/scan`);
 export const setDeviceInterval = (mac, ms) =>
   devReq(`/${mac}/interval`, { method: 'PUT', body: JSON.stringify({ readIntervalMs: ms }) });
 
-/** Offered in the UI. Discrete choices, not a free slider: these are the only
- *  values anyone actually wants, and a stray 1 s would flood the database. */
-export const READ_INTERVALS = [
-  { label: '15s',  ms: 15000,  hint: 'Demo' },
-  { label: '30s',  ms: 30000,  hint: 'Bench' },
-  { label: '1min', ms: 60000,  hint: 'Normal' },
-  { label: '5min', ms: 300000, hint: 'Production' },
-];
-
-/** "every 15s" / "every 5 min" — how the interval reads in a sentence. */
-export function intervalLabel(ms) {
-  if (ms == null) return '--';
-  const s = Math.round(ms / 1000);
-  return s < 60 ? `every ${s}s` : `every ${Math.round(s / 60)} min`;
-}
+/* The choices, any custom value (5 s to 1 h, the firmware's own limits) and
+   how an interval is said all live in services/readInterval.js, which is
+   tested without a device. "every 1 min 30 s", not the "every 2 min" this used
+   to round a custom value to. */
+export { READ_PRESETS, intervalSentence as intervalLabel } from './readInterval';
 
 /** Signal strength as words. Farmers do not read dBm. */
 export function signalLabel(rssi) {

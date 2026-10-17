@@ -29,11 +29,13 @@ import {
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
-  setDeviceInterval, READ_INTERVALS, intervalLabel, getCommandStatus, setGrowthStage,
+  setDeviceInterval, intervalLabel, getCommandStatus, setGrowthStage,
 } from '../services/careV2';
 import { sectionIssues, farmClock } from '../services/deviceHealth';
 import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
 import { FEED_STAGES, isFeedStage } from '../services/growthStage';
+import { READ_PRESETS, isPreset, formatInterval } from '../services/readInterval';
+import IntervalDialog from '../components/IntervalDialog';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -357,6 +359,8 @@ export default function SectionDetailScreen({ route, navigation }) {
   const checkStageWithPhoto = () => navigation.navigate('GrowthCheck', {
     forSection: { houseId, sectionId, name: meta.name || sectionId },
   });
+
+  const openCustomInterval = () => setSheet('intervalCustom');
 
   const applyInterval = async (ms) => {
     if (!device) return;
@@ -1082,17 +1086,30 @@ export default function SectionDetailScreen({ route, navigation }) {
       <SelectSheet
         visible={sheet === 'interval'}
         title="How often should this node read?"
-        subtitle="Faster suits a demo, slower saves battery. The node picks the change up on its next cycle."
-        options={READ_INTERVALS.map((o) => ({
-          key: String(o.ms), label: o.label, sub: o.hint,
-        }))}
-        value={String(device?.readIntervalMs ?? '')}
+        subtitle="The node picks the change up on its next reading."
+        options={[
+          ...READ_PRESETS.map((ms) => ({ key: String(ms), label: `Every ${formatInterval(ms)}` })),
+          { key: 'custom',
+            label: device?.readIntervalMs && !isPreset(device.readIntervalMs)
+              ? `Custom: every ${formatInterval(device.readIntervalMs)}` : 'Custom',
+            sub: 'Any time from 5 seconds to 60 minutes' },
+        ]}
+        value={device?.readIntervalMs == null ? null
+               : isPreset(device.readIntervalMs) ? String(device.readIntervalMs) : 'custom'}
         confirmOnSelect={false}
         confirmLabel="Save"
         busy={savingIv != null}
         onCancel={() => setSheet(null)}
-        onConfirm={(key) => applyInterval(Number(key))}
+        onConfirm={(key) => (key === 'custom' ? openCustomInterval() : applyInterval(Number(key)))}
       />
+
+      {/* A value of the farmer's own, between the firmware's limits. */}
+      <IntervalDialog
+        visible={sheet === 'intervalCustom'}
+        initialMs={device?.readIntervalMs}
+        busy={savingIv != null}
+        onCancel={() => setSheet(null)}
+        onSave={(ms) => applyInterval(ms)} />
 
       {/* Two fields and a warning. Deliberately not a scan-and-pick list: the
           node cannot report the networks IT can see, only the ones this phone
