@@ -13,12 +13,9 @@ request pays the cost, every later one is fast, and a missing model degrades to
 a clear 503 on one endpoint instead of a dead server.
 """
 
-import csv
+import json
 import re
 import sys
-import threading
-from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import Path
 
 # backend/app/services/disease_service.py -> repo root is three levels up
@@ -34,37 +31,12 @@ if str(SRC) not in sys.path:
 # See PROJECT_CONTEXT.md section 4c.
 DEFAULT_THRESHOLD = 0.70
 
+# Contributed photographs. Everything about storing and reviewing them lives in
+# app/services/disease_contributions.py.
 PENDING = COMPONENT / "data" / "pending"
-CONTRIBUTIONS_CSV = PENDING / "contributions.csv"
-
-# A new class may not be trained until it has this many VERIFIED originals.
-#
-# This is a GATE, not a progress bar. Augmenting 8 contributed images into 432
-# files yields 8 images of information, and a class learned from 8 examples has
-# a decision boundary drawn from almost no evidence -- it bleeds into its
-# neighbours and steals their predictions. Black Leaf Spot is already the
-# weakest class at F1 0.60; adding an undertrained class would drag it lower.
-# So the retraining tooling refuses below this number rather than merely
-# reporting progress. See PROJECT_CONTEXT.md section 7.
-MIN_IMAGES_PER_CLASS = 30
-
-# Contributed photos are stored at the same resolution as data/processed/, which
-# is what the training pipeline expects. It also makes storage a non-issue:
-# measured on this dataset, 2.0 MB phone photos become about 180 KB.
-CONTRIBUTION_MAX_SIDE = 1024
-
-CSV_FIELDS = [
-    "image_id", "disease", "plant_part", "severity",
-    "verified", "verification_source", "verified_by",
-    "submitted_at", "notes", "original_filename",
-]
 
 VALID_PARTS = {"leaf", "stem", "flower"}
 VALID_SEVERITIES = {"mild", "moderate", "severe"}
-
-# One writer at a time. Two contributions arriving together must not interleave
-# rows in the CSV or race for the same sequence number.
-_write_lock = threading.Lock()
 
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024          # 12 MB; phone photos are ~2-5 MB
 ALLOWED_CONTENT_TYPES = {
@@ -88,138 +60,6 @@ def _slug(name):
     """Turn a typed disease name into a safe folder name."""
     s = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
     return s[:60]
-
-
-def _read_contributions():
-    """Every recorded contribution. A missing file is not an error."""
-    if not CONTRIBUTIONS_CSV.exists():
-        return []
-    with open(CONTRIBUTIONS_CSV, newline="", encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))
-
-
-def pending_counts():
-    """
-    Per-disease progress toward the retraining threshold.
-
-    Counts VERIFIED rows only, because unverified labels must never be trained
-    on -- the same rule the retraining tooling applies.
-    """
-    rows = _read_contributions()
-    by_disease = {}
-    for r in rows:
-        d = r.get("disease") or "unknown"
-        entry = by_disease.setdefault(d, {
-            "disease": d,
-            "display_name": d.replace("_", " ").title(),
-            "total": 0,
-            "verified": 0,
-        })
-        entry["total"] += 1
-        if (r.get("verified") or "").strip().lower() == "true":
-            entry["verified"] += 1
-
-    for e in by_disease.values():
-        e["needed"] = max(0, MIN_IMAGES_PER_CLASS - e["verified"])
-        e["ready_for_training"] = e["verified"] >= MIN_IMAGES_PER_CLASS
-
-    return {
-        "minimum_required": MIN_IMAGES_PER_CLASS,
-        "diseases": sorted(by_disease.values(), key=lambda e: -e["verified"]),
-        "total_contributions": len(rows),
-        "note": (
-            "Only verified images count toward the threshold. Reaching it makes "
-            "retraining POSSIBLE, not automatic: a human runs the retrain and the "
-            "new model replaces the live one only if macro-F1 does not get worse."
-        ),
-    }
-
-
-def save_contribution(image_bytes, disease, plant_part, severity,
-                      verified=False, verified_by="", notes="",
-                      original_filename=""):
-    """
-    Store one contributed photograph and record it.
-
-    The image is saved as an ORIGINAL. It is deliberately NOT augmented here:
-    augmenting before the train/test split would put variants of the same leaf
-    on both sides of that split, which is the data leakage the whole pipeline is
-    designed to prevent. Augmentation happens at retrain time, after splitting.
-    """
-    disease_slug = _slug(disease)
-    if not disease_slug:
-        raise InvalidContribution("A disease name is required.")
-    if plant_part not in VALID_PARTS:
-        raise InvalidContribution(
-            "Plant part must be one of {}.".format(", ".join(sorted(VALID_PARTS))))
-    if severity not in VALID_SEVERITIES:
-        raise InvalidContribution(
-            "Severity must be one of {}.".format(", ".join(sorted(VALID_SEVERITIES))))
-    if verified and not (verified_by or "").strip():
-        raise InvalidContribution(
-            "Name the institute or expert who confirmed this diagnosis.")
-
-    try:
-        from PIL import Image, ImageOps
-    except ImportError as exc:                                    # pragma: no cover
-        raise ModelUnavailable("Pillow is required to store images: {}".format(exc))
-
-    try:
-        img = Image.open(BytesIO(image_bytes))
-        img = ImageOps.exif_transpose(img).convert("RGB")
-    except Exception as exc:                                      # noqa: BLE001
-        raise InvalidImage("Could not read that image: {}".format(exc))
-
-    if max(img.width, img.height) > CONTRIBUTION_MAX_SIDE:
-        scale = CONTRIBUTION_MAX_SIDE / max(img.width, img.height)
-        img = img.resize((max(1, round(img.width * scale)),
-                          max(1, round(img.height * scale))), Image.LANCZOS)
-
-    folder = PENDING / disease_slug
-    with _write_lock:
-        folder.mkdir(parents=True, exist_ok=True)
-        existing = len(list(folder.glob("*.jpg")))
-        image_id = "{}_{:04d}".format(disease_slug, existing + 1)
-        img.save(folder / (image_id + ".jpg"), "JPEG", quality=92, optimize=True)
-
-        row = {
-            "image_id": image_id,
-            "disease": disease_slug,
-            "plant_part": plant_part,
-            "severity": severity,
-            "verified": "true" if verified else "false",
-            # Records HOW it was verified, not merely whether. When a user role
-            # is added later, admin_reviewed rows can outrank self-attested ones.
-            "verification_source": "user_attested" if verified else "unverified",
-            "verified_by": (verified_by or "").strip(),
-            "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "notes": (notes or "").strip(),
-            "original_filename": (original_filename or "").strip(),
-        }
-        write_header = not CONTRIBUTIONS_CSV.exists()
-        CONTRIBUTIONS_CSV.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONTRIBUTIONS_CSV, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
-
-    counts = pending_counts()
-    this_disease = next(
-        (d for d in counts["diseases"] if d["disease"] == disease_slug),
-        {"verified": 0, "needed": MIN_IMAGES_PER_CLASS, "ready_for_training": False})
-
-    return {
-        "saved": True,
-        "image_id": image_id,
-        "disease": disease_slug,
-        "verified": bool(verified),
-        "count_verified": this_disease["verified"],
-        "minimum_required": MIN_IMAGES_PER_CLASS,
-        "needed": this_disease["needed"],
-        "ready_for_training": this_disease["ready_for_training"],
-    }
-
 
 
 def model_status():
@@ -336,3 +176,159 @@ def known_diseases():
             "falls below the threshold; there is no trained 'other' class."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Measured performance, for presenting the results
+# ---------------------------------------------------------------------------
+
+# Every augmented training original became this many files (augment_dataset.py),
+# so the training counts in training_metadata.json divide back to photographs.
+AUGMENT_FACTOR = 54
+
+
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def metrics_summary():
+    """
+    The measured results of both models, read from the files the evaluation
+    scripts wrote. No number is typed in by hand, and no model is
+    loaded, so it is fast and works even where TensorFlow is not installed.
+
+    Every section is optional: a missing file drops its section rather than
+    failing the request. `sources` lists the files that were actually read, so
+    every number can be traced to where it came from.
+    """
+    results = COMPONENT / "results"
+    sources = []
+
+    def load(path):
+        data = _read_json(path)
+        if data is not None:
+            sources.append(Path(path).relative_to(COMPONENT).as_posix())
+        return data
+
+    disease = (load(results / "extended_metrics" / "metrics_test.json")
+               or load(MODELS / "metrics_test.json"))
+    severity = (load(results / "extended_metrics" / "severity_metrics_test.json")
+                or load(MODELS / "severity_metrics_test.json"))
+    gate = load(MODELS / "feature_bank_metadata.json")
+    architectures = load(MODELS / "model_comparison.json")
+    training = load(MODELS / "training_metadata.json")
+    photo = load(results / "photo_checks" / "photo_check_thresholds.json")
+    experiments = load(results / "experiments" / "report" / "experiments_summary.json")
+    final_tests = load(results / "experiments" / "test_log.json")
+
+    out = {"sources": sources}
+
+    if disease:
+        x = disease.get("beyond_accuracy") or {}
+        out["disease"] = {
+            "n_images": disease["n_images"],
+            "class_names": disease["class_names"],
+            "accuracy": disease["accuracy"],
+            "macro_f1": disease["macro_f1"],
+            "per_class": disease["per_class"],
+            "confusion_matrix": disease["confusion_matrix"],
+            "baseline": x.get("majority_baseline"),
+            "balanced_accuracy": x.get("balanced_accuracy"),
+            "kappa": x.get("cohen_kappa"),
+            "mcc": x.get("mcc"),
+            "roc_auc": x.get("roc_auc_macro"),
+            "roc_auc_per_class": x.get("roc_auc_per_class"),
+            "calibration_error": x.get("expected_calibration_error"),
+            "ci95_accuracy": x.get("ci95_accuracy"),
+            "ci95_macro_f1": x.get("ci95_macro_f1"),
+        }
+        # Two test photographs turned out to be second shots of training
+        # photographs (tools/measure_photo_checks.py). Shown with the score
+        # recomputed without them, rather than left for someone else to find.
+        near = [c for c in (photo or {}).get("near_copies_across_split", [])
+                if c.get("part") == "test"]
+        if near:
+            held = {Path(c["held_out"]).name for c in near}
+            wrong = {m["file"] for m in disease.get("misclassified", [])}
+            right = disease["n_images"] - len(wrong) - len(held - wrong)
+            n = disease["n_images"] - len(held)
+            out["disease"]["near_copies"] = {
+                "test_photos": sorted(held), "n_without": n, "accuracy_without": right / n,
+            }
+
+    if severity:
+        x = severity.get("beyond_accuracy") or {}
+        out["severity"] = {
+            "n_images": severity["n_images"],
+            "class_names": severity["class_names"],
+            "exact_accuracy": severity["exact_accuracy"],
+            "within_one_grade": severity["within_one_grade_accuracy"],
+            "macro_f1": severity["macro_f1"],
+            "per_class": severity["per_class"],
+            "confusion_matrix": severity["confusion_matrix"],
+            "severe_called_mild": severity.get("severe_called_mild"),
+            "baseline": x.get("majority_baseline"),
+            "qwk": x.get("quadratic_weighted_kappa"),
+            "mean_grade_error": x.get("mean_grade_error"),
+            "ci95_exact_accuracy": x.get("ci95_exact_accuracy"),
+            "ci95_within_one_grade": x.get("ci95_within_one_grade"),
+        }
+
+    if gate:
+        ood = gate.get("ood_check") or {}
+        out["input_check"] = {
+            "orchid_test_photos": (gate.get("test") or {}).get("n"),
+            "orchid_test_refused": (gate.get("test") or {}).get("rejected"),
+            "orchid_validation_photos": (gate.get("validation") or {}).get("n"),
+            "orchid_validation_refused": (gate.get("validation") or {}).get("rejected"),
+            "non_orchid_photos": ood.get("count"),
+            "non_orchid_refused": ood.get("caught"),
+            "rationale": gate.get("threshold_rationale"),
+        }
+
+    if architectures:
+        out["architectures"] = {
+            "scored_on": architectures.get("scored_on"),
+            "epochs": (architectures.get("settings") or {}).get("epochs"),
+            "results": [{k: r.get(k) for k in ("model", "macro_f1", "accuracy", "parameters",
+                                                "size_mb", "latency_ms", "note")}
+                        for r in architectures.get("results", [])],
+        }
+
+    if training:
+        out["data"] = {
+            "train_photos": round(sum(training.get("train_counts", {}).values()) / AUGMENT_FACTOR),
+            "validation_photos": sum(training.get("validation_counts", {}).values()),
+            "test_photos": (disease or {}).get("n_images"),
+            "class_names": training.get("class_names"),
+        }
+    leakage = COMPONENT / "data" / "leakage_report.txt"
+    if leakage.exists():
+        text = leakage.read_text(encoding="utf-8")
+        out.setdefault("data", {})["leakage_check"] = (
+            "PASS" if "RESULT: PASS" in text else "FAIL" if "RESULT: FAIL" in text else None)
+        sources.append("data/leakage_report.txt")
+
+    if photo:
+        out["photo_checks"] = {k: photo.get(k) for k in (
+            "photographs", "real_refused", "bad_copies_caught", "copies_caught",
+            "false_alarm_pairs", "distinct_pairs")}
+
+    # Improvement experiments, once the Colab run's results have been brought
+    # back. A smoke test proves only that the code runs, so it is never shown.
+    if experiments and not experiments.get("smoke_test"):
+        out["experiments"] = {
+            "built_at": experiments.get("built_at"),
+            "rows": [{
+                "id": r["row"], "label": r["label"], "task": r["task"], "split": r.get("split"),
+                "accuracy": r["metrics"]["accuracy"], "macro_f1": r["metrics"]["macro_f1"],
+                "within_one": r["metrics"].get("within_one"),
+                "vs": (r.get("delta") or {}).get("vs"),
+                "verdict": (r.get("delta") or {}).get("verdict"),
+            } for r in experiments.get("rows", [])],
+            "final_tests": [t for t in (final_tests or []) if not t.get("smoke_test")],
+        }
+    return out
