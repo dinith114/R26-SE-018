@@ -246,9 +246,14 @@ def test_a_weeks_old_reading_does_not_make_a_sensor_fitted(_dh_reset):
     assert _feed([old] + fresh, first_now=NOW_MS) == []
 
 
-def test_one_stray_value_is_not_a_fitted_sensor(_dh_reset):
+def test_one_fresh_value_is_a_fitted_sensor(_dh_reset):
+    """Changed 18 Oct 2026 (the user's decision). This was "one stray value is
+    not a fitted sensor", but the firmware writes -999 whenever no BH1750
+    answers, so a fresh real value IS a sensor that answered - and requiring
+    three in a row hid Node 1's sensor, flickering on a loose GND, for a day.
+    Old values still do not count (the weeks-old test above)."""
     seq = [_rec(m, -999) for m in range(0, 3)] + [_rec(3, 550.0)] + [_rec(m, -999) for m in range(4, 25)]
-    assert _feed(seq) == []
+    assert _feed(seq) == ["light"]
 
 
 def test_a_real_sensor_that_stops_is_still_caught(_dh_reset):

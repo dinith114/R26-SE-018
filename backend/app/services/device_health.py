@@ -108,14 +108,27 @@ MAX_ALARMS_PER_DAY = 3
 KEEP_MS = 3 * 3600_000
 
 # What it takes to say a light sensor IS FITTED, so that losing it later is a
-# fault. Found 8 Oct 2026 on Node 1 (then with a sensor that has since been
-# removed): the first pass after a deploy read a latest 38 days old and marked
-# the sensor fitted, so the board's fresh -999s were pushed to the phone as a
-# fault. A reading that old describes the board as it WAS, and one stray valid
-# value is not a sensor. So it takes CONSECUTIVE_GOOD valid readings, each under
-# FRESH_MS old when seen.
+# fault worth a push. Found 8 Oct 2026 on Node 1: the first pass after a deploy
+# read a latest 38 days old and marked the sensor fitted, so the board's fresh
+# -999s were pushed to the phone. A reading that old describes the board as it
+# WAS - hence FRESH_MS, kept.
+#
+# ONE fresh valid reading is enough (it was three in a row until 18 Oct 2026).
+# The firmware sends -999 on every reading when no BH1750 answers at boot, so a
+# real number cannot come from a board without one. Three-in-a-row missed the
+# commonest fault of all: on 18 Oct Node 1's sensor had a loose GND from its
+# first minute (0, 0, 378, -999, -999, -999, 0, -999 ...), never managed three
+# in a row, was taken for "not fitted", and its death was never said.
 FRESH_MS = 2 * 3600_000
-CONSECUTIVE_GOOD = 3
+CONSECUTIVE_GOOD = 1
+
+# A light sensor that has NEVER given a reading is still a sensor that is not
+# working - or a board built without one, which the server cannot tell apart:
+# both send -999 for ever. So it is SHOWN (the section and calibration screens
+# list it) but never pushed: three of the four calibration boards carry no
+# BH1750, and a push for each after every deploy would teach the farmer to
+# ignore the phone. Once one has worked, losing it IS pushed ("light").
+SHOW_ONLY = {"light_none"}
 
 FARM_OFFSET_MIN = 330          # Sri Lanka, no DST
 
@@ -128,6 +141,10 @@ TEXT = {
     "light": ("Light sensor stopped",
               "{where}: the light sensor (BH1750) was working and has read nothing since "
               "{since}. Check its four wires: VCC to 3V3, GND, SDA to D21, SCL to D22."),
+    "light_none": ("Light sensor not working",
+                   "{where}: no light reading since {since}. If this node has a light sensor "
+                   "(BH1750), check its four wires: VCC to 3V3, GND, SDA to D21, SCL to D22. "
+                   "A node built without one always shows this."),
     "frozen": ("Sensor reading is stuck",
                "{where}: exactly the same temperature and humidity since {since}. A working "
                "sensor always moves a little - unplug the node and plug it back in."),
@@ -169,12 +186,26 @@ class _Section:
 _SECTIONS: Dict[Tuple[str, str, str], _Section] = {}
 # tenant -> server ms of the last pass, for the route to say "not run yet".
 _LAST_RUN: Dict[str, int] = {}
+# tenant -> [(house, section, mac, ms)] whose light sensor was just seen working
+# for the first time, for the engine to SAVE (take_light_seen). Kept in memory
+# only, "this board has a light sensor" was forgotten at every restart - three
+# times on 18 Oct alone - and a sensor broken before the restart could then
+# never be called "stopped".
+_LIGHT_SEEN: Dict[str, List[tuple]] = {}
 
 
 def reset() -> None:
     """Forget everything. For tests."""
     _SECTIONS.clear()
     _LAST_RUN.clear()
+    _LIGHT_SEEN.clear()
+
+
+def take_light_seen(tenant: str) -> List[tuple]:
+    """The sections whose light sensor was first seen working since the last
+    call, each once: (house, section, mac, ms). The engine writes them to
+    /farm/houses/{h}/sections/{s}/lightSensor, which check_farm reads back."""
+    return _LIGHT_SEEN.pop(tenant, [])
 
 
 def _local(ms: float, offset_min: int) -> str:
@@ -233,11 +264,10 @@ def sensor_faults(st: _Section, now_ms: float) -> Dict[str, dict]:
     if len(bad) >= CONSECUTIVE_BAD and bad[-1][0] - bad[0][0] >= BAD_MIN_SPAN_MS:
         out["dht"] = {"since": bad[0][0], "n": len(bad)}
 
-    # b. a light sensor that worked, and stopped (never fitted: not a fault)
-    if st.had_light:
-        run = _tail_bad(hist, 3)
-        if len(run) >= CONSECUTIVE_BAD and run[-1][0] - run[0][0] >= LOST_MIN_MS:
-            out["light"] = {"since": run[0][0], "n": len(run)}
+    # b. a light sensor reading nothing: pushed if it ever worked, shown if it never has
+    run = _tail_bad(hist, 3)
+    if len(run) >= CONSECUTIVE_BAD and run[-1][0] - run[0][0] >= LOST_MIN_MS:
+        out["light" if st.had_light else "light_none"] = {"since": run[0][0], "n": len(run)}
 
     # c. frozen: identical values across the window
     last = hist[-1]
@@ -333,7 +363,7 @@ def _update(st: "_Section", faults: Dict[str, dict], now_ms: float, offset_min: 
         count = st.day_counts.get((kind, day), 0) + 1
         st.day_counts[(kind, day)] = count
         title, body = TEXT[kind]
-        pushed = count <= MAX_ALARMS_PER_DAY
+        pushed = count <= MAX_ALARMS_PER_DAY and kind not in SHOW_ONLY
         issue = {
             "kind": kind, "houseId": hid, "sectionId": sid, "title": title,
             "message": body.format(where=where, n=f.get("n", 0),
@@ -400,7 +430,19 @@ def check_farm(tenant: str, houses: dict, now_ms: float, acting: Iterable[str],
             st = _SECTIONS.setdefault(key, _Section())
             faults: Dict[str, dict] = {}
             if has_node:
+                # "This board has a light sensor" survives restarts: the engine saves
+                # the first working reading as lightSensor (take_light_seen), and it
+                # counts only for the board that gave it - a board swapped in later
+                # has to show its own.
+                mac = str(s.get("deviceMac") or "").upper()
+                saved = s.get("lightSensor") if isinstance(s.get("lightSensor"), dict) else {}
+                remembered = bool(mac) and str(saved.get("mac") or "").upper() == mac
+                if remembered:
+                    st.had_light = True
                 observe(st, latest, now_ms)
+                if st.had_light and not remembered:
+                    # handed over each pass until the save shows up in the farm document
+                    _LIGHT_SEEN.setdefault(tenant, []).append((hid, sid, mac, int(now_ms)))
                 faults.update(sensor_faults(st, now_ms))
             elif st.hist:
                 st.hist.clear()                        # node unlinked: no sensor history
