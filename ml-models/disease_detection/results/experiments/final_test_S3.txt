@@ -1,0 +1,30 @@
+======================================================================
+  FINAL TEST -- S3 (Severity, frozen, balanced split)
+  43 test photographs, balanced split, never used for training or choosing
+======================================================================
+  accuracy 0.5116   macro F1 0.5140
+              precision    recall  f1-score   support
+
+        mild     0.5385    0.6364    0.5833        11
+    moderate     0.4286    0.6429    0.5143        14
+      severe     0.6667    0.3333    0.4444        18
+
+    accuracy                         0.5116        43
+   macro avg     0.5446    0.5375    0.5140        43
+weighted avg     0.5564    0.5116    0.5027        43
+
+  within one grade 0.9070
+
+----------------------------------------------------------------------
+  BEYOND ACCURACY (ordered grades)
+----------------------------------------------------------------------
+  majority-class baseline : exact accuracy 0.4186, macro F1 0.1967
+  quadratic weighted kappa: 0.3691   the standard score for graded scales
+  mean grade error        : 0.5814   grades out, on average
+  Cohen's kappa           : 0.2776   unweighted, every error equal
+  MCC                     : 0.2934
+  balanced accuracy       : 0.5375
+  calibration error (ECE) : 0.1113
+  95% range, exact        : 0.349 to 0.651
+  95% range, within one   : 0.814 to 0.977
+  95% range, QWK          : 0.081 to 0.607

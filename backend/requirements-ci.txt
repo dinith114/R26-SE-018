@@ -49,3 +49,6 @@ PyYAML==6.0.2
 # sitting in front of the accounts routes, which every other test misses
 # because they all build a bare FastAPI() and mount the router themselves.
 uvicorn==0.30.6
+# The disease-contribution tests build small JPEG photographs to send through
+# the upload route, and the route's photo checks read them with Pillow.
+Pillow==10.4.0

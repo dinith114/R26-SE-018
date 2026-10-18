@@ -1,0 +1,198 @@
+{
+  "evaluated_at": "2026-10-12T20:59:30",
+  "model": "severity",
+  "split": "validation",
+  "class_names": [
+    "mild",
+    "moderate",
+    "severe"
+  ],
+  "n_images": 43,
+  "macro_f1": 0.5635854341736696,
+  "exact_accuracy": 0.5581395348837209,
+  "within_one_grade_accuracy": 0.9534883720930233,
+  "random_baseline": 0.3333333333333333,
+  "per_class": {
+    "mild": {
+      "precision": 0.625,
+      "recall": 0.5555555555555556,
+      "f1": 0.5882352941176471,
+      "support": 18
+    },
+    "moderate": {
+      "precision": 0.47368421052631576,
+      "recall": 0.5625,
+      "f1": 0.5142857142857142,
+      "support": 16
+    },
+    "severe": {
+      "precision": 0.625,
+      "recall": 0.5555555555555556,
+      "f1": 0.5882352941176471,
+      "support": 9
+    }
+  },
+  "confusion_matrix": [
+    [
+      10,
+      7,
+      1
+    ],
+    [
+      5,
+      9,
+      2
+    ],
+    [
+      1,
+      3,
+      5
+    ]
+  ],
+  "severe_called_mild": 1,
+  "misclassified": [
+    {
+      "file": "Black_LS_0028.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.44615840911865234
+    },
+    {
+      "file": "Black_LS_0041.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.9478599429130554
+    },
+    {
+      "file": "Black_LS_0044.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.6006697416305542
+    },
+    {
+      "file": "Black_LS_0051.jpg",
+      "true": "moderate",
+      "predicted": "severe",
+      "confidence": 0.9377785325050354
+    },
+    {
+      "file": "Black_LS_0057.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.8667932748794556
+    },
+    {
+      "file": "Black_LS_0130.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.6435034275054932
+    },
+    {
+      "file": "Black_LS_0143.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.5345616340637207
+    },
+    {
+      "file": "Black_LS_0147.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.7954381704330444
+    },
+    {
+      "file": "Black_LS_0151.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.7819865942001343
+    },
+    {
+      "file": "Phyllosticta_LS_0012.jpg",
+      "true": "moderate",
+      "predicted": "severe",
+      "confidence": 0.933086097240448
+    },
+    {
+      "file": "Phyllosticta_LS_0025.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.5113949775695801
+    },
+    {
+      "file": "Phyllosticta_LS_0032.jpg",
+      "true": "mild",
+      "predicted": "severe",
+      "confidence": 0.7029575705528259
+    },
+    {
+      "file": "Phyllosticta_LS_0068.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.47359973192214966
+    },
+    {
+      "file": "Phyllosticta_LS_0087.jpg",
+      "true": "severe",
+      "predicted": "mild",
+      "confidence": 0.6238856315612793
+    },
+    {
+      "file": "Phyllosticta_LS_0088.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.38049179315567017
+    },
+    {
+      "file": "Phyllosticta_LS_0118.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.9365085959434509
+    },
+    {
+      "file": "Phyllosticta_LS_0142.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.5209919214248657
+    },
+    {
+      "file": "Phyllosticta_LS_0213.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.7128735184669495
+    },
+    {
+      "file": "Phyllosticta_LS_0254.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.644507884979248
+    }
+  ],
+  "beyond_accuracy": {
+    "majority_baseline": {
+      "accuracy": 0.4186046511627907,
+      "macro_f1": 0.19672131147540983,
+      "class_index": 0
+    },
+    "balanced_accuracy": 0.5578703703703703,
+    "cohen_kappa": 0.3105485232067511,
+    "quadratic_weighted_kappa": 0.47535383113714,
+    "mcc": 0.31240514449877915,
+    "mean_grade_error": 0.4883720930232558,
+    "expected_calibration_error": 0.1780470311641693,
+    "ci95_exact_accuracy": [
+      0.4186046511627907,
+      0.6976744186046512
+    ],
+    "ci95_within_one_grade": [
+      0.8837209302325582,
+      1.0
+    ],
+    "ci95_quadratic_weighted_kappa": [
+      0.19196255637596413,
+      0.6916266025641024
+    ],
+    "bootstrap": {
+      "resamples": 2000,
+      "seed": 42
+    }
+  }
+}

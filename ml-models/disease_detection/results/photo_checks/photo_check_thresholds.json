@@ -1,0 +1,56 @@
+{
+  "measured_at": "2026-10-13T22:09:58",
+  "photographs": 667,
+  "MIN_PIXELS": 50176,
+  "MIN_BRIGHTNESS": 57,
+  "MAX_BRIGHTNESS": 201,
+  "MIN_SHARPNESS": 17.7,
+  "COPY_DISTANCE": 12,
+  "real_refused": 0,
+  "bad_copies_caught": {
+    "blur, radius 2 px": 0.05,
+    "blur, radius 3 px": 0.41,
+    "blur, radius 4 px": 0.955,
+    "blur, radius 6 px": 1.0,
+    "blur, radius 8 px": 1.0,
+    "darkened to 25%": 1.0,
+    "darkened to 10%": 1.0,
+    "brightened x3 (glare)": 0.995,
+    "shrunk to 200 px": 1.0
+  },
+  "copies_caught": 0.9925,
+  "false_alarm_pairs": 34,
+  "distinct_pairs": 222111,
+  "near_copies_across_split": [
+    {
+      "held_out": "black_leaf_spot/Black_LS_0024.jpg",
+      "part": "test",
+      "train": "black_leaf_spot/Black_LS_0043.jpg",
+      "bits": 3
+    },
+    {
+      "held_out": "phyllosticta_leaf_spot/Phyllosticta_LS_0215.jpg",
+      "part": "test",
+      "train": "phyllosticta_leaf_spot/Phyllosticta_LS_0218.jpg",
+      "bits": 2
+    }
+  ],
+  "real_range": {
+    "brightness": [
+      77.0,
+      180.6
+    ],
+    "sharpness": [
+      23.6,
+      9587.9
+    ],
+    "short_side": [
+      162,
+      1023
+    ],
+    "pixels": [
+      165888,
+      1047552
+    ]
+  }
+}

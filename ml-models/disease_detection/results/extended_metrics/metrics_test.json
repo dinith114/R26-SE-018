@@ -1,0 +1,218 @@
+{
+  "evaluated_at": "2026-10-12T20:59:03",
+  "split": "test",
+  "model": "D:\\AI-Powered-Smart-Orchid-Care-System\\R26-SE-018\\ml-models\\disease_detection\\models\\disease_model.keras",
+  "class_names": [
+    "black_leaf_spot",
+    "healthy",
+    "phyllosticta_leaf_spot"
+  ],
+  "n_images": 67,
+  "accuracy": 0.8059701492537313,
+  "macro_f1": 0.7778764335923049,
+  "weighted_f1": 0.8026405155134427,
+  "per_class": {
+    "black_leaf_spot": {
+      "precision": 0.6,
+      "recall": 0.6,
+      "f1": 0.6,
+      "support": 15
+    },
+    "healthy": {
+      "precision": 0.8888888888888888,
+      "recall": 1.0,
+      "f1": 0.9411764705882353,
+      "support": 24
+    },
+    "phyllosticta_leaf_spot": {
+      "precision": 0.84,
+      "recall": 0.75,
+      "f1": 0.7924528301886793,
+      "support": 28
+    }
+  },
+  "confusion_matrix": [
+    [
+      9,
+      2,
+      4
+    ],
+    [
+      0,
+      24,
+      0
+    ],
+    [
+      6,
+      1,
+      21
+    ]
+  ],
+  "misclassified": [
+    {
+      "file": "Black_LS_0007.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "healthy",
+      "confidence": 0.8560473322868347
+    },
+    {
+      "file": "Black_LS_0008.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "healthy",
+      "confidence": 0.995460569858551
+    },
+    {
+      "file": "Black_LS_0009.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "phyllosticta_leaf_spot",
+      "confidence": 0.5862926840782166
+    },
+    {
+      "file": "Black_LS_0023.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "phyllosticta_leaf_spot",
+      "confidence": 0.6917474865913391
+    },
+    {
+      "file": "Black_LS_0027.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "phyllosticta_leaf_spot",
+      "confidence": 0.7814339995384216
+    },
+    {
+      "file": "Black_LS_0029.jpg",
+      "true": "black_leaf_spot",
+      "predicted": "phyllosticta_leaf_spot",
+      "confidence": 0.6420155763626099
+    },
+    {
+      "file": "Phyllosticta_LS_0002.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.7322469353675842
+    },
+    {
+      "file": "Phyllosticta_LS_0014.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.967836320400238
+    },
+    {
+      "file": "Phyllosticta_LS_0041.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.42771005630493164
+    },
+    {
+      "file": "Phyllosticta_LS_0072.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.520171582698822
+    },
+    {
+      "file": "Phyllosticta_LS_0102.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "healthy",
+      "confidence": 0.971866250038147
+    },
+    {
+      "file": "Phyllosticta_LS_0112.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.9142343997955322
+    },
+    {
+      "file": "Phyllosticta_LS_0141.jpg",
+      "true": "phyllosticta_leaf_spot",
+      "predicted": "black_leaf_spot",
+      "confidence": 0.9440003633499146
+    }
+  ],
+  "threshold_sweep": [
+    {
+      "threshold": 0.4,
+      "kept": 67,
+      "kept_pct": 100.0,
+      "accuracy_on_kept": 0.8059701492537313,
+      "referred": 0
+    },
+    {
+      "threshold": 0.5,
+      "kept": 66,
+      "kept_pct": 98.50746268656717,
+      "accuracy_on_kept": 0.8181818181818182,
+      "referred": 1
+    },
+    {
+      "threshold": 0.6,
+      "kept": 61,
+      "kept_pct": 91.04477611940298,
+      "accuracy_on_kept": 0.8360655737704918,
+      "referred": 6
+    },
+    {
+      "threshold": 0.65,
+      "kept": 59,
+      "kept_pct": 88.05970149253731,
+      "accuracy_on_kept": 0.847457627118644,
+      "referred": 8
+    },
+    {
+      "threshold": 0.7,
+      "kept": 57,
+      "kept_pct": 85.07462686567165,
+      "accuracy_on_kept": 0.8596491228070176,
+      "referred": 10
+    },
+    {
+      "threshold": 0.75,
+      "kept": 55,
+      "kept_pct": 82.08955223880596,
+      "accuracy_on_kept": 0.8727272727272727,
+      "referred": 12
+    },
+    {
+      "threshold": 0.8,
+      "kept": 53,
+      "kept_pct": 79.1044776119403,
+      "accuracy_on_kept": 0.8867924528301887,
+      "referred": 14
+    },
+    {
+      "threshold": 0.9,
+      "kept": 45,
+      "kept_pct": 67.16417910447761,
+      "accuracy_on_kept": 0.8888888888888888,
+      "referred": 22
+    }
+  ],
+  "beyond_accuracy": {
+    "majority_baseline": {
+      "accuracy": 0.417910447761194,
+      "macro_f1": 0.19649122807017547,
+      "class_index": 2
+    },
+    "balanced_accuracy": 0.7833333333333333,
+    "cohen_kappa": 0.7013031550068587,
+    "mcc": 0.7034747468078728,
+    "roc_auc_per_class": {
+      "black_leaf_spot": 0.8653846153846154,
+      "healthy": 0.9864341085271318,
+      "phyllosticta_leaf_spot": 0.9404761904761906
+    },
+    "roc_auc_macro": 0.9307649714626459,
+    "expected_calibration_error": 0.1003196853310315,
+    "ci95_accuracy": [
+      0.7014925373134329,
+      0.8955223880597015
+    ],
+    "ci95_macro_f1": [
+      0.6622051282051282,
+      0.8763272391480215
+    ],
+    "bootstrap": {
+      "resamples": 2000,
+      "seed": 42
+    }
+  }
+}

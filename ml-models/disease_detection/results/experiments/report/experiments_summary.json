@@ -1,0 +1,960 @@
+{
+  "smoke_test": false,
+  "built_at": "2026-10-18T01:48:47",
+  "rows": [
+    {
+      "row": "DEP",
+      "label": "Deployed disease model (29 Aug)",
+      "reference": null,
+      "epoch": null,
+      "selector": null,
+      "tta": false,
+      "weights": null,
+      "model_file": "disease_model.keras",
+      "experiment": "DEP",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.7910447761194029,
+        "macro_f1": 0.7690790255496139,
+        "n": 67,
+        "balanced_accuracy": 0.7817460317460316,
+        "kappa": 0.6825719120135363,
+        "mcc": 0.6888892625470495,
+        "roc_auc": 0.9414721583326235,
+        "ece": 0.09924456254759831,
+        "ci_accuracy": [
+          0.6865671641791045,
+          0.8805970149253731
+        ],
+        "ci_macro_f1": [
+          0.6587799222253004,
+          0.8623366616746071
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.6666666666666666,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.6785714285714286
+        }
+      },
+      "delta": null
+    },
+    {
+      "row": "D1",
+      "label": "After 2 epochs (the PP2 setting)",
+      "reference": "R",
+      "epoch": 2,
+      "selector": "epoch:2",
+      "tta": false,
+      "weights": null,
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.7761194029850746,
+        "macro_f1": 0.7612888430225891,
+        "n": 67,
+        "balanced_accuracy": 0.7904761904761904,
+        "kappa": 0.6672185430463576,
+        "mcc": 0.6893748102854866,
+        "roc_auc": 0.9243603941278359,
+        "ece": 0.08493236997234287,
+        "ci_accuracy": [
+          0.6716417910447762,
+          0.8656716417910447
+        ],
+        "ci_macro_f1": [
+          0.6507482254092423,
+          0.8556271447373428
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.5714285714285714
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.11823496650122034,
+        "ci95": [
+          -0.23041947987107286,
+          -0.011903044805383099
+        ],
+        "verdict": "worse, beyond noise"
+      }
+    },
+    {
+      "row": "D2-5",
+      "label": "After 5 epochs",
+      "reference": "R",
+      "epoch": 5,
+      "selector": "epoch:5",
+      "tta": false,
+      "weights": null,
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.7313432835820896,
+        "macro_f1": 0.7195991680847041,
+        "n": 67,
+        "balanced_accuracy": 0.7630952380952382,
+        "kappa": 0.60856864654333,
+        "mcc": 0.6506088244521938,
+        "roc_auc": 0.932078257659653,
+        "ece": 0.13865302881198138,
+        "ci_accuracy": [
+          0.6268656716417911,
+          0.835820895522388
+        ],
+        "ci_macro_f1": [
+          0.6064538217402435,
+          0.8181655685216057
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8666666666666667,
+          "healthy": 0.9583333333333334,
+          "phyllosticta_leaf_spot": 0.4642857142857143
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.15992464143910534,
+        "ci95": [
+          -0.28295644490960487,
+          -0.041835719577376765
+        ],
+        "verdict": "worse, beyond noise"
+      }
+    },
+    {
+      "row": "R",
+      "label": "Reference recipe, rerun",
+      "reference": null,
+      "epoch": 15,
+      "selector": "best_loss",
+      "tta": false,
+      "weights": "R/weights/stage2_best.weights.h5",
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8955223880597015,
+        "macro_f1": 0.8795238095238095,
+        "n": 67,
+        "balanced_accuracy": 0.8753968253968254,
+        "kappa": 0.8374913374913375,
+        "mcc": 0.838678148640508,
+        "roc_auc": 0.9645867052843796,
+        "ece": 0.06357405612717813,
+        "ci_accuracy": [
+          0.8208955223880597,
+          0.9555970149253711
+        ],
+        "ci_macro_f1": [
+          0.7843130252100841,
+          0.953248745902303
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.8928571428571429
+        }
+      },
+      "delta": null
+    },
+    {
+      "row": "D3-0.0001",
+      "label": "Stage-1 learning rate 0.0001",
+      "reference": "D6-0",
+      "epoch": 11,
+      "selector": "stage1_best",
+      "tta": false,
+      "weights": "D3a/weights/stage1_best.weights.h5",
+      "experiment": "D3a",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.7910447761194029,
+        "macro_f1": 0.7732492997198879,
+        "n": 67,
+        "balanced_accuracy": 0.792063492063492,
+        "kappa": 0.685340489768534,
+        "mcc": 0.6968257727604534,
+        "roc_auc": 0.9220404918079336,
+        "ece": 0.05986468382735752,
+        "ci_accuracy": [
+          0.6865671641791045,
+          0.8805970149253731
+        ],
+        "ci_macro_f1": [
+          0.6631203803742005,
+          0.8720672900134037
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.6428571428571429
+        }
+      },
+      "delta": {
+        "vs": "D6-0",
+        "macro_f1": -0.0667507002801121,
+        "ci95": [
+          -0.145779343667801,
+          0.0
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D3-0.01",
+      "label": "Stage-1 learning rate 0.01",
+      "reference": "D6-0",
+      "epoch": 15,
+      "selector": "stage1_best",
+      "tta": false,
+      "weights": "D3b/weights/stage1_best.weights.h5",
+      "experiment": "D3b",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8059701492537313,
+        "macro_f1": 0.7997584541062802,
+        "n": 67,
+        "balanced_accuracy": 0.830952380952381,
+        "kappa": 0.7129202373104813,
+        "mcc": 0.7372573548865365,
+        "roc_auc": 0.949253201578783,
+        "ece": 0.06214869022369385,
+        "ci_accuracy": [
+          0.7014925373134329,
+          0.8955223880597015
+        ],
+        "ci_macro_f1": [
+          0.6963027865172674,
+          0.8928385938129884
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.9333333333333333,
+          "healthy": 0.9166666666666666,
+          "phyllosticta_leaf_spot": 0.6428571428571429
+        }
+      },
+      "delta": {
+        "vs": "D6-0",
+        "macro_f1": -0.040241545893719755,
+        "ci95": [
+          -0.1074614747886553,
+          0.018721063560607137
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D4",
+      "label": "No 54x augmentation",
+      "reference": "R",
+      "epoch": 1,
+      "selector": "best_loss",
+      "tta": false,
+      "weights": "D4/weights/stage1_best.weights.h5",
+      "experiment": "D4",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.835820895522388,
+        "macro_f1": 0.8174019607843137,
+        "n": 67,
+        "balanced_accuracy": 0.8277777777777778,
+        "kappa": 0.7494901427600271,
+        "mcc": 0.754377894133746,
+        "roc_auc": 0.9431581338558083,
+        "ece": 0.11153805745181752,
+        "ci_accuracy": [
+          0.746268656716418,
+          0.9253731343283582
+        ],
+        "ci_macro_f1": [
+          0.7088204503829504,
+          0.9073859586600141
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.75
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.06212184873949578,
+        "ci95": [
+          -0.16997197132055974,
+          0.048796389135213974
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D5",
+      "label": "No class weights",
+      "reference": "R",
+      "epoch": 4,
+      "selector": "best_loss",
+      "tta": false,
+      "weights": "D5/weights/stage1_best.weights.h5",
+      "experiment": "D5",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8208955223880597,
+        "macro_f1": 0.7984499898559546,
+        "n": 67,
+        "balanced_accuracy": 0.8035714285714285,
+        "kappa": 0.7251282051282051,
+        "mcc": 0.7268760836248047,
+        "roc_auc": 0.9408971519436635,
+        "ece": 0.04544844422767413,
+        "ci_accuracy": [
+          0.7164179104477612,
+          0.9104477611940298
+        ],
+        "ci_macro_f1": [
+          0.6874170885611562,
+          0.8901925210587016
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.6666666666666666,
+          "healthy": 0.9583333333333334,
+          "phyllosticta_leaf_spot": 0.7857142857142857
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.08107381966785487,
+        "ci95": [
+          -0.17627670509238733,
+          0.004427977301540561
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D6-0",
+      "label": "Fine-tune 0 layers (frozen base)",
+      "reference": "R",
+      "epoch": 4,
+      "selector": "stage1_best",
+      "tta": false,
+      "weights": "R/weights/stage1_best.weights.h5",
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8507462686567164,
+        "macro_f1": 0.84,
+        "n": 67,
+        "balanced_accuracy": 0.8583333333333334,
+        "kappa": 0.7749412159892509,
+        "mcc": 0.7852806315084759,
+        "roc_auc": 0.9420571031036147,
+        "ece": 0.07079347478809642,
+        "ci_accuracy": [
+          0.7611940298507462,
+          0.9402985074626866
+        ],
+        "ci_macro_f1": [
+          0.7393706293706294,
+          0.9253292124176671
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8666666666666667,
+          "healthy": 0.9583333333333334,
+          "phyllosticta_leaf_spot": 0.75
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.03952380952380952,
+        "ci95": [
+          -0.14419007592962013,
+          0.05732567835687029
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D6-30",
+      "label": "Fine-tune top 30 layers",
+      "reference": "R",
+      "epoch": 15,
+      "selector": "stage2_best",
+      "tta": false,
+      "weights": "R/weights/stage2_best.weights.h5",
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8955223880597015,
+        "macro_f1": 0.8795238095238095,
+        "n": 67,
+        "balanced_accuracy": 0.8753968253968254,
+        "kappa": 0.8374913374913375,
+        "mcc": 0.838678148640508,
+        "roc_auc": 0.9645867052843796,
+        "ece": 0.06357405612717813,
+        "ci_accuracy": [
+          0.8208955223880597,
+          0.9555970149253711
+        ],
+        "ci_macro_f1": [
+          0.7843130252100841,
+          0.953248745902303
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.8928571428571429
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "verdict": "same model as R"
+      }
+    },
+    {
+      "row": "D6-60",
+      "label": "Fine-tune top 60 layers",
+      "reference": "R",
+      "epoch": 10,
+      "selector": "stage2_best",
+      "tta": false,
+      "weights": "D6/weights/stage2_best.weights.h5",
+      "experiment": "D6",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8805970149253731,
+        "macro_f1": 0.8702079619726678,
+        "n": 67,
+        "balanced_accuracy": 0.8841269841269841,
+        "kappa": 0.8183666553710607,
+        "mcc": 0.8237074112660279,
+        "roc_auc": 0.9661228951926626,
+        "ece": 0.0961277983081874,
+        "ci_accuracy": [
+          0.8055970149253732,
+          0.9552238805970149
+        ],
+        "ci_macro_f1": [
+          0.7824080688410093,
+          0.9487183484996551
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8666666666666667,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.7857142857142857
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.009315847551141676,
+        "ci95": [
+          -0.0816417538319068,
+          0.06779110478946772
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D7",
+      "label": "Keep the best-F1 epoch, not the lowest-loss one",
+      "reference": "R",
+      "epoch": 11,
+      "selector": "best_f1",
+      "tta": false,
+      "weights": "R/weights/best_f1.weights.h5",
+      "experiment": "R",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8955223880597015,
+        "macro_f1": 0.8857051282051281,
+        "n": 67,
+        "balanced_accuracy": 0.8960317460317461,
+        "kappa": 0.8403675970047652,
+        "mcc": 0.8438379330463552,
+        "roc_auc": 0.9601023653349235,
+        "ece": 0.08487322704115909,
+        "ci_accuracy": [
+          0.8208955223880597,
+          0.9701492537313433
+        ],
+        "ci_macro_f1": [
+          0.7948292699651395,
+          0.9578358654016547
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8666666666666667,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.8214285714285714
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": 0.006181318681318659,
+        "ci95": [
+          -0.06368568376111422,
+          0.07593401968401967
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D8",
+      "label": "EfficientNetB0 backbone",
+      "reference": "R",
+      "epoch": 25,
+      "selector": "best_loss",
+      "tta": false,
+      "weights": "D8/weights/stage2_best.weights.h5",
+      "experiment": "D8",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8955223880597015,
+        "macro_f1": 0.8799513085818624,
+        "n": 67,
+        "balanced_accuracy": 0.8857142857142857,
+        "kappa": 0.8396581196581197,
+        "mcc": 0.841682065715474,
+        "roc_auc": 0.9744867535565209,
+        "ece": 0.08518019007213078,
+        "ci_accuracy": [
+          0.8208955223880597,
+          0.9552238805970149
+        ],
+        "ci_macro_f1": [
+          0.7892300626769998,
+          0.9540320202905236
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.8,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.8571428571428571
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": 0.0004274990580529492,
+        "ci95": [
+          -0.10260126326499942,
+          0.09968074357598501
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D9-R",
+      "label": "Reference + test-time augmentation",
+      "reference": "R",
+      "epoch": 15,
+      "selector": "tta of R",
+      "tta": true,
+      "weights": "R/weights/stage2_best.weights.h5",
+      "model_file": null,
+      "build_from": "R",
+      "experiment": "D9",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8955223880597015,
+        "macro_f1": 0.8770232230823364,
+        "n": 67,
+        "balanced_accuracy": 0.8753968253968254,
+        "kappa": 0.8379965457685665,
+        "mcc": 0.838291113788412,
+        "roc_auc": 0.9548520600846183,
+        "ece": 0.05464660009341455,
+        "ci_accuracy": [
+          0.8208955223880597,
+          0.9555970149253711
+        ],
+        "ci_macro_f1": [
+          0.7845925229741019,
+          0.9514398079152179
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.8928571428571429
+        }
+      },
+      "delta": {
+        "vs": "R",
+        "macro_f1": -0.002500586441473107,
+        "ci95": [
+          -0.07290059177274043,
+          0.07095406305924126
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "D9-DEP",
+      "label": "Deployed + test-time augmentation",
+      "reference": "DEP",
+      "epoch": null,
+      "selector": "tta of DEP",
+      "tta": true,
+      "weights": null,
+      "model_file": "disease_model.keras",
+      "build_from": "DEP",
+      "experiment": "D9",
+      "task": "disease",
+      "split": "original",
+      "class_names": [
+        "black_leaf_spot",
+        "healthy",
+        "phyllosticta_leaf_spot"
+      ],
+      "metrics": {
+        "accuracy": 0.8059701492537313,
+        "macro_f1": 0.7890196078431373,
+        "n": 67,
+        "balanced_accuracy": 0.8039682539682541,
+        "kappa": 0.7061403508771931,
+        "mcc": 0.7129170051409479,
+        "roc_auc": 0.9371397336513615,
+        "ece": 0.05192402227601004,
+        "ci_accuracy": [
+          0.7164179104477612,
+          0.8955223880597015
+        ],
+        "ci_macro_f1": [
+          0.6837433688043443,
+          0.8783378008154448
+        ],
+        "recall_per_class": {
+          "black_leaf_spot": 0.7333333333333333,
+          "healthy": 1.0,
+          "phyllosticta_leaf_spot": 0.6785714285714286
+        }
+      },
+      "delta": {
+        "vs": "DEP",
+        "macro_f1": 0.019940582293523357,
+        "ci95": [
+          -0.05416969511077326,
+          0.0994861030243914
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "SDEP",
+      "label": "Deployed severity model (29 Aug)",
+      "reference": null,
+      "epoch": null,
+      "selector": null,
+      "tta": false,
+      "weights": null,
+      "model_file": "severity_model.keras",
+      "experiment": "SDEP",
+      "task": "severity",
+      "split": "original",
+      "class_names": [
+        "mild",
+        "moderate",
+        "severe"
+      ],
+      "metrics": {
+        "accuracy": 0.5581395348837209,
+        "macro_f1": 0.5635854341736696,
+        "n": 43,
+        "within_one": 0.9534883720930233,
+        "qwk": 0.47535383113714,
+        "mean_grade_error": 0.4883720930232558,
+        "kappa": 0.3105485232067511,
+        "balanced_accuracy": 0.5578703703703703,
+        "ci_accuracy": [
+          0.4186046511627907,
+          0.6976744186046512
+        ],
+        "ci_within_one": [
+          0.8837209302325582,
+          1.0
+        ],
+        "ci_qwk": [
+          0.19196255637596413,
+          0.6916266025641024
+        ],
+        "severe_called_mild": 1
+      },
+      "delta": null
+    },
+    {
+      "row": "S1",
+      "label": "Severity, frozen (rerun of deployed recipe)",
+      "reference": "SDEP",
+      "epoch": 3,
+      "selector": "stage1_best",
+      "tta": false,
+      "weights": "SO/weights/stage1_best.weights.h5",
+      "experiment": "SO",
+      "task": "severity",
+      "split": "original",
+      "class_names": [
+        "mild",
+        "moderate",
+        "severe"
+      ],
+      "metrics": {
+        "accuracy": 0.6046511627906976,
+        "macro_f1": 0.6104814491911266,
+        "n": 43,
+        "within_one": 0.9534883720930233,
+        "qwk": 0.5473684210526315,
+        "mean_grade_error": 0.4418604651162791,
+        "kappa": 0.38364249578414833,
+        "balanced_accuracy": 0.611111111111111,
+        "ci_accuracy": [
+          0.46511627906976744,
+          0.7441860465116279
+        ],
+        "ci_within_one": [
+          0.8837209302325582,
+          1.0
+        ],
+        "ci_qwk": [
+          0.26947367816488044,
+          0.7566994670242699
+        ],
+        "severe_called_mild": 1
+      },
+      "delta": {
+        "vs": "SDEP",
+        "macro_f1": 0.04689601501745699,
+        "ci95": [
+          -0.0503752548935061,
+          0.1596280549978851
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "S2",
+      "label": "Severity, fine-tuned top 30 layers",
+      "reference": "S1",
+      "epoch": 9,
+      "selector": "stage2_best",
+      "tta": false,
+      "weights": "SO/weights/stage2_best.weights.h5",
+      "experiment": "SO",
+      "task": "severity",
+      "split": "original",
+      "class_names": [
+        "mild",
+        "moderate",
+        "severe"
+      ],
+      "metrics": {
+        "accuracy": 0.6046511627906976,
+        "macro_f1": 0.6074074074074075,
+        "n": 43,
+        "within_one": 0.9767441860465116,
+        "qwk": 0.5966228893058161,
+        "mean_grade_error": 0.4186046511627907,
+        "kappa": 0.39785831960461293,
+        "balanced_accuracy": 0.6157407407407408,
+        "ci_accuracy": [
+          0.46511627906976744,
+          0.7441860465116279
+        ],
+        "ci_within_one": [
+          0.9302325581395349,
+          1.0
+        ],
+        "ci_qwk": [
+          0.38006508380320475,
+          0.76483455979549
+        ],
+        "severe_called_mild": 0
+      },
+      "delta": {
+        "vs": "S1",
+        "macro_f1": -0.0030740417837190614,
+        "ci95": [
+          -0.15343907501516202,
+          0.14322287898275407
+        ],
+        "verdict": "no clear difference"
+      }
+    },
+    {
+      "row": "S3",
+      "label": "Severity, frozen, balanced split",
+      "reference": null,
+      "epoch": 1,
+      "selector": "stage1_best",
+      "tta": false,
+      "weights": "SB/weights/stage1_best.weights.h5",
+      "experiment": "SB",
+      "task": "severity",
+      "split": "balanced",
+      "class_names": [
+        "mild",
+        "moderate",
+        "severe"
+      ],
+      "metrics": {
+        "accuracy": 0.6744186046511628,
+        "macro_f1": 0.658641975308642,
+        "n": 43,
+        "within_one": 0.9302325581395349,
+        "qwk": 0.6013704151551793,
+        "mean_grade_error": 0.3953488372093023,
+        "kappa": 0.5057471264367817,
+        "balanced_accuracy": 0.6618566618566618,
+        "ci_accuracy": [
+          0.5348837209302325,
+          0.813953488372093
+        ],
+        "ci_within_one": [
+          0.8372093023255814,
+          1.0
+        ],
+        "ci_qwk": [
+          0.32705558509246285,
+          0.8171978033628053
+        ],
+        "severe_called_mild": 2
+      },
+      "delta": null
+    },
+    {
+      "row": "S4",
+      "label": "Severity, fine-tuned, balanced split",
+      "reference": "S3",
+      "epoch": 7,
+      "selector": "stage2_best",
+      "tta": false,
+      "weights": "SB/weights/stage2_best.weights.h5",
+      "experiment": "SB",
+      "task": "severity",
+      "split": "balanced",
+      "class_names": [
+        "mild",
+        "moderate",
+        "severe"
+      ],
+      "metrics": {
+        "accuracy": 0.6046511627906976,
+        "macro_f1": 0.5931152071023312,
+        "n": 43,
+        "within_one": 0.9069767441860465,
+        "qwk": 0.47933194154488523,
+        "mean_grade_error": 0.4883720930232558,
+        "kappa": 0.40032813781788346,
+        "balanced_accuracy": 0.5945165945165946,
+        "ci_accuracy": [
+          0.4418604651162791,
+          0.7441860465116279
+        ],
+        "ci_within_one": [
+          0.813953488372093,
+          0.9767441860465116
+        ],
+        "ci_qwk": [
+          0.17607848316045593,
+          0.724486373579003
+        ],
+        "severe_called_mild": 3
+      },
+      "delta": {
+        "vs": "S3",
+        "macro_f1": -0.06552676820631076,
+        "ci95": [
+          -0.16661333046420776,
+          0.030881283933937576
+        ],
+        "verdict": "no clear difference"
+      }
+    }
+  ]
+}

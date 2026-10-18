@@ -69,7 +69,9 @@ export async function loadHistory() {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    // Refused photographs saved before they stopped being recorded are dropped
+    // here, so an old one can no longer appear as an unidentified plant.
+    return Array.isArray(parsed) ? parsed.filter((e) => e.disease !== 'invalid_image') : [];
   } catch {
     // A corrupt or unreadable store must not break the screen. An empty
     // history is a survivable outcome; a crash on open is not.
