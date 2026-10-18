@@ -11,6 +11,8 @@ import DiseaseDetectionScreen from '../screens/DiseaseDetectionScreen';
 import DiseaseHubScreen from '../screens/DiseaseHubScreen';
 import DiseaseHistoryScreen from '../screens/DiseaseHistoryScreen';
 import DiseaseContributeScreen from '../screens/DiseaseContributeScreen';
+import DiseaseSubmissionsScreen from '../screens/DiseaseSubmissionsScreen';
+import DiseaseReviewScreen from '../screens/DiseaseReviewScreen';
 import GrowthStageScreen from '../screens/GrowthStageScreen';
 import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -176,6 +178,8 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="DiseaseDetection" component={DiseaseDetectionScreen} />
         <Stack.Screen name="DiseaseHistory" component={DiseaseHistoryScreen} />
         <Stack.Screen name="DiseaseContribute" component={DiseaseContributeScreen} />
+        <Stack.Screen name="DiseaseSubmissions" component={DiseaseSubmissionsScreen} />
+        <Stack.Screen name="DiseaseReview" component={DiseaseReviewScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -1,0 +1,64 @@
+========================================================================
+  PHOTO-CHECK LIMITS, measured on 667 real photographs
+  run at 2026-10-13T22:09:20
+========================================================================
+
+                     min   1st pct    median  99th pct       max
+  brightness        77.0     102.0     133.0     162.5     180.6
+  sharpness         23.6      37.6     395.5    3556.6    9587.9
+  short side       162.0     281.6     576.0    1013.0    1023.0
+  pixels        165888.0  288378.9  589824.0 1037332.5 1047552.0
+
+  softest real photographs: black_leaf_spot/Black_LS_0124.jpg (23.6), healthy/Healthy_0116.jpg (27.7), healthy/Healthy_0220.jpg (32.3)
+  darkest real photographs: healthy/Healthy_0005.jpg (77.0), healthy/Healthy_0111.jpg (78.0), healthy/Healthy_0006.jpg (81.7)
+
+  LIMITS
+    too small   fewer than 50,176 pixels (224 x 224; smallest real photograph 165,888)
+    too dark    brightness < 57   (darkest real photograph 77.0, minus 20)
+    washed out  brightness > 201   (brightest real photograph 180.6, plus 20)
+    blurred     sharpness < 17.7   (75% of the softest real photograph, 23.6)
+
+  real photographs refused by these limits: 0 of 667
+
+  BAD COPIES -- 200 photographs, each spoiled on purpose
+    blur, radius 2 px        caught   10 of 200  (5%)
+    blur, radius 3 px        caught   82 of 200  (41%)
+    blur, radius 4 px        caught  191 of 200  (96%)
+    blur, radius 6 px        caught  200 of 200  (100%)
+    blur, radius 8 px        caught  200 of 200  (100%)
+    darkened to 25%          caught  200 of 200  (100%)
+    darkened to 10%          caught  200 of 200  (100%)
+    brightened x3 (glare)    caught  199 of 200  (100%)
+    shrunk to 200 px         caught  200 of 200  (100%)
+
+  COPIES -- the same 200 photographs, altered slightly
+                                    median    99th     max
+    re-saved at JPEG quality 40          0       1       2
+    resized to half                      0       1       1
+    brightened 15%                       1       3       4
+    cropped 3% each side                 7      13      14
+    copy distance (catches 99% of copies): 12 of 64 bits
+    copies caught at that distance: 99.2%
+
+    pairs of DIFFERENT photographs: 222,111
+    median distance between different photographs: 32 bits
+    different pairs within the copy distance (false alarms): 34 (0.015%)
+    closest pairs of different photographs (look at these by eye):
+       1 bits  black_leaf_spot/Black_LS_0055.jpg  black_leaf_spot/Black_LS_0090.jpg
+       2 bits  phyllosticta_leaf_spot/Phyllosticta_LS_0215.jpg  phyllosticta_leaf_spot/Phyllosticta_LS_0218.jpg
+       3 bits  black_leaf_spot/Black_LS_0024.jpg  black_leaf_spot/Black_LS_0043.jpg
+       3 bits  healthy/Healthy_0195.jpg  healthy/Healthy_0196.jpg
+       4 bits  black_leaf_spot/Black_LS_0134.jpg  black_leaf_spot/Black_LS_0135.jpg
+       4 bits  phyllosticta_leaf_spot/Phyllosticta_LS_0136.jpg  phyllosticta_leaf_spot/Phyllosticta_LS_0247.jpg
+       5 bits  healthy/Healthy_0064.jpg  healthy/Healthy_0065.jpg
+       5 bits  healthy/Healthy_0081.jpg  healthy/Healthy_0082.jpg
+       6 bits  black_leaf_spot/Black_LS_0047.jpg  black_leaf_spot/Black_LS_0105.jpg
+       6 bits  healthy/Healthy_0079.jpg  healthy/Healthy_0080.jpg
+
+  NEAR-COPIES ACROSS THE ORIGINAL SPLIT (6 bits or fewer)
+    black_leaf_spot/Black_LS_0024.jpg (test) ~ black_leaf_spot/Black_LS_0043.jpg (train), 3 bits
+    phyllosticta_leaf_spot/Phyllosticta_LS_0215.jpg (test) ~ phyllosticta_leaf_spot/Phyllosticta_LS_0218.jpg (train), 2 bits
+    Two shots of the same leaf, one in training and one held out. The
+    augmentation leakage check cannot see these; this check can.
+
+  written: D:\AI-Powered-Smart-Orchid-Care-System\R26-SE-018\ml-models\disease_detection\results\photo_checks
