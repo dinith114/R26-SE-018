@@ -24,7 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
-import { waterSection, fillTray, getCommandStatus, stopSection } from '../services/careV2';
+import { waterSection, waterHouseOnce, fillTray, getCommandStatus, stopSection } from '../services/careV2';
 import ConfirmSheet from '../components/ConfirmSheet';
 
 /** How long to wait for a node BEYOND the length of the pour itself.
@@ -53,8 +53,11 @@ export default function RunScreen({ route, navigation }) {
      happens here; this only stops the screen offering a control that
      would come back 403. */
   const can = useCan();
-  const { action = 'water', targets = [] } = route.params || {};
+  const { action = 'water', targets = [], mode = 'each' } = route.params || {};
   const isWater = action === 'water';
+  /* One run of the shared pump for every section (18 Oct 2026), chosen in My
+     Farm's Water Now when the house has one watering pump and no valves. */
+  const oneRun = isWater && mode === 'once' && targets.length > 1;
 
   const [rows, setRows] = useState(
     targets.map((t) => ({ ...t, state: 'queued', note: null })),
@@ -118,7 +121,9 @@ export default function RunScreen({ route, navigation }) {
     /* Both action names written out rather than computed into one can() call.
        An audit that greps for can('waterSection') has to be able to see it
        here, and a check it cannot see is a check the next person removes. */
-    const mayRun = isWater ? can('waterSection') : can('fillTray');
+    const mayRun = isWater
+      ? (oneRun ? can('waterHouseOnce') : can('waterSection'))
+      : can('fillTray');
     if (!mayRun) {
       /* 'failed' rather than a new 'blocked' state: the screen already renders
          failed rows with their note, and inventing a state nothing draws would
@@ -129,7 +134,40 @@ export default function RunScreen({ route, navigation }) {
       return;
     }
 
+    /* ONE RUN: one command, one countdown, and every row moves together. The
+       master answers for the first section; the server confirms the rest from
+       that same answer, so the rows share one outcome here too. */
+    const runOnce = async () => {
+      const secs = Math.max(...targets.map((t) => t.durationSec || 45));
+      const houseId = targets[0].houseId;
+      setRows((cur) => cur.map((r) => ({ ...r, state: 'sending', note: null })));
+      try {
+        const r = await waterHouseOnce(houseId, targets.map((t) => t.sectionId), secs);
+        const cmdId = r?.nodeCommand?.id || null;
+        const lead = r?.leadSection || targets[0].sectionId;
+        const li = Math.max(0, targets.findIndex((t) => t.sectionId === lead));
+        if (!alive.current) return;
+        setRows((cur) => cur.map((row) => ({ ...row, state: 'confirming', note: `${secs}s, one run` })));
+        setLive({ i: li, houseId, sectionId: lead,
+                  id: cmdId, secs, remaining: secs, started: false, queued: false });
+
+        const res = await watch(houseId, lead, cmdId, secs);
+        if (!alive.current) return;
+        setLive(null);
+        setStopping(false);
+        const state = res.stopped ? 'stopped' : res.ok ? 'done' : 'unconfirmed';
+        const note = res.stopped ? 'stopped by you'
+          : res.ok ? `${secs}s, one run` : 'the node may be offline';
+        setRows((cur) => cur.map((row) => ({ ...row, state, note })));
+      } catch (e) {
+        if (!alive.current) return;
+        setRows((cur) => cur.map((row) => ({ ...row, state: 'failed', note: e.message })));
+      }
+      if (alive.current) setRunning(false);
+    };
+
     (async () => {
+      if (oneRun) { await runOnce(); return; }
       for (let i = 0; i < targets.length; i++) {
         if (!alive.current) return;
         const t = targets[i];
@@ -213,7 +251,7 @@ export default function RunScreen({ route, navigation }) {
     <View style={s.screen}>
       <ScreenHeader
         title={running ? `${verb} ${rows.length}` : 'Finished'}
-        subtitle={running ? 'One section at a time' : summary}
+        subtitle={running ? (oneRun ? 'One run of the shared pump' : 'One section at a time') : summary}
         navigation={navigation}
         showBack={!running}
       />
@@ -221,8 +259,16 @@ export default function RunScreen({ route, navigation }) {
       <ConfirmSheet
         visible={askStop}
         icon="stop-circle-outline"
-        title={isWater ? 'Stop watering this section?' : 'Stop filling this tray?'}
-        body={live?.started
+        title={oneRun ? 'Stop this watering?'
+          : isWater ? 'Stop watering this section?' : 'Stop filling this tray?'}
+        body={oneRun
+          ? (live?.started
+              ? `The pump has about ${Math.max(0, live?.remaining || 0)} seconds left. `
+                + 'Stopping ends the run for every section in it, and the node takes a '
+                + 'few seconds to react.'
+              : 'The run has not started yet. Stopping asks the master to cancel it for '
+                + 'every section, and it takes a few seconds to react.')
+          : live?.started
           ? `${rows[live?.i]?.name || 'This section'} has about `
             + `${Math.max(0, live?.remaining || 0)} seconds left. Stopping leaves it `
             + 'part-way through, and the node takes a few seconds to react. The '
