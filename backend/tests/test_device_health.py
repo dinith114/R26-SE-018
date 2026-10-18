@@ -55,10 +55,13 @@ def jitter(i):
 
 # ── nothing wrong, nothing said ─────────────────────────────────────────────
 
-def test_a_healthy_dht22_only_board_raises_nothing_in_three_hours():
-    """light -999 and no tray probe for ever is how a calibration board is BUILT."""
+def test_a_healthy_dht22_only_board_pushes_nothing_in_three_hours():
+    """light -999 for ever is how three of the four calibration boards are BUILT:
+    shown as "Light sensor not working" on the screens, never pushed."""
     readings = [rec(i, *jitter(i)) for i in range(180)]
     assert run(readings) == []
+    assert [i["kind"] for i in dh.snapshot(TENANT, "H1")["sections"]["S1"]] == ["light_none"]
+    dh.reset()
     assert run(readings, lifecycle="calibrating") == []
 
 
@@ -143,6 +146,44 @@ def test_a_light_sensor_that_worked_and_stopped_is_caught():
     readings = [rec(i, *jitter(i), light=12000) for i in range(5)]
     readings += [rec(i, *jitter(i), light=-999) for i in range(5, 20)]
     assert [x["kind"] for x in run(readings)] == ["light"]
+
+
+def test_one_good_light_reading_is_enough_to_say_it_stopped():
+    readings = [rec(0, *jitter(0), light=8000)]
+    readings += [rec(i, *jitter(i), light=-999) for i in range(1, 16)]
+    assert [x["kind"] for x in run(readings)] == ["light"]
+
+
+def test_a_light_sensor_flickering_from_its_first_minute_is_caught():
+    """Node 1, 18 Oct 2026, loose GND: it never gave three good readings in a row,
+    so the old rule took it for "not fitted" and never said it had died."""
+    pattern = [0, 0, 378, -999, -999, -999, 0, -999] + [-999] * 15
+    readings = [rec(i, *jitter(i), light=lx) for i, lx in enumerate(pattern)]
+    assert [x["kind"] for x in run(readings)] == ["light"]
+
+
+def test_the_light_sensor_is_remembered_across_a_restart():
+    saved = {"lightSensor": {"mac": "A1B2C3D4E5F6", "seenMs": T0 - 600 * MIN}}
+    readings = [rec(i, *jitter(i), light=-999) for i in range(15)]
+    assert [x["kind"] for x in run(readings, extra=saved)] == ["light"]
+
+
+def test_a_light_sensor_remembered_for_another_board_does_not_count():
+    """A board swapped into the section has to show its own sensor."""
+    saved = {"lightSensor": {"mac": "FFFFFFFFFFFF", "seenMs": T0}}
+    readings = [rec(i, *jitter(i), light=-999) for i in range(15)]
+    assert run(readings, extra=saved) == []
+    assert [i["kind"] for i in dh.snapshot(TENANT, "H1")["sections"]["S1"]] == ["light_none"]
+
+
+def test_the_first_working_light_reading_is_handed_over_to_be_saved():
+    run([rec(0, *jitter(0), light=5000)])
+    assert dh.take_light_seen(TENANT) == [("H1", "S1", "A1B2C3D4E5F6", T0 + MIN // 2)]
+    assert dh.take_light_seen(TENANT) == []                    # each hand-over once
+    dh.reset()
+    saved = {"lightSensor": {"mac": "A1B2C3D4E5F6", "seenMs": T0}}
+    run([rec(1, *jitter(1), light=5000)], extra=saved)
+    assert dh.take_light_seen(TENANT) == []                    # already saved: nothing to do
 
 
 def test_a_frozen_sensor_is_caught_after_two_hours():
@@ -266,6 +307,28 @@ def test_the_engine_raises_each_new_fault_as_one_pushed_alarm(monkeypatch):
     (kind, key, title, _msg, hid, sid), kw = raised[0]
     assert kind == "action" and kw["action"] == "check-device"
     assert hid == "H1" and sid == "S1" and "-dev-dht-" in key
+
+
+def test_the_engine_saves_a_working_light_sensor(monkeypatch):
+    from app.api.routes import automation as auto
+    from app.services.tenant_context import tenant_scope
+    from datetime import datetime, timezone
+
+    now = datetime.fromtimestamp((T0 + 30_000) / 1000, tz=timezone.utc)
+    state = {"lastPlanDay": auto._today(now), "lastTray": now, "lastSpatial": now, "lastTick": None}
+    puts = []
+    monkeypatch.setattr(auto, "_state_for", lambda t: state)
+    monkeypatch.setattr(auto, "_fb_get", lambda p: farm(rec(0, *jitter(0), light=4000))
+                        if p == "/farm/houses.json" else None)
+    monkeypatch.setattr(auto, "_fb_put", lambda p, body=None, *a, **k: puts.append((p, body)) or True)
+    monkeypatch.setattr(auto, "run_watering_link", lambda now, houses: {})
+    monkeypatch.setattr(auto, "_flush_pending_pushes", lambda: None)
+    monkeypatch.setattr(auto, "get_auto_mode", lambda: False)
+    monkeypatch.setattr(auto, "_raise_alarm", lambda *a, **k: None)
+    with tenant_scope("t_x"):
+        auto._engine_pass(now)
+    saved = [b for p, b in puts if p == "/farm/houses/H1/sections/S1/lightSensor.json"]
+    assert saved and saved[0]["mac"] == "A1B2C3D4E5F6"
 
 
 # ── the route the app reads ─────────────────────────────────────────────────

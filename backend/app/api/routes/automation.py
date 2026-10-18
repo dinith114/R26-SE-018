@@ -1088,6 +1088,11 @@ def _engine_pass(now: datetime, st: Optional[dict] = None, pretend: bool = False
                                     set(_acting_houses(houses)), master_queues=queues):
             _raise_alarm("action", issue["key"], issue["title"], issue["message"],
                          issue["houseId"], issue["sectionId"], action="check-device")
+        # Remember which boards have a working light sensor, so a restart does not
+        # turn "stopped" into "never worked" (device_health.take_light_seen).
+        for hid, sid, mac, ms in _dh.take_light_seen(current_tenant()):
+            _fb_put(f"/farm/houses/{hid}/sections/{sid}/lightSensor.json",
+                    {"mac": mac, "seenMs": ms})
     except Exception as e:
         print(f"[HEALTH] pass skipped: {e}")
 
