@@ -115,26 +115,33 @@ export default function LineChart({ series = [], band, width = 300 }) {
         <Polyline pts={tempPts} color={COLORS.temperature} />
       </View>
 
+      {/* Each label gets a third of the width, not its own measured width. With
+          the phone's Bold text setting on, React Native measures a label at its
+          regular weight and Android draws it bold, so a label sized to itself
+          came out as "06:..." (seen on the phone, 15 Oct 2026). */}
       <View style={[s.axis, { width }]}>
-        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[0].label}</Text>
-        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[Math.floor(series.length / 2)].label}</Text>
-        <Text style={s.axisTxt} numberOfLines={1} maxFontSizeMultiplier={1.1}>{series[series.length - 1].label}</Text>
+        <Text style={[s.axisTxt, { textAlign: 'left' }]} maxFontSizeMultiplier={1.2}>{series[0].label}</Text>
+        <Text style={[s.axisTxt, { textAlign: 'center' }]} maxFontSizeMultiplier={1.2}>{series[Math.floor(series.length / 2)].label}</Text>
+        <Text style={[s.axisTxt, { textAlign: 'right' }]} maxFontSizeMultiplier={1.2}>{series[series.length - 1].label}</Text>
       </View>
 
+      {/* One full-width row per line, for the same reason: a legend item sized
+          to its own text lost everything after its first word. */}
       <View style={s.legend}>
-        <Legend color={COLORS.temperature} text={`Temperature ${tMin}-${tMax}°C`} />
-        <Legend color={COLORS.humidity} text="Humidity 0-100%" />
-        {band && <Legend color={`${COLORS.success}44`} text={`Ideal ${band.low}-${band.high}%`} />}
+        <Legend color={COLORS.temperature} name="Temperature" range={`${tMin}-${tMax}°C`} />
+        <Legend color={COLORS.humidity} name="Humidity" range="0-100%" />
+        {band && <Legend color={`${COLORS.success}44`} name="Ideal humidity" range={`${band.low}-${band.high}%`} />}
       </View>
     </View>
   );
 }
 
-function Legend({ color, text }) {
+function Legend({ color, name, range }) {
   return (
     <View style={s.lg}>
       <View style={[s.lgLine, { backgroundColor: color }]} />
-      <Text style={s.lgTxt}>{text}</Text>
+      <Text style={s.lgTxt}>{name}</Text>
+      <Text style={s.lgRange}>{range}</Text>
     </View>
   );
 }
@@ -148,11 +155,13 @@ const s = StyleSheet.create({
               backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm },
   emptyTxt: { color: COLORS.textTertiary, fontSize: 13 },
 
-  axis:    { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  axisTxt: { color: COLORS.textTertiary, fontSize: 11 },
+  axis:    { flexDirection: 'row', marginTop: 6 },
+  axisTxt: { flex: 1, color: COLORS.textTertiary, fontSize: 11, fontVariant: ['tabular-nums'] },
 
-  legend:  { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.md, marginTop: SPACE.md },
-  lg:      { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legend:  { marginTop: SPACE.md, gap: 4 },
+  lg:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lgLine:  { width: 14, height: 3, borderRadius: 2 },
-  lgTxt:   { color: COLORS.textSecondary, fontSize: 11 },
+  lgTxt:   { flex: 1, color: COLORS.textSecondary, fontSize: 12 },
+  lgRange: { flex: 1, color: COLORS.textSecondary, fontSize: 12, fontWeight: '700',
+             textAlign: 'right', fontVariant: ['tabular-nums'] },
 });

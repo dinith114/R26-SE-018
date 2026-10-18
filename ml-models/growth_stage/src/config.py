@@ -23,7 +23,12 @@ MODEL_CONFIG = {
     'batch_size': 32,
     'epochs': 50,
     'patience': 10,
-    'target_size': (224, 224)
+    'target_size': (224, 224),
+    # Train/validation/test split ratios (must sum to 1.0). Grouped by
+    # original photo (see preprocess.py's _base_id) so a photo's offline-
+    # augmented variants never land in more than one split.
+    'validation_split': 0.15,
+    'test_split': 0.15
 }
 
 # Stage labels

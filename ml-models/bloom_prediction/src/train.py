@@ -16,7 +16,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.config import MODEL_CONFIG, TABULAR_FEATURES, OUTPUT_DIR, MODELS_DIR
 from src.model import create_bloom_model, get_callbacks, get_model_summary
-from src.preprocess import DataPreprocessor
+from src.preprocess import DataPreprocessor, save_split_manifest
 from src.utils import save_model_artifacts
 
 
@@ -33,7 +33,9 @@ def train_model(data_dir: Path,
                 epochs: int = 50,
                 batch_size: int = 16,
                 model_type: str = 'efficientnet',
-                fine_tune_epochs: int = 20) -> tuple:
+                fine_tune_epochs: int = 20,
+                val_split: float = None,
+                test_split: float = None) -> tuple:
     """
     Train the bloom date prediction model.
     """
@@ -47,7 +49,9 @@ def train_model(data_dir: Path,
     preprocessor = DataPreprocessor(
         data_dir=data_dir,
         target_size=MODEL_CONFIG['target_size'],
-        batch_size=batch_size
+        batch_size=batch_size,
+        val_split=val_split,
+        test_split=test_split
     )
 
     stats = preprocessor.get_dataset_stats()
@@ -56,10 +60,14 @@ def train_model(data_dir: Path,
         print(f"  {key}: {value}")
 
     print("\nLoading data...")
-    train_generator, validation_generator = preprocessor.load_data()
+    train_generator, validation_generator, test_generator, splits = preprocessor.load_data()
+    train_df, val_df, test_df = splits
 
+    save_split_manifest(train_df, val_df, test_df, output_dir)
     print(f"\nTraining samples: {len(train_generator.df)}")
     print(f"Validation samples: {len(validation_generator.df)}")
+    print(f"Test samples: {len(test_generator.df)}")
+    print(f"Split manifests written to: {output_dir}/{{train,val,test}}_split.csv")
 
     print(f"\nCreating model (type: {model_type})...")
     model = create_bloom_model(
@@ -90,15 +98,20 @@ def train_model(data_dir: Path,
     if fine_tune_epochs > 0:
         print("\nPhase 2: Fine-tuning the model...")
 
+        # Only ~53 plants total (42 in the training split) - unfreezing many
+        # backbone layers gives the model enough capacity to memorize that
+        # small a group set almost immediately. Fine-tuning fewer layers at a
+        # lower learning rate than before keeps the backbone closer to its
+        # ImageNet features, which generalizes better to unseen plants.
         base_model = find_base_model(model)
         base_model.trainable = True
         for layer in base_model.layers:
             layer.trainable = False
-        for layer in base_model.layers[-30:]:
+        for layer in base_model.layers[-10:]:
             layer.trainable = True
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=MODEL_CONFIG['learning_rate'] / 10),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=MODEL_CONFIG['learning_rate'] / 20),
             loss='mse',
             metrics=['mae']
         )
@@ -136,21 +149,25 @@ def train_model(data_dir: Path,
 
     plot_training_history(history, output_dir)
 
-    print("\nEvaluating model...")
-    evaluate_model(model, validation_generator, output_dir)
+    # Final evaluation uses the held-out TEST set, not validation - validation
+    # was already used to pick the best checkpoint (ModelCheckpoint/
+    # EarlyStopping above), so reporting metrics on it would be optimistically
+    # biased. Test plants were never involved in training or model selection.
+    print("\nEvaluating model on held-out test set...")
+    evaluate_model(model, test_generator, output_dir)
 
-    return model, history, train_generator, validation_generator
+    return model, history, train_generator, validation_generator, test_generator
 
 
-def evaluate_model(model, validation_generator, output_dir: Path):
+def evaluate_model(model, generator, output_dir: Path):
     """
-    Generate detailed evaluation metrics: MAE, RMSE, R^2, and a
-    predicted-vs-actual scatter plot.
+    Generate detailed evaluation metrics for the given (held-out) generator:
+    MAE, RMSE, R^2, and a predicted-vs-actual scatter plot.
     """
     y_true = []
     y_pred = []
-    for i in range(len(validation_generator)):
-        (images, tabular), targets = validation_generator[i]
+    for i in range(len(generator)):
+        (images, tabular), targets = generator[i]
         preds = model.predict((images, tabular), verbose=0).flatten()
         y_true.extend(targets.tolist())
         y_pred.extend(preds.tolist())
@@ -241,16 +258,22 @@ def main():
                         help='Type of base model to use')
     parser.add_argument('--fine_tune_epochs', type=int, default=20,
                         help='Number of fine-tuning epochs')
+    parser.add_argument('--val_split', type=float, default=None,
+                        help='Fraction of plants held out for validation (default: config.py MODEL_CONFIG)')
+    parser.add_argument('--test_split', type=float, default=None,
+                        help='Fraction of plants held out for testing (default: config.py MODEL_CONFIG)')
 
     args = parser.parse_args()
 
-    model, history, train_generator, val_generator = train_model(
+    model, history, train_generator, val_generator, test_generator = train_model(
         data_dir=Path(args.data_dir),
         output_dir=Path(args.output_dir),
         epochs=args.epochs,
         batch_size=args.batch_size,
         model_type=args.model_type,
-        fine_tune_epochs=args.fine_tune_epochs
+        fine_tune_epochs=args.fine_tune_epochs,
+        val_split=args.val_split,
+        test_split=args.test_split
     )
 
     print("\n" + "=" * 70)

@@ -19,16 +19,18 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.config import MODEL_CONFIG, STAGE_LABELS, OUTPUT_DIR, MODELS_DIR
 from src.model import create_cnn_model, get_callbacks, get_model_summary, fine_tune_model
-from src.preprocess import DataPreprocessor
+from src.preprocess import DataPreprocessor, save_split_manifest
 from src.utils import save_model_artifacts, get_stage_info
 
 
-def train_model(data_dir: Path, 
-                output_dir: Path, 
+def train_model(data_dir: Path,
+                output_dir: Path,
                 epochs: int = 50,
                 batch_size: int = 32,
                 model_type: str = 'efficientnet',
-                fine_tune_epochs: int = 20) -> tuple:
+                fine_tune_epochs: int = 20,
+                val_split: float = None,
+                test_split: float = None) -> tuple:
     """
     Train the growth stage classification model.
     """
@@ -44,9 +46,11 @@ def train_model(data_dir: Path,
     preprocessor = DataPreprocessor(
         data_dir=data_dir,
         target_size=MODEL_CONFIG['target_size'],
-        batch_size=batch_size
+        batch_size=batch_size,
+        val_split=val_split,
+        test_split=test_split
     )
-    
+
     # Get dataset stats
     stats = preprocessor.get_dataset_stats()
     print("\nDataset Statistics:")
@@ -54,15 +58,18 @@ def train_model(data_dir: Path,
     print("Images per class:")
     for stage, count in stats['images_per_class'].items():
         print(f"  {stage}: {count}")
-    
+
     # Load data using generators
     print("\nLoading data...")
-    train_generator, validation_generator = preprocessor.load_data()
-    
+    train_generator, validation_generator, test_generator, splits = preprocessor.load_data()
+    train_df, val_df, test_df = splits
+
+    save_split_manifest(train_df, val_df, test_df, output_dir)
     print(f"\nTraining samples: {train_generator.samples}")
     print(f"Validation samples: {validation_generator.samples}")
-    print(f"Classes: {train_generator.class_indices}")
-    
+    print(f"Test samples: {test_generator.samples}")
+    print(f"Split manifests written to: {output_dir}/{{train,val,test}}_split.csv")
+
     # Calculate class weights for imbalance
     class_weights = preprocessor.get_class_weights(train_generator)
     print(f"\nClass weights: {class_weights}")
@@ -163,29 +170,32 @@ def train_model(data_dir: Path,
     
     # Plot training history
     plot_training_history(history, output_dir)
-    
-    # Evaluate on validation set
-    print("\nEvaluating model...")
-    eval_results = model.evaluate(validation_generator, verbose=0)
+
+    # Final evaluation uses the held-out TEST set, not validation - validation
+    # was already used to pick the best checkpoint (ModelCheckpoint/
+    # EarlyStopping above), so reporting metrics on it would be optimistically
+    # biased. Test images were never involved in training or model selection.
+    print("\nEvaluating model on held-out test set...")
+    eval_results = model.evaluate(test_generator, verbose=0)
     metrics_names = model.metrics_names
-    
-    print("\nValidation Results:")
+
+    print("\nTest Results:")
     for name, value in zip(metrics_names, eval_results):
         print(f"  {name}: {value:.4f}")
-    
+
     # Generate detailed evaluation
-    evaluate_model(model, validation_generator, output_dir)
-    
-    return model, history, train_generator, validation_generator
+    evaluate_model(model, test_generator, output_dir)
+
+    return model, history, train_generator, validation_generator, test_generator
 
 
-def evaluate_model(model, validation_generator, output_dir: Path):
+def evaluate_model(model, generator, output_dir: Path):
     """
-    Generate detailed evaluation metrics.
+    Generate detailed evaluation metrics for the given (held-out) generator.
     """
     # Get predictions
-    y_true = validation_generator.classes
-    y_pred_probs = model.predict(validation_generator, verbose=0)
+    y_true = generator.classes
+    y_pred_probs = model.predict(generator, verbose=0)
     y_pred = np.argmax(y_pred_probs, axis=1)
     
     # Get unique classes present in validation
@@ -280,17 +290,23 @@ def main():
                         help='Type of base model to use')
     parser.add_argument('--fine_tune_epochs', type=int, default=20,
                         help='Number of fine-tuning epochs')
-    
+    parser.add_argument('--val_split', type=float, default=None,
+                        help='Fraction of each class held out for validation (default: config.py MODEL_CONFIG)')
+    parser.add_argument('--test_split', type=float, default=None,
+                        help='Fraction of each class held out for testing (default: config.py MODEL_CONFIG)')
+
     args = parser.parse_args()
-    
+
     # Train model
-    model, history, train_generator, val_generator = train_model(
+    model, history, train_generator, val_generator, test_generator = train_model(
         data_dir=Path(args.data_dir),
         output_dir=Path(args.output_dir),
         epochs=args.epochs,
         batch_size=args.batch_size,
         model_type=args.model_type,
-        fine_tune_epochs=args.fine_tune_epochs
+        fine_tune_epochs=args.fine_tune_epochs,
+        val_split=args.val_split,
+        test_split=args.test_split
     )
     
     print("\n" + "=" * 70)

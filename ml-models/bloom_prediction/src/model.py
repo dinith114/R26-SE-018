@@ -69,21 +69,25 @@ def create_bloom_model(input_shape: Tuple[int, int, int] = (224, 224, 3),
 
     x = base_model(x, training=False)
     x = layers.GlobalAveragePooling2D()(x)
-    x = layers.Dense(256, activation='relu', kernel_regularizer='l2')(x)
+    x = layers.Dense(128, activation='relu', kernel_regularizer='l2')(x)
     x = layers.BatchNormalization()(x)
-    x = layers.Dropout(0.3)(x)
-    image_embedding = layers.Dense(64, activation='relu')(x)
+    x = layers.Dropout(0.5)(x)
+    image_embedding = layers.Dense(32, activation='relu')(x)
 
-    # Tabular branch (temperature, humidity, light intensity)
+
     tabular_input = tf.keras.Input(shape=(num_tabular_features,), name='tabular_input')
-    t = layers.Dense(32, activation='relu')(tabular_input)
+    t = layers.GaussianNoise(0.15)(tabular_input)
+    t = layers.Dense(32, activation='relu', kernel_regularizer='l2')(t)
+    t = layers.Dropout(0.3)(t)
     t = layers.Dense(16, activation='relu')(t)
 
-    # Combine and regress
+    # Combine and regress. ReLU output because the target (days until bloom)
+    # is never negative - this lets the network represent "already bloomed"
+    # as an exact 0 instead of relying on predict.py's post-hoc clipping.
     combined = layers.Concatenate()([image_embedding, t])
-    combined = layers.Dense(64, activation='relu', kernel_regularizer='l2')(combined)
-    combined = layers.Dropout(0.3)(combined)
-    output = layers.Dense(1, activation='linear', name='days_until_bloom')(combined)
+    combined = layers.Dense(32, activation='relu', kernel_regularizer='l2')(combined)
+    combined = layers.Dropout(0.5)(combined)
+    output = layers.Dense(1, activation='relu', name='days_until_bloom')(combined)
 
     model = models.Model(
         inputs=[image_input, tabular_input],
@@ -106,13 +110,13 @@ def get_callbacks(model_save_path: str, patience: int = 10) -> list:
     """
     callbacks = [
         EarlyStopping(
-            monitor='val_loss',
+            monitor='val_mae',
             patience=patience,
             restore_best_weights=True,
             verbose=1
         ),
         ReduceLROnPlateau(
-            monitor='val_loss',
+            monitor='val_mae',
             factor=0.2,
             patience=patience // 2,
             min_lr=1e-7,
@@ -146,8 +150,8 @@ def get_model_summary(model: tf.keras.Model) -> str:
 
 def fine_tune_model(model: tf.keras.Model,
                    base_model: tf.keras.Model,
-                   num_layers: int = 30,
-                   learning_rate: float = 0.0001) -> tf.keras.Model:
+                   num_layers: int = 10,
+                   learning_rate: float = 0.00005) -> tf.keras.Model:
     """
     Fine-tune the last n layers of the base model.
     """

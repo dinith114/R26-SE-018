@@ -52,16 +52,26 @@ export const getOverview = () => req('/overview');
 export const getHouse    = (h) => req(`/houses/${h}`);
 export const getModelInfo= () => req('/model-info');
 export const getAlerts   = () => req('/alerts');
-export const getHistory  = (h, s, points = 48, hours = 24) =>
-  req(`/houses/${h}/sections/${s}/history?points=${points}&hours=${hours}`);
+/** The chart's points for [start, end] (epoch ms). The ranges are in
+ *  services/historyRange.js, which works them out in farm time. */
+export const getHistory  = (h, s, points, start, end) =>
+  req(`/houses/${h}/sections/${s}/history?points=${points}&start=${start}&end=${end}`);
 
-/** Ranges offered in the chart's dropdown. */
-export const HISTORY_RANGES = [
-  { label: 'Last 6 hours', hours: 6,   points: 36 },
-  { label: 'Last 24 hours', hours: 24, points: 48 },
-  { label: 'Last 3 days',  hours: 72,  points: 60 },
-  { label: 'Last 7 days',  hours: 168, points: 70 },
-];
+const timelineQuery = ({ start, end, before, limit = 100, types = 'reading,water,feed,tray' }) =>
+  `start=${start}&end=${end}&limit=${limit}&types=${types}` + (before ? `&before=${before}` : '');
+
+/**
+ * Everything recorded in [start, end]: every reading, watering, feed and tray
+ * fill, newest first, a page at a time. Pass the previous page's `nextBefore`
+ * as `before` for the next one. The first page also carries the counts.
+ */
+export const getTimeline = (h, s, opts = {}) =>
+  req(`/houses/${h}/sections/${s}/timeline?${timelineQuery(opts)}`);
+
+/** A download link for the range as a CSV file, good for 15 minutes. */
+export const exportTimeline = (h, s, { start, end, types }) =>
+  req(`/houses/${h}/sections/${s}/timeline/export`,
+      { method: 'POST', body: JSON.stringify({ start, end, types }) });
 
 /* ── rename (name only — never touches other settings) ── */
 /**
@@ -110,9 +120,11 @@ export const setupFarm   = (cfg)      => req('/setup',  { method: 'POST', body: 
 export const addHouse    = (house)    => req('/houses', { method: 'POST', body: JSON.stringify(house) });
 
 /** Give an existing house its size in metres, so it can be drawn to scale. */
-export const setHouseDimensions = (h, width, length) =>
+/** A house's size in METRES (the app converts feet before calling). With
+ *  scaleSections, every placed section moves in proportion. */
+export const setHouseDimensions = (h, width, length, scaleSections = false) =>
   req(`/houses/${h}/dimensions`, {
-    method: 'PUT', body: JSON.stringify({ width, length }),
+    method: 'PUT', body: JSON.stringify({ width, length, scaleSections }),
   });
 
 /**
@@ -217,6 +229,14 @@ export const addSection  = (h, s)     => req(`/houses/${h}/sections`, { method: 
 export const updateSection = (h, s, body) =>
   req(`/houses/${h}/sections/${s}`, { method: 'PUT', body: JSON.stringify(body) });
 
+/**
+ * Set a section's growth stage (Active, Flowering or Dormant), by hand or from
+ * a photo the farmer confirmed: { stage, by: 'manual' | 'photo', photoStage,
+ * photoConfidence }. The server dates it and works the plant food out again.
+ */
+export const setGrowthStage = (h, s, body) =>
+  req(`/houses/${h}/sections/${s}/growth-stage`, { method: 'PUT', body: JSON.stringify(body) });
+
 /* ── ML ── */
 export const planSection = (h, s) => req(`/houses/${h}/sections/${s}/plan`, { method: 'POST' });
 export const planAll     = ()     => req('/plan-all', { method: 'POST' });
@@ -241,6 +261,13 @@ export const getCommandStatus = (h, s, id) =>
 export const waterSection = (h, s, durationSec = 45, withFertilizer = false) =>
   req(`/houses/${h}/sections/${s}/water`,
       { method: 'POST', body: JSON.stringify({ durationSec, withFertilizer, triggeredBy: 'user' }) });
+
+/* Several sections with ONE run of the pump they share (18 Oct 2026). This farm
+   has one watering pump for the whole house, so one-at-a-time ran it once per
+   section. The server refuses if the sections have valves of their own. */
+export const waterHouseOnce = (h, sectionIds, durationSec) =>
+  req(`/houses/${h}/water-once`,
+      { method: 'POST', body: JSON.stringify({ sectionIds, durationSec, triggeredBy: 'user' }) });
 
 export const fillTray = (h, s, fillSeconds = 15) =>
   req(`/houses/${h}/sections/${s}/tray-fill`,
@@ -403,21 +430,11 @@ export const getDeviceScan = (mac) => devReq(`/${mac}/scan`);
 export const setDeviceInterval = (mac, ms) =>
   devReq(`/${mac}/interval`, { method: 'PUT', body: JSON.stringify({ readIntervalMs: ms }) });
 
-/** Offered in the UI. Discrete choices, not a free slider: these are the only
- *  values anyone actually wants, and a stray 1 s would flood the database. */
-export const READ_INTERVALS = [
-  { label: '15s',  ms: 15000,  hint: 'Demo' },
-  { label: '30s',  ms: 30000,  hint: 'Bench' },
-  { label: '1min', ms: 60000,  hint: 'Normal' },
-  { label: '5min', ms: 300000, hint: 'Production' },
-];
-
-/** "every 15s" / "every 5 min" — how the interval reads in a sentence. */
-export function intervalLabel(ms) {
-  if (ms == null) return '--';
-  const s = Math.round(ms / 1000);
-  return s < 60 ? `every ${s}s` : `every ${Math.round(s / 60)} min`;
-}
+/* The choices, any custom value (5 s to 1 h, the firmware's own limits) and
+   how an interval is said all live in services/readInterval.js, which is
+   tested without a device. "every 1 min 30 s", not the "every 2 min" this used
+   to round a custom value to. */
+export { READ_PRESETS, intervalSentence as intervalLabel } from './readInterval';
 
 /** Signal strength as words. Farmers do not read dBm. */
 export function signalLabel(rssi) {
