@@ -145,6 +145,9 @@ def main():
     ap.add_argument("--split", default="test", choices=["test", "validation"])
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--report", default=None, help="write the text report here")
+    ap.add_argument("--out", default=None,
+                    help="folder for the results; defaults to the models folder. Use a "
+                         "separate folder to keep earlier result files untouched.")
     args = ap.parse_args()
 
     try:
@@ -157,6 +160,8 @@ def main():
                  "  pip install tensorflow-cpu scikit-learn matplotlib".format(exc))
 
     models_dir = Path(args.models).resolve()
+    out_dir = Path(args.out).resolve() if args.out else models_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     model_path = Path(args.model) if args.model else models_dir / "disease_model.keras"
     names_path = models_dir / "class_names.json"
 
@@ -276,9 +281,18 @@ def main():
         out("\n  This table is descriptive only. The operating threshold must be")
         out("  chosen from `python evaluate.py --split validation`.")
 
+    # ---------------- beyond accuracy ----------------
+    from extra_metrics import (classification_extras, describe_classification,
+                               save_roc_figure)
+    extras = classification_extras(y_true, y_pred, probs, class_names)
+    describe_classification(extras, out)
+
     # ---------------- save ----------------
-    fig_path = models_dir / "confusion_matrix_{}.png".format(args.split)
+    fig_path = out_dir / "confusion_matrix_{}.png".format(args.split)
     saved = save_confusion_figure(cm, class_names, fig_path)
+    roc_saved = save_roc_figure(y_true, probs, class_names,
+                                out_dir / "roc_{}.png".format(args.split),
+                                "Disease classifier - {} set ROC curves".format(args.split))
 
     metrics = {
         "evaluated_at": datetime.now().isoformat(timespec="seconds"),
@@ -297,8 +311,9 @@ def main():
         "misclassified": [{"file": p.name, "true": t, "predicted": pr,
                            "confidence": c} for p, t, pr, c in wrong],
         "threshold_sweep": sweep,
+        "beyond_accuracy": extras,
     }
-    metrics_path = models_dir / "metrics_{}.json".format(args.split)
+    metrics_path = out_dir / "metrics_{}.json".format(args.split)
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
@@ -306,10 +321,12 @@ def main():
     out("  metrics json : {}".format(metrics_path))
     if saved:
         out("  figure       : {}".format(saved))
+    if roc_saved:
+        out("  ROC curves   : {}".format(roc_saved))
     out("=" * 70)
 
     report_path = Path(args.report) if args.report else \
-        models_dir / "evaluation_report_{}.txt".format(args.split)
+        out_dir / "evaluation_report_{}.txt".format(args.split)
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\nreport written: {}".format(report_path))
 

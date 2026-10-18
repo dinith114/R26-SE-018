@@ -1,0 +1,222 @@
+{
+  "evaluated_at": "2026-10-12T20:59:17",
+  "model": "severity",
+  "split": "test",
+  "class_names": [
+    "mild",
+    "moderate",
+    "severe"
+  ],
+  "n_images": 43,
+  "macro_f1": 0.4499633699633699,
+  "exact_accuracy": 0.46511627906976744,
+  "within_one_grade_accuracy": 0.9069767441860465,
+  "random_baseline": 0.3333333333333333,
+  "per_class": {
+    "mild": {
+      "precision": 0.5555555555555556,
+      "recall": 0.5882352941176471,
+      "f1": 0.5714285714285714,
+      "support": 17
+    },
+    "moderate": {
+      "precision": 0.23076923076923078,
+      "recall": 0.25,
+      "f1": 0.24,
+      "support": 12
+    },
+    "severe": {
+      "precision": 0.5833333333333334,
+      "recall": 0.5,
+      "f1": 0.5384615384615384,
+      "support": 14
+    }
+  },
+  "confusion_matrix": [
+    [
+      10,
+      5,
+      2
+    ],
+    [
+      6,
+      3,
+      3
+    ],
+    [
+      2,
+      5,
+      7
+    ]
+  ],
+  "severe_called_mild": 2,
+  "misclassified": [
+    {
+      "file": "Black_LS_0007.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.7610389590263367
+    },
+    {
+      "file": "Black_LS_0023.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.7621377110481262
+    },
+    {
+      "file": "Black_LS_0024.jpg",
+      "true": "moderate",
+      "predicted": "severe",
+      "confidence": 0.7868114113807678
+    },
+    {
+      "file": "Black_LS_0029.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.4400715231895447
+    },
+    {
+      "file": "Black_LS_0036.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.6674229502677917
+    },
+    {
+      "file": "Black_LS_0056.jpg",
+      "true": "mild",
+      "predicted": "severe",
+      "confidence": 0.6733362674713135
+    },
+    {
+      "file": "Black_LS_0058.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.895532488822937
+    },
+    {
+      "file": "Black_LS_0060.jpg",
+      "true": "mild",
+      "predicted": "severe",
+      "confidence": 0.778130829334259
+    },
+    {
+      "file": "Black_LS_0063.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.4629078209400177
+    },
+    {
+      "file": "Phyllosticta_LS_0002.jpg",
+      "true": "severe",
+      "predicted": "mild",
+      "confidence": 0.4505879282951355
+    },
+    {
+      "file": "Phyllosticta_LS_0013.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.570666491985321
+    },
+    {
+      "file": "Phyllosticta_LS_0045.jpg",
+      "true": "moderate",
+      "predicted": "severe",
+      "confidence": 0.7548337578773499
+    },
+    {
+      "file": "Phyllosticta_LS_0048.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.7925801277160645
+    },
+    {
+      "file": "Phyllosticta_LS_0053.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.7837631702423096
+    },
+    {
+      "file": "Phyllosticta_LS_0102.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.7206098437309265
+    },
+    {
+      "file": "Phyllosticta_LS_0113.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.9777507781982422
+    },
+    {
+      "file": "Phyllosticta_LS_0126.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.5878359079360962
+    },
+    {
+      "file": "Phyllosticta_LS_0141.jpg",
+      "true": "mild",
+      "predicted": "moderate",
+      "confidence": 0.5592464804649353
+    },
+    {
+      "file": "Phyllosticta_LS_0207.jpg",
+      "true": "moderate",
+      "predicted": "mild",
+      "confidence": 0.7412194013595581
+    },
+    {
+      "file": "Phyllosticta_LS_0215.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.46116045117378235
+    },
+    {
+      "file": "Phyllosticta_LS_0217.jpg",
+      "true": "severe",
+      "predicted": "mild",
+      "confidence": 0.8522923588752747
+    },
+    {
+      "file": "Phyllosticta_LS_0223.jpg",
+      "true": "severe",
+      "predicted": "moderate",
+      "confidence": 0.5541269183158875
+    },
+    {
+      "file": "Phyllosticta_LS_0259.jpg",
+      "true": "moderate",
+      "predicted": "severe",
+      "confidence": 0.72443687915802
+    }
+  ],
+  "beyond_accuracy": {
+    "majority_baseline": {
+      "accuracy": 0.3953488372093023,
+      "macro_f1": 0.18888888888888888,
+      "class_index": 0
+    },
+    "balanced_accuracy": 0.44607843137254904,
+    "cohen_kappa": 0.18867924528301894,
+    "quadratic_weighted_kappa": 0.4182450715114031,
+    "mcc": 0.18914576018369034,
+    "mean_grade_error": 0.627906976744186,
+    "expected_calibration_error": 0.3002265040264573,
+    "ci95_exact_accuracy": [
+      0.32558139534883723,
+      0.627906976744186
+    ],
+    "ci95_within_one_grade": [
+      0.813953488372093,
+      0.9767441860465116
+    ],
+    "ci95_quadratic_weighted_kappa": [
+      0.15984407777204732,
+      0.6468569555315282
+    ],
+    "bootstrap": {
+      "resamples": 2000,
+      "seed": 42
+    }
+  }
+}
