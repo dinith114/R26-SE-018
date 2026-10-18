@@ -353,6 +353,29 @@ export default function FarmDashboardScreen({ navigation }) {
   const coolingHidden = flowLive.length - flowPickable.length;
   const chosen = flowSections.filter((x) => (flow?.sectionIds || []).includes(x.sectionId));
 
+  /* ONE SHARED WATERING PUMP (18 Oct 2026). When the house's pump channel is set
+     and no chosen section has a valve of its own, every section is watered by
+     the same pump, so "one at a time" ran it once per section and each plant got
+     all the durations added together. One run as long as the longest is then
+     offered, and chosen by default. With valves per section it is not offered
+     (afterSections decides). */
+  const runSecs = chosen.map((x) => x.plan?.durationSec || 45);
+  const longestSecs = runSecs.length ? Math.max(...runSecs) : 0;
+  const totalSecs = runSecs.reduce((a, b) => a + b, 0);
+  const feedDueNames = chosen.filter((x) => x.fertilizer?.due).map((x) => x.meta?.name || x.sectionId);
+  const oneRun = flow?.kind === 'water' && flow?.mode === 'once' && chosen.length > 1;
+
+  const afterSections = (sectionIds) => {
+    const many = flow.kind === 'water' && sectionIds.length > 1;
+    // `chosen` is from the previous render; work the shared pump out for the new pick.
+    const picked = flowSections.filter((x) => sectionIds.includes(x.sectionId));
+    const shared = flowHouse?.meta?.waterChannel != null
+      && picked.every((x) => x.meta?.relayChannel == null
+        || Number(x.meta.relayChannel) === Number(flowHouse.meta.waterChannel));
+    setFlow({ ...flow, sectionIds, mode: many && shared ? 'once' : 'each',
+              step: many && shared ? 'mode' : 'confirm' });
+  };
+
   const launch = () => {
     const kind = flow.kind;
     const targets = chosen.map((x) => ({
@@ -364,7 +387,8 @@ export default function FarmDashboardScreen({ navigation }) {
       withFertilizer: !!x.fertilizer?.due,
     }));
     setFlow(null);
-    navigation.navigate('Run', { action: kind === 'water' ? 'water' : 'tray', targets });
+    navigation.navigate('Run', { action: kind === 'water' ? 'water' : 'tray', targets,
+                                 mode: oneRun ? 'once' : 'each' });
   };
 
   const houses   = data?.houses || [];
@@ -1141,7 +1165,32 @@ export default function FarmDashboardScreen({ navigation }) {
         values={flow?.sectionIds || []}
         confirmLabel="Next"
         onCancel={() => setFlow(null)}
-        onConfirm={(sectionIds) => setFlow({ ...flow, sectionIds, step: 'confirm' })}
+        onConfirm={afterSections}
+      />
+
+      {/* Step 2b, watering several sections on one shared pump: one run or one
+          at a time. Only shown when one run is possible (sharedPump). */}
+      <SelectSheet
+        visible={flow?.step === 'mode'}
+        title="How should they be watered?"
+        subtitle={`${chosen.length} sections share one watering pump`}
+        options={[
+          { key: 'once',
+            label: 'Whole house, one run',
+            sub: `The pump runs once for ${longestSecs}s, the longest of the plans, and `
+               + 'every chosen section gets that one watering.'
+               + (feedDueNames.length
+                   ? ` No plant food in this run (due in ${feedDueNames.join(', ')}).`
+                   : '') },
+          { key: 'each',
+            label: 'One section at a time',
+            sub: `${chosen.length} runs back to back, ${totalSecs}s of pumping. With one `
+               + 'shared pump every run waters the whole house.' },
+        ]}
+        value={flow?.mode || 'once'}
+        confirmLabel="Next"
+        onCancel={() => setFlow(null)}
+        onConfirm={(mode) => setFlow({ ...flow, mode, step: 'confirm' })}
       />
 
       {/* Step 3 — say exactly what is about to happen, and to what. */}
@@ -1153,7 +1202,9 @@ export default function FarmDashboardScreen({ navigation }) {
           : `Fill ${chosen.length} tray${chosen.length === 1 ? '' : 's'}?`}
         body={`${chosen.map((x) => x.meta?.name || x.sectionId).join(', ')}.\n\n`
             + (flow?.kind === 'water'
-                ? 'Each pump runs for its own planned duration, one section at a time.'
+                ? (oneRun
+                    ? `One run of the shared pump, ${longestSecs} seconds, waters all of them.`
+                    : 'Each pump runs for its own planned duration, one section at a time.')
                 : 'Each tray gets a short burst of water, one section at a time. It raises '
                   + 'humidity around the plants and does not touch the roots.')}
         caution={flow?.kind === 'water'

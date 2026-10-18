@@ -2273,7 +2273,8 @@ def settle_pending_acks() -> int:
     return answered
 
 
-def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict) -> None:
+def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: dict,
+                         _fan_out: bool = True) -> None:
     """Write what the controller did onto the event that asked for it.
 
     `confirmed` means water moved. It used to be set for ANY final ack, so a
@@ -2289,6 +2290,12 @@ def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: d
                 _fb_put(f"{ev}/outcome.json", ack.get("outcome") or ("done" if ran > 0 else "not run"))
                 _fb_put(f"{ev}/ranSec.json", ran)
                 _fb_put(f"{ev}/stoppedEarly.json", ack.get("outcome") == "stopped")
+                # ONE RUN, SEVERAL SECTIONS (water_house_once). The answer comes
+                # back for one of them; the same pump run watered the rest.
+                if _fan_out:
+                    for other in v.get("covers") or []:
+                        if other != section_id:
+                            _stamp_event_outcome(house_id, other, command_id, ack, _fan_out=False)
                 break
     except Exception:
         pass
@@ -2932,6 +2939,86 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
             "lastAck": _last_ack(s),
             "message": (f"Watering for {command['durationSec']}s. The node picks "
                         "this up within about 15 seconds.")}
+
+
+class HouseWaterCmd(BaseModel):
+    sectionIds: List[str]
+    durationSec: int = 45
+    triggeredBy: str = "user"
+
+
+@router.post("/houses/{house_id}/water-once")
+def water_house_once(house_id: str, cmd: HouseWaterCmd,
+                     ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROLE_OPERATOR))) -> dict:
+    """Water several sections with ONE run of the pump they share (18 Oct 2026).
+
+    This farm is plumbed with one watering pump for the whole house and no valve
+    per section (see _relay_channel). Watering four sections "one at a time" ran
+    that same pump four times back to back, so every plant got all four
+    durations added together. One run, as long as the longest of them, is what
+    the plumbing can actually do.
+
+    REFUSED when the sections do not share a channel. With a valve per section,
+    one run would open only the first section's valve and the others would get
+    nothing while their history said they had been watered.
+
+    No plant food. It is planned per section, and one run would feed every
+    covered section whether it was due or not. The app says so and offers the
+    one-at-a-time run for a section that is due.
+    """
+    ids = [s for s in dict.fromkeys(cmd.sectionIds or []) if s]
+    if not ids:
+        raise HTTPException(400, "Choose at least one section.")
+    sections = {}
+    for sid in ids:
+        s = _fb_get(f"/farm/houses/{house_id}/sections/{sid}.json")
+        if not s:
+            raise HTTPException(404, f"Section {sid} not found")
+        sections[sid] = s
+    if not _master_for_house(house_id):
+        raise HTTPException(409, "Nothing was poured: no master controller is set for this "
+                                 f"house. {SETUP_HINT}")
+    channels = {sid: _relay_channel(house_id, sid, "water") for sid in ids}
+    if any(ch is None for ch in channels.values()):
+        raise HTTPException(409, "Nothing was poured: no watering pump channel is set for "
+                                 f"this house. {SETUP_HINT}")
+    if len(set(channels.values())) > 1:
+        raise HTTPException(409, "These sections have their own valves, so one run cannot "
+                                 "water them all. Water them one at a time.")
+
+    secs = max(1, min(int(cmd.durationSec), RELAY_MAX_SEC))
+    lead = ids[0]
+    # The command itself is an ordinary one for the first section: the master
+    # opens the shared channel, which waters all of them. The list of covered
+    # sections stays out of it on purpose - the firmware matches fields by text
+    # and has no use for it.
+    node_cmd = _issue_node_command(house_id, lead, "water", secs, withFertilizer=False)
+    if not node_cmd:
+        why = _command_refusal(house_id, lead, "water") or "the command could not be sent"
+        raise HTTPException(409, f"Nothing was poured: {why}. {SETUP_HINT}")
+
+    command = {"requested": True, "durationSec": secs, "withFertilizer": False,
+               "triggeredBy": cmd.triggeredBy, "covers": ids,
+               "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+    for sid in ids:
+        _fb_put(f"/farm/houses/{house_id}/sections/{sid}/control/waterCommand.json", command)
+        # One event per section, all carrying the same command id and the list
+        # of sections, so whichever of them the master's answer reaches first
+        # confirms the rest (_stamp_event_outcome).
+        _log_event(house_id, sid, sections[sid],
+                   action="water",
+                   durationSec=secs,
+                   withFertilizer=False,
+                   by=cmd.triggeredBy or "user",
+                   commandId=node_cmd.get("id"),
+                   confirmed=False,
+                   covers=ids,
+                   oneRun=True)
+    n = len(ids)
+    return {"status": "success", "command": command, "nodeCommand": node_cmd,
+            "leadSection": lead, "covers": ids,
+            "message": (f"One {secs}s run of the watering pump covers {n} "
+                        f"section{'' if n == 1 else 's'}.")}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/events")

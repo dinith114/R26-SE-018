@@ -262,6 +262,13 @@ export const waterSection = (h, s, durationSec = 45, withFertilizer = false) =>
   req(`/houses/${h}/sections/${s}/water`,
       { method: 'POST', body: JSON.stringify({ durationSec, withFertilizer, triggeredBy: 'user' }) });
 
+/* Several sections with ONE run of the pump they share (18 Oct 2026). This farm
+   has one watering pump for the whole house, so one-at-a-time ran it once per
+   section. The server refuses if the sections have valves of their own. */
+export const waterHouseOnce = (h, sectionIds, durationSec) =>
+  req(`/houses/${h}/water-once`,
+      { method: 'POST', body: JSON.stringify({ sectionIds, durationSec, triggeredBy: 'user' }) });
+
 export const fillTray = (h, s, fillSeconds = 15) =>
   req(`/houses/${h}/sections/${s}/tray-fill`,
       { method: 'POST', body: JSON.stringify({ fillSeconds, triggeredBy: 'user' }) });

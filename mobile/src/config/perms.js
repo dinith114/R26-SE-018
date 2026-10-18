@@ -66,6 +66,7 @@ export const PERMS = {
   stopSection:       ['admin', 'operator'],
   trayCheck:         ['admin', 'operator'],
   trayCheckAll:      ['admin', 'operator'],
+  waterHouseOnce:    ['admin', 'operator'],
   waterSection:      ['admin', 'operator'],
 
   /* ---- anyone signed in ---- */
