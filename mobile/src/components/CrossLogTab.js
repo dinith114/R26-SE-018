@@ -53,7 +53,8 @@ const TONE = {
 
 const BLANK_PARENT = { uri: null, name: '', busy: false };
 
-const CrossLogTab = ({ level1Result = null, level1Image = null }) => {
+const CrossLogTab = ({ level1Result = null, level1Image = null,
+                       crossParents = null }) => {
   const [reference, setReference] = useState(null);
   const [crosses, setCrosses] = useState([]);
   const [stats, setStats] = useState(null);
@@ -174,11 +175,15 @@ ${f.detail}` });
   };
 
   const openComposer = () => {
-    // The Assess tab's photo and verdict describe a plant the grower just
-    // looked at, so it starts in the pod slot rather than being asked for
-    // twice. It can be cleared or replaced like any other.
-    setPod(level1Image ? { ...BLANK_PARENT, uri: level1Image } : BLANK_PARENT);
-    setPollen(BLANK_PARENT);
+    /* Start from whatever has already been photographed, so nothing is asked
+       for twice. The Cross tab is the better source when it has been used,
+       because by then BOTH parents have been photographed there; the Assess
+       tab only ever describes one plant. Either can be cleared or replaced
+       like any other. */
+    const podUri = crossParents?.pod?.uri || level1Image;
+    const pollenUri = crossParents?.pollen?.uri || null;
+    setPod(podUri ? { ...BLANK_PARENT, uri: podUri } : BLANK_PARENT);
+    setPollen(pollenUri ? { ...BLANK_PARENT, uri: pollenUri } : BLANK_PARENT);
     setFlowerAge('');
     setPollenFresh(true);
     setNotes('');

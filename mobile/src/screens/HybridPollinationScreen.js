@@ -134,6 +134,26 @@ const HybridPollinationScreen = ({ navigation }) => {
     }
   };
 
+  /**
+   * Empty the Assess tab.
+   *
+   * Everything downstream reads from `selectedImage` and `result`, so
+   * clearing those two clears the Cross tab's pod parent and the logbook
+   * composer's prefill with them. That is the point: a photograph the grower
+   * has removed should not still be carried into a cross on another tab.
+   *
+   * The close-up goes too. It belongs to the plant that was just removed, and
+   * leaving it behind would attach one plant's leaf to the next plant's
+   * assessment.
+   */
+  const clearPlantImage = () => {
+    setSelectedImage(null);
+    setResult(null);
+    setRejection(null);
+    setCloseupImage(null);
+    setGuidanceData(null);
+  };
+
   const takePhoto = async () => {
     const permResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permResult.granted) {
@@ -245,6 +265,10 @@ const HybridPollinationScreen = ({ navigation }) => {
      answer to one question - what can this grower breed from - split only so
      that what they own is not confused with what the register knows. */
   const [varieties, setVarieties] = useState(null);
+  /* What the Cross tab currently has photographed, so the logbook composer
+     can start from it. Held here rather than in either tab because it has to
+     cross between them, and the screen is the only thing that sees both. */
+  const [crossParents, setCrossParents] = useState(null);
   const [parentSearch, setParentSearch] = useState('');
   const [crossPrefill, setCrossPrefill] = useState(null);
 
@@ -286,10 +310,17 @@ const HybridPollinationScreen = ({ navigation }) => {
         {selectedImage ? (
           <Image source={{ uri: selectedImage }} style={styles.previewImage} />
         ) : (
-          <View style={styles.imagePlaceholder}>
+          /* The placeholder is the obvious thing to tap and it used to do
+             nothing, so a grower who tapped the camera icon got no camera. */
+          <TouchableOpacity
+            style={styles.imagePlaceholder}
+            onPress={takePhoto}
+            activeOpacity={0.7}
+          >
             <Ionicons name="camera-outline" size={36} color={COLORS.textTertiary} />
-            <Text style={styles.placeholderText}>Upload or capture a plant image</Text>
-          </View>
+            <Text style={styles.placeholderText}>Tap to photograph a plant</Text>
+            <Text style={styles.placeholderHint}>or choose one from the gallery below</Text>
+          </TouchableOpacity>
         )}
         <View style={styles.imageActions}>
           <TouchableOpacity style={styles.imageBtn} onPress={pickImage}>
@@ -300,6 +331,17 @@ const HybridPollinationScreen = ({ navigation }) => {
             <Ionicons name="camera-outline" size={16} color={COLORS.primary} />
             <Text style={styles.imageBtnText}>Camera</Text>
           </TouchableOpacity>
+          {/* Every other photo card in this component has a Clear; this one
+              did not, so the only way back to an empty Assess tab was to pick
+              another image or restart the app. */}
+          {selectedImage && (
+            <TouchableOpacity style={styles.imageBtn} onPress={clearPlantImage}>
+              <Ionicons name="close-outline" size={16} color={COLORS.textTertiary} />
+              <Text style={[styles.imageBtnText, { color: COLORS.textTertiary }]}>
+                Clear
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -836,6 +878,7 @@ const HybridPollinationScreen = ({ navigation }) => {
               level1Result={result}
               level1Image={selectedImage}
               prefill={crossPrefill}
+              onParentsChange={setCrossParents}
             />
           </View>
 
@@ -856,7 +899,11 @@ const HybridPollinationScreen = ({ navigation }) => {
               happened. The register holds successes only; this is where
               the failures go, which is the half nothing else collects. */}
           {activeTab === 'log' && (
-            <CrossLogTab level1Result={result} level1Image={selectedImage} />
+            <CrossLogTab
+              level1Result={result}
+              level1Image={selectedImage}
+              crossParents={crossParents}
+            />
           )}
         </Animated.View>
         <View style={{ height: 100 }} />
@@ -889,6 +936,9 @@ const styles = StyleSheet.create({
   imageCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, overflow: 'hidden', marginBottom: SPACE.md },
   previewImage: { width: '100%', height: 200, resizeMode: 'cover' },
   imagePlaceholder: { height: 160, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.bgCardAlt },
+  placeholderHint: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2,
+  },
   placeholderText: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.sm },
   imageActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: COLORS.borderLight },
   imageBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md, gap: 6 },
