@@ -1,0 +1,31 @@
+WHAT EACH EXPERIMENT FOUND (validation photographs)
+
+DEP        Deployed disease model (29 Aug): macro F1 0.769, accuracy 0.791
+D1         After 2 epochs (the PP2 setting): macro F1 0.761, accuracy 0.776.  Against R (0.880): -0.118, worse, beyond noise.
+D2-5       After 5 epochs: macro F1 0.720, accuracy 0.731.  Against R (0.880): -0.160, worse, beyond noise.
+R          Reference recipe, rerun: macro F1 0.880, accuracy 0.896
+D3-0.0001  Stage-1 learning rate 0.0001: macro F1 0.773, accuracy 0.791.  Against D6-0 (0.840): -0.067, no clear difference.
+D3-0.01    Stage-1 learning rate 0.01: macro F1 0.800, accuracy 0.806.  Against D6-0 (0.840): -0.040, no clear difference.
+D4         No 54x augmentation: macro F1 0.817, accuracy 0.836.  Against R (0.880): -0.062, no clear difference.
+D5         No class weights: macro F1 0.798, accuracy 0.821.  Against R (0.880): -0.081, no clear difference.
+D6-0       Fine-tune 0 layers (frozen base): macro F1 0.840, accuracy 0.851.  Against R (0.880): -0.040, no clear difference.
+D6-30      Fine-tune top 30 layers: macro F1 0.880, accuracy 0.896.  Against R (0.880): +0.000, same model as R.
+D6-60      Fine-tune top 60 layers: macro F1 0.870, accuracy 0.881.  Against R (0.880): -0.009, no clear difference.
+D7         Keep the best-F1 epoch, not the lowest-loss one: macro F1 0.886, accuracy 0.896.  Against R (0.880): +0.006, no clear difference.
+D8         EfficientNetB0 backbone: macro F1 0.880, accuracy 0.896.  Against R (0.880): +0.000, no clear difference.
+D9-R       Reference + test-time augmentation: macro F1 0.877, accuracy 0.896.  Against R (0.880): -0.003, no clear difference.
+D9-DEP     Deployed + test-time augmentation: macro F1 0.789, accuracy 0.806.  Against DEP (0.769): +0.020, no clear difference.
+SDEP       Deployed severity model (29 Aug): macro F1 0.564, accuracy 0.558, within one grade 0.953
+S1         Severity, frozen (rerun of deployed recipe): macro F1 0.610, accuracy 0.605, within one grade 0.953.  Against SDEP (0.564): +0.047, no clear difference.
+S2         Severity, fine-tuned top 30 layers: macro F1 0.607, accuracy 0.605, within one grade 0.977.  Against S1 (0.610): -0.003, no clear difference.
+S3         Severity, frozen, balanced split: macro F1 0.659, accuracy 0.674, within one grade 0.930
+S4         Severity, fine-tuned, balanced split: macro F1 0.593, accuracy 0.605, within one grade 0.907.  Against S3 (0.659): -0.066, no clear difference.
+
+Highest validation macro F1 (disease): D7 -- Keep the best-F1 epoch, not the lowest-loss one (0.886).
+Highest validation macro F1 (severity): S3 -- Severity, frozen, balanced split (0.659), validation, balanced split (43 diseased).
+
+With about a dozen comparisons, one can cross the noise line by luck.
+So a winner is confirmed on the TEST photographs exactly once:
+    python run_experiments.py --final-test <ID>
+Severity rows scored on different splits are different photographs and
+are not compared directly.
