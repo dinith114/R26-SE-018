@@ -98,7 +98,8 @@ const ROLE = {
   },
 };
 
-const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = null }) => {
+const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = null,
+                            onParentsChange = null }) => {
   const [podParent, setPodParent] = useState('');
   const [pollenParent, setPollenParent] = useState('');
   const [result, setResult] = useState(null);
@@ -160,6 +161,27 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
   // button is no longer a single all-or-nothing gate.
   const haveNames = Boolean(podParent.trim() && pollenParent.trim());
   const haveAnyReading = Boolean(podReading || pollenReading);
+
+  /* Report both parents upward so the logbook composer can start from what
+     was already photographed here.
+     Without this a grower who assessed two plants on this tab opened the Log
+     tab and was asked to photograph both again - the pod parent arrived from
+     the Assess tab, the pollen parent arrived from nowhere.
+
+     Two things are kept out of the dependency list on purpose, and both would
+     otherwise spin this forever. `onParentsChange` is recreated on every
+     render of the parent. And `podReading` is a fresh object on every render
+     of THIS component, so depending on it would fire the effect, set state in
+     the parent, re-render, build another podReading, and fire again - the
+     deps below are the state it is derived from, which are stable. */
+  useEffect(() => {
+    onParentsChange?.({
+      pod: { uri: podImage, result: podReading },
+      pollen: { uri: pollenShot.image, result: pollenShot.result },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [podImage, podShot.result, level1Result, useAssessResult,
+      pollenShot.image, pollenShot.result]);
 
   useEffect(() => {
     getKnownParents()
