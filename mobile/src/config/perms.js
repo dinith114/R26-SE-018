@@ -78,6 +78,7 @@ export const PERMS = {
   getCommandStatus:     ['admin', 'operator', 'viewer'],
   getDeviceScan:        ['admin', 'operator', 'viewer'],
   getDevices:           ['admin', 'operator', 'viewer'],
+  getDropPredictions:   ['admin', 'operator', 'viewer'],
   getEngine:            ['admin', 'operator', 'viewer'],
   getHistory:           ['admin', 'operator', 'viewer'],
   getHouse:             ['admin', 'operator', 'viewer'],

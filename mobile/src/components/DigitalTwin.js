@@ -25,7 +25,7 @@
  * drifts out of step with the other two.
  */
 import React from 'react';
-import { View, Text, StyleSheet, useWindowDimensions, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, useWindowDimensions, TouchableOpacity, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS } from '../config/theme';
 
@@ -48,6 +48,9 @@ export const NODE_KINDS = {
      of separating them. Amber reads as "waiting on you" against offline's grey
      "this one is dead". */
   nonode:    { color: COLORS.warning, icon: 'add-outline', label: 'No node yet' },
+  /* The spot being chosen with the map picker (onPressMap), so the farmer sees
+     exactly where the tap landed before saving it. */
+  here:      { color: COLORS.danger, icon: 'locate', label: 'Chosen spot' },
 };
 
 /* Grid spacing that keeps the drawing readable at any house size. A 6 m house
@@ -67,6 +70,11 @@ export default function DigitalTwin({
   plantRows = 0,         // draw this many rows of plants
   showPipes = true,
   onPressNode,
+  /* ({ x, y }) in metres, 0.1 m steps, kept inside the house. Turns the plan into
+     a picker: the Setup tab and "Add a sensor" choose a spot by touching it
+     instead of typing two numbers (18 Oct 2026). While set, markers do not take
+     taps - the whole plan is the target. */
+  onPressMap,
   maxHeight = 380,
   /* { radius, label } - one node's measured reach, in metres, drawn as a circle
      around every measuring node. From the placement analysis's coverage step:
@@ -196,6 +204,19 @@ export default function DigitalTwin({
               </Tag>
             );
           })}
+
+          {/* LAST, so it sits over everything: the tap's location is then the
+              plot's own coordinates, never a grid line's or a marker's. */}
+          {onPressMap && (
+            <Pressable style={StyleSheet.absoluteFill}
+              accessibilityRole="button"
+              accessibilityLabel="Tap the plan where the sensor is"
+              onPress={(e) => {
+                const { locationX, locationY } = e.nativeEvent;
+                const clampTo = (v, max) => Math.round(Math.min(max, Math.max(0, v)) * 10) / 10;
+                onPressMap({ x: clampTo(locationX / scale, W), y: clampTo(locationY / scale, L) });
+              }} />
+          )}
         </View>
       </View>
 
