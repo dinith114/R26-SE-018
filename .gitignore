@@ -225,3 +225,8 @@ backend/data/pollination_log/
 # Subagent-driven-development scratch: ledgers, briefs, review packages.
 # Git history is the durable record; this is the controller working memory.
 .superpowers/
+
+# Backups left by the document tooling, and demo recordings. Both are large
+# and neither is source.
+*.bak
+/*.mp4

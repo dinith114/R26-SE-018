@@ -1,0 +1,171 @@
+{
+ "note": "Photographs of plants in this project's own collection, resized for the application. The tag_name is what is written on the plant's label; it is not a claim that the plant is the registered variety of that name.",
+ "max_edge_px": 800,
+ "plants": [
+  {
+   "tag_name": "V. Fuch Sunset X V. Dr Anek",
+   "photo": "img_6489.jpg",
+   "seed_parent": "Fuch Sunset",
+   "pollen_parent": "V. Dr Anek",
+   "grex": "",
+   "dominant_colour": "brown",
+   "secondary_colour": "brown",
+   "pattern": "spotted",
+   "source_image": "IMG_6489.JPG"
+  },
+  {
+   "tag_name": "V. Gordon Dillon X Dr Anek x Blitz",
+   "photo": "img_6038.jpg",
+   "seed_parent": "Gordon Dillon",
+   "pollen_parent": "Dr Anek",
+   "grex": "",
+   "dominant_colour": "violet",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6038.JPG"
+  },
+  {
+   "tag_name": "V. Indian Incense X  V. tessellata",
+   "photo": "img_6249.jpg",
+   "seed_parent": "Indian Incense",
+   "pollen_parent": "V. tessellata",
+   "grex": "",
+   "dominant_colour": "orange",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6249.JPG"
+  },
+  {
+   "tag_name": "V. Kultana Ruby X V(marue) Bitz's Heart",
+   "photo": "img_6343.jpg",
+   "seed_parent": "Kultana Ruby",
+   "pollen_parent": "V(marue) Bitz's Heart",
+   "grex": "",
+   "dominant_colour": "brown",
+   "secondary_colour": "brown",
+   "pattern": "spotted",
+   "source_image": "IMG_6343.JPG"
+  },
+  {
+   "tag_name": "V. Mimi Palmer X V. coerulea",
+   "photo": "img_6382.jpg",
+   "seed_parent": "Mimi Palmer",
+   "pollen_parent": "V. coerulea",
+   "grex": "",
+   "dominant_colour": "brown",
+   "secondary_colour": "brown",
+   "pattern": "spotted",
+   "source_image": "IMG_6382.JPG"
+  },
+  {
+   "tag_name": "V. Noppadon Delight",
+   "photo": "img_6043.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Noppadon Delight",
+   "dominant_colour": "orange",
+   "secondary_colour": "yellow",
+   "pattern": "spotted",
+   "source_image": "IMG_6043.JPG"
+  },
+  {
+   "tag_name": "V. Pachara Blue",
+   "photo": "img_6445.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Pachara Blue",
+   "dominant_colour": "brown",
+   "secondary_colour": "brown",
+   "pattern": "spotted",
+   "source_image": "IMG_6445.JPG"
+  },
+  {
+   "tag_name": "V. noppadol delight",
+   "photo": "img_6562.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "noppadol delight",
+   "dominant_colour": "magenta",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6562.JPG"
+  },
+  {
+   "tag_name": "V. siriporn pink",
+   "photo": "img_6452.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "siriporn pink",
+   "dominant_colour": "orange",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6452.JPG"
+  },
+  {
+   "tag_name": "V.(Wirat pink x Blitz) X Kulwadee Fragrance",
+   "photo": "img_6589.jpg",
+   "seed_parent": "(Wirat pink x Blitz)",
+   "pollen_parent": "Kulwadee Fragrance",
+   "grex": "",
+   "dominant_colour": "magenta",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6589.JPG"
+  },
+  {
+   "tag_name": "V.Kulwadee Maroon",
+   "photo": "img_6578.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Kulwadee Maroon",
+   "dominant_colour": "orange",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6578.JPG"
+  },
+  {
+   "tag_name": "V.Tung Tung Diamond Blue",
+   "photo": "img_6061.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Tung Tung Diamond Blue",
+   "dominant_colour": "violet",
+   "secondary_colour": "magenta",
+   "pattern": "spotted",
+   "source_image": "IMG_6061.JPG"
+  },
+  {
+   "tag_name": "Vanda Centenaria",
+   "photo": "img_6549.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Centenaria",
+   "dominant_colour": "magenta",
+   "secondary_colour": "unknown",
+   "pattern": "spotted",
+   "source_image": "IMG_6549.JPG"
+  },
+  {
+   "tag_name": "Vanda Red #77",
+   "photo": "img_6510.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Red #77",
+   "dominant_colour": "brown",
+   "secondary_colour": "brown",
+   "pattern": "spotted",
+   "source_image": "IMG_6510.JPG"
+  },
+  {
+   "tag_name": "Vanda Two Tone Wonder",
+   "photo": "img_6520.jpg",
+   "seed_parent": "",
+   "pollen_parent": "",
+   "grex": "Two Tone Wonder",
+   "dominant_colour": "violet",
+   "secondary_colour": "magenta",
+   "pattern": "spotted",
+   "source_image": "IMG_6520.JPG"
+  }
+ ]
+}

@@ -8,6 +8,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import CompatibilityTab from '../components/CompatibilityTab';
 import CrossLogTab from '../components/CrossLogTab';
+import { getVarieties, varietyPhotoUrl } from '../services/crossLog';
 import AppDialog from '../components/AppDialog';
 import { assessSuitability, getGuidance, getKnownParents, getApiBaseUrl } from '../services/api';
 
@@ -240,8 +241,20 @@ const HybridPollinationScreen = ({ navigation }) => {
   // from the API rather than hard-coded, so this list and the type-ahead on the
   // Cross tab can never drift apart.
   const [parentNames, setParentNames] = useState([]);
+  /* The Varieties tab's two lists. Loaded together because they are one
+     answer to one question - what can this grower breed from - split only so
+     that what they own is not confused with what the register knows. */
+  const [varieties, setVarieties] = useState(null);
   const [parentSearch, setParentSearch] = useState('');
   const [crossPrefill, setCrossPrefill] = useState(null);
+
+  /* The Varieties tab's own data. Separate from getKnownParents, which still
+     feeds the type-ahead on the Cross tab: that one wants a flat list of
+     names the engine can find evidence for, this one wants the grower's
+     plants and the register kept apart. */
+  useEffect(() => {
+    getVarieties().then(setVarieties).catch(() => setVarieties(null));
+  }, []);
 
   useEffect(() => {
     getKnownParents()
@@ -607,75 +620,178 @@ const HybridPollinationScreen = ({ navigation }) => {
     </>
   );
 
-  const renderVarietiesTab = () => (
-    <>
-      <View style={styles.sectionHead}>
-        <View style={styles.sectionRule} />
-        <Ionicons name="flower-outline" size={16} color={COLORS.primary} />
-        <Text style={styles.sectionTitle}>Parent Varieties</Text>
-      </View>
-      <Text style={styles.varietyIntro}>
-        Every parent the compatibility engine has evidence for: {parentNames.length} names
-        taken from the registered crosses in the RHS orchid register plus the species
-        documented for this project. Tap one to use it in a cross.
-      </Text>
+  /**
+   * Two lists, kept apart because they answer different questions.
+   *
+   * MY PLANTS is what the grower actually has, with photographs. It is seeded
+   * with the collection this project was built on and grows every time a plant
+   * is registered through the logbook, so a grower who logs a cross does not
+   * have to enter those plants again to see them here.
+   *
+   * IN THE REGISTER is what the knowledge base has evidence for, names only.
+   * It is also an honest statement of coverage - a grower can see exactly how
+   * much the register knows before relying on it, which is the same reason the
+   * input gate refuses rather than guesses.
+   *
+   * Every name carries a tier, because a name typed by a grower is not the
+   * same kind of fact as a name in the register. A mistyped name shows up as
+   * "tag name" where it misleads nobody.
+   */
+  const TIER = {
+    register: { icon: 'checkmark-circle', colour: COLORS.success,
+                text: 'In the register' },
+    named:    { icon: 'pricetag-outline', colour: COLORS.textTertiary,
+                text: 'Tag name \u00b7 not in the register' },
+    unnamed:  { icon: 'help-circle-outline', colour: COLORS.warning,
+                text: 'No name yet \u00b7 identified later' },
+  };
 
-      <View style={[styles.searchBox, SHADOW.sm]}>
-        <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search names"
-          placeholderTextColor={COLORS.textTertiary}
-          value={parentSearch}
-          onChangeText={setParentSearch}
-          autoCapitalize="none"
-        />
-        {parentSearch.length > 0 && (
-          <TouchableOpacity onPress={() => setParentSearch('')}>
-            <Ionicons name="close-circle" size={16} color={COLORS.textTertiary} />
-          </TouchableOpacity>
+  const matchesSearch = (name) =>
+    name.toLowerCase().includes(parentSearch.trim().toLowerCase());
+
+  const renderUseRow = (name) => (
+    <View style={styles.useRow}>
+      <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pod')}>
+        <Text style={styles.useBtnText}>Use as pod parent</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pollen')}>
+        <Text style={styles.useBtnText}>Use as pollen parent</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderVarietiesTab = () => {
+    const mine = (varieties?.mine || []).filter((p) => matchesSearch(p.name));
+    const reg = (varieties?.register || []).filter((p) => matchesSearch(p.name));
+    const counts = varieties?.counts || {};
+
+    return (
+      <>
+        <View style={styles.sectionHead}>
+          <View style={styles.sectionRule} />
+          <Ionicons name="flower-outline" size={16} color={COLORS.primary} />
+          <Text style={styles.sectionTitle}>Varieties</Text>
+        </View>
+
+        <View style={[styles.searchBox, SHADOW.sm]}>
+          <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search your plants and the register"
+            placeholderTextColor={COLORS.textTertiary}
+            value={parentSearch}
+            onChangeText={setParentSearch}
+            autoCapitalize="none"
+          />
+          {parentSearch.length > 0 && (
+            <TouchableOpacity onPress={() => setParentSearch('')}>
+              <Ionicons name="close-circle" size={16} color={COLORS.textTertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {!varieties && (
+          <Text style={styles.varietyEmpty}>
+            Could not load the varieties. Check that the backend is running.
+          </Text>
         )}
-      </View>
 
-      {parentNames.length === 0 && (
-        <Text style={styles.varietyEmpty}>
-          Could not load the name list. Check that the backend is running.
+        {/* ── the grower's own plants ────────────────────── */}
+        <Text style={styles.groupHead}>
+          MY PLANTS{counts.mine ? `  \u00b7  ${counts.mine}` : ''}
         </Text>
-      )}
+        <Text style={styles.groupNote}>
+          Plants in this collection. A tag name is what is written on the
+          label, not a claim that the plant is the registered variety of that
+          name.
+        </Text>
 
-      {visibleParents.map((name) => {
-        const note = SPECIES_NOTES[name];
-        return (
-          <View key={name} style={[styles.varietyCardFull, SHADOW.sm]}>
-            <View style={[styles.varietyLine, { backgroundColor: note?.color || COLORS.border }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.varietyName}>{name}</Text>
-              {note ? (
-                <>
-                  <Text style={styles.varietyTrait}>{note.trait}</Text>
-                  <View style={styles.originRow}>
-                    <Ionicons name="location-outline" size={10} color={COLORS.textTertiary} />
-                    <Text style={styles.varietyOrigin}>{note.origin}</Text>
-                  </View>
-                </>
+        {mine.length === 0 && varieties ? (
+          <Text style={styles.varietyEmpty}>
+            {parentSearch
+              ? 'No plant of yours matches that.'
+              : 'None yet. Log a cross and both parents are registered here.'}
+          </Text>
+        ) : null}
+
+        {mine.map((p) => {
+          const tier = TIER[p.tier] || TIER.named;
+          const uri = varietyPhotoUrl(p.photo);
+          const parents = p.seed_parent && p.pollen_parent
+            ? `${p.seed_parent} \u00d7 ${p.pollen_parent}` : '';
+          return (
+            <View key={p.name + p.photo} style={[styles.plantCard, SHADOW.sm]}>
+              {uri ? (
+                <Image source={{ uri }} style={styles.plantPhoto} />
               ) : (
-                <Text style={styles.varietyTrait}>In the register</Text>
+                <View style={[styles.plantPhoto, styles.plantPhotoEmpty]}>
+                  <Ionicons name="leaf-outline" size={20} color={COLORS.textTertiary} />
+                </View>
               )}
-
-              <View style={styles.useRow}>
-                <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pod')}>
-                  <Text style={styles.useBtnText}>Use as pod parent</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pollen')}>
-                  <Text style={styles.useBtnText}>Use as pollen parent</Text>
-                </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.varietyName}>{p.name}</Text>
+                <View style={styles.tierRow}>
+                  <Ionicons name={tier.icon} size={12} color={tier.colour} />
+                  <Text style={[styles.tierText, { color: tier.colour }]}>
+                    {tier.text}
+                  </Text>
+                </View>
+                {parents ? (
+                  <Text style={styles.varietyTrait}>from {parents}</Text>
+                ) : null}
+                {p.colour ? (
+                  <Text style={styles.varietyTrait}>
+                    {p.colour}{p.pattern ? `, ${p.pattern}` : ''}
+                  </Text>
+                ) : null}
+                {renderUseRow(p.name)}
               </View>
             </View>
-          </View>
-        );
-      })}
-    </>
-  );
+          );
+        })}
+
+        {/* ── what the knowledge base knows ──────────────── */}
+        <Text style={[styles.groupHead, { marginTop: SPACE.xl }]}>
+          IN THE REGISTER{counts.register ? `  \u00b7  ${counts.register}` : ''}
+        </Text>
+        <Text style={styles.groupNote}>
+          Every name the compatibility engine has evidence for, drawn from
+          {counts.registered_crosses ? ` ${counts.registered_crosses}` : ''} registered
+          crosses. This is the whole knowledge base, not a selection of it, and
+          a cross between names it does not hold can only be answered at genus
+          level.
+        </Text>
+
+        {reg.map((p) => {
+          const note = SPECIES_NOTES[p.name];
+          return (
+            <View key={p.name} style={[styles.varietyCardFull, SHADOW.sm]}>
+              <View style={[styles.varietyLine,
+                { backgroundColor: note?.color || COLORS.border }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.varietyName}>{p.name}</Text>
+                {note ? (
+                  <>
+                    <Text style={styles.varietyTrait}>{note.trait}</Text>
+                    <View style={styles.originRow}>
+                      <Ionicons name="location-outline" size={10} color={COLORS.textTertiary} />
+                      <Text style={styles.varietyOrigin}>{note.origin}</Text>
+                    </View>
+                  </>
+                ) : null}
+                <Text style={styles.varietyTrait}>
+                  {p.crosses
+                    ? `cited by ${p.crosses} registered cross${p.crosses > 1 ? 'es' : ''}`
+                    : 'named in the register'}
+                </Text>
+                {renderUseRow(p.name)}
+              </View>
+            </View>
+          );
+        })}
+      </>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -842,6 +958,30 @@ const styles = StyleSheet.create({
   tipText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: 2 },
 
   // Varieties
+  groupHead: {
+    color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '800',
+    letterSpacing: 0.8, marginTop: SPACE.lg, marginBottom: 4,
+  },
+  groupNote: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, lineHeight: 18,
+    marginBottom: SPACE.md,
+  },
+  plantCard: {
+    flexDirection: 'row', gap: SPACE.md, alignItems: 'flex-start',
+    backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md,
+    padding: SPACE.md, marginBottom: SPACE.md,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  plantPhoto: {
+    width: 84, height: 84, borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.bgCardAlt,
+  },
+  plantPhotoEmpty: {
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: COLORS.borderLight, borderStyle: 'dashed',
+  },
+  tierRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2, marginBottom: 2 },
+  tierText: { fontSize: FONT.sm, fontWeight: '600', flex: 1 },
   varietyCardFull: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.sm, flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   varietyLine: { width: 4, height: 40, borderRadius: 2 },
   varietyName: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: 2 },
