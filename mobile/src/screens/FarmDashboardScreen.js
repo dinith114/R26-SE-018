@@ -46,6 +46,7 @@ import { Ionicons } from '@expo/vector-icons';
 import useLiveData, { LIVE_MS } from '../hooks/useLiveData';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
+import ActivityBar from '../components/ActivityBar';
 import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
@@ -480,6 +481,9 @@ export default function FarmDashboardScreen({ navigation }) {
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={COLORS.primary}
           onRefresh={pullRefresh} />}
       >
+        {/* Live: whatever is pouring now - this screen's Water Now, a section's,
+            or Automatic care's - until it is done and for three minutes after. */}
+        <ActivityBar navigation={navigation} />
         {loading ? (
           <FarmSkeleton />
         ) : error ? (

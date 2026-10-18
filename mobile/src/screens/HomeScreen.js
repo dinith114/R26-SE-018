@@ -6,6 +6,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
+import ActivityBar from '../components/ActivityBar';
 import ScreenHeader from '../components/ScreenHeader';
 import { getOverview, getAlerts, humidityStatus, vpdStatus } from '../services/careV2';
 
@@ -65,6 +66,9 @@ const HomeScreen = ({ navigation }) => {
         refreshControl={<RefreshControl refreshing={refresh} tintColor={COLORS.primary}
           onRefresh={() => { setRefresh(true); load(); }} />}>
         <Animated.View style={{ opacity: fade }}>
+
+          {/* Live: whatever is pouring now, wherever it was started (18 Oct 2026). */}
+          <ActivityBar navigation={navigation} />
 
           {/* status + settings */}
           <View style={styles.statusRow}>

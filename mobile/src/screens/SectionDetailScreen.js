@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
+import ActivityBar from '../components/ActivityBar';
 import { LIVE_MS } from '../hooks/useLiveData';
 import RenameDialog from '../components/RenameDialog';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -31,7 +32,7 @@ import {
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
   setDeviceInterval, intervalLabel, getCommandStatus, setGrowthStage,
 } from '../services/careV2';
-import { sectionIssues, farmClock } from '../services/deviceHealth';
+import { sectionIssues, farmClock, isNote } from '../services/deviceHealth';
 import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
 import { FEED_STAGES, isFeedStage } from '../services/growthStage';
 import { READ_PRESETS, isPreset, formatInterval } from '../services/readInterval';
@@ -1264,9 +1265,9 @@ export default function SectionDetailScreen({ route, navigation }) {
         {/* Something wrong with the hardware goes first, above the tabs: the
             push about it brings the farmer to this screen, and a reading from
             a sensor that is not answering is not worth looking at. */}
-        {sectionIssues(health, sectionId).length > 0 && (
+        {sectionIssues(health, sectionId).some((i) => !isNote(i)) && (
           <View style={[styles.healthCard, SHADOW.sm]}>
-            {sectionIssues(health, sectionId).map((i) => (
+            {sectionIssues(health, sectionId).filter((i) => !isNote(i)).map((i) => (
               <View key={i.kind} style={styles.healthRow}>
                 <Ionicons name="warning-outline" size={16} color={COLORS.danger} />
                 <View style={{ flex: 1 }}>
@@ -1279,6 +1280,15 @@ export default function SectionDetailScreen({ route, navigation }) {
             ))}
           </View>
         )}
+        {/* Notes, not faults: one small line each (the user's call, 18 Oct 2026). */}
+        {sectionIssues(health, sectionId).filter(isNote).map((i) => (
+          <View key={i.kind} style={styles.noteRow}>
+            <Ionicons name="alert-circle-outline" size={14} color={COLORS.warning} />
+            <Text style={styles.noteTxt}>
+              {i.title}{i.sinceMs ? ` · since ${farmClock(i.sinceMs)}` : ''}
+            </Text>
+          </View>
+        ))}
 
         {/* Three jobs, not one scroll: what is happening now, what has
             happened, and how this section is set up. */}
@@ -1431,6 +1441,10 @@ export default function SectionDetailScreen({ route, navigation }) {
             </View>
           ) : (
             <>
+            {/* A pour this screen did not start, or started before the farmer left
+                and came back: Automatic care, a whole-house run, My Farm's Water
+                Now. The card above only follows a pour pressed here (18 Oct 2026). */}
+            <ActivityBar houseId={houseId} sectionId={sectionId} />
             {/* The two things a farmer opens this screen to do, directly under the
                 readings they decide from. They used to sit below the chart, the
                 forecast, the plan, the tray, the fertilizer and the control card -
@@ -2559,4 +2573,7 @@ const styles = StyleSheet.create({
   healthRow:   { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start' },
   healthTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800' },
   healthMsg:   { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginTop: 2 },
+  noteRow:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACE.sm,
+                 paddingHorizontal: 2 },
+  noteTxt:     { color: COLORS.warning, fontSize: FONT.xs, fontWeight: '700' },
 });

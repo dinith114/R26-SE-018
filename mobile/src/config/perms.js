@@ -71,6 +71,7 @@ export const PERMS = {
 
   /* ---- anyone signed in ---- */
   exportTimeline:       ['admin', 'operator', 'viewer'],
+  getActivity:          ['admin', 'operator', 'viewer'],
   getAlarms:            ['admin', 'operator', 'viewer'],
   getAlerts:            ['admin', 'operator', 'viewer'],
   getAutoMode:          ['admin', 'operator', 'viewer'],
