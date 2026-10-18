@@ -13,16 +13,16 @@
  * 1. Asks which plant part it is rather than predicting it. With no stem or
  *    flower training images, a prediction would be fabrication.
  *
- * 2. Asks WHO confirmed the diagnosis, not merely whether. The server stores
- *    `verification_source`, so if a role system is added later, admin-reviewed
- *    entries can outrank self-attested ones without migrating any data. There
- *    are no user roles today by design -- user management is out of scope for
- *    this component, so any user may contribute and attestation carries the
- *    responsibility.
+ * 2. Never lets the sender vouch for their own photo. It used to offer a
+ *    "confirmed by an institute" switch, and every ticked photo counted, so one
+ *    person could fill the counter alone (the PP2 panel's objection). Now every
+ *    photo waits for an orchid expert on the server's list; "who identified
+ *    it" is optional information for that expert and counts for nothing.
  *
- * 3. Treats the "8 / 30" counter as a GATE and explains it. A class trained on
- *    a handful of images has a decision boundary drawn from almost no evidence
- *    and steals predictions from classes that already work.
+ * 3. Treats the "8 / 30" counter as a GATE and explains it: 30 expert-approved
+ *    photos from at least 3 growers. A class trained on a handful of images has
+ *    a decision boundary drawn from almost no evidence and steals predictions
+ *    from classes that already work.
  *
  * 4. Never claims the model has learned anything. The confirmation screen says
  *    how many more images are needed.
@@ -34,7 +34,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Switch, KeyboardAvoidingView, Platform,
+  TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -61,8 +61,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
   const [disease, setDisease] = useState('');
   const [plantPart, setPlantPart] = useState(null);
   const [severity, setSeverity] = useState(null);
-  const [verified, setVerified] = useState(false);
-  const [verifiedBy, setVerifiedBy] = useState('');
+  const [confirmedBy, setConfirmedBy] = useState('');
   const [notes, setNotes] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
@@ -158,7 +157,6 @@ const DiseaseContributeScreen = ({ navigation }) => {
   if (!disease.trim()) missing.push('the disease name');
   if (!plantPart) missing.push('the plant part');
   if (!severity) missing.push('the severity');
-  if (verified && !verifiedBy.trim()) missing.push('who confirmed it');
   const canSubmit = missing.length === 0 && !submitting;
 
   const submit = async () => {
@@ -170,8 +168,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
         disease: disease.trim(),
         plantPart,
         severity,
-        verified,
-        verifiedBy: verifiedBy.trim(),
+        confirmedBy: confirmedBy.trim(),
         notes: notes.trim(),
       });
       setResult(r);
@@ -187,7 +184,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
 
   const startAnother = () => {
     setAsset(null); setDisease(''); setPlantPart(null); setSeverity(null);
-    setVerified(false); setVerifiedBy(''); setNotes('');
+    setConfirmedBy(''); setNotes('');
     setResult(null); setError(null);
   };
 
@@ -196,62 +193,70 @@ const DiseaseContributeScreen = ({ navigation }) => {
   /* ------------------------------------------------------------------ */
 
   if (result) {
-    const pct = Math.min(100, Math.round(
-      (result.count_verified / result.minimum_required) * 100));
+    const p = result.progress || {};
+    const minPhotos = result.minimum_required || 30;
+    const minGrowers = result.minimum_growers || 3;
+    const approved = p.approved_unique ?? result.count_verified ?? 0;
+    const pct = Math.min(100, Math.round((approved / minPhotos) * 100));
     return (
       <View style={styles.container}>
-        <ScreenHeader title="Thank you" subtitle="Contribution received"
+        <ScreenHeader title="Thank you" subtitle="Photo sent for review"
           navigation={navigation} showBack />
         <ScrollView contentContainerStyle={styles.scroll}>
           <View style={[styles.card, SHADOW.md]}>
             <View style={styles.doneIcon}>
-              <Ionicons name="checkmark-circle" size={40} color={COLORS.success} />
+              <Ionicons name="hourglass-outline" size={40} color={COLORS.warning} />
             </View>
-            <Text style={styles.doneTitle}>Photograph stored</Text>
+            <Text style={styles.doneTitle}>Waiting for expert review</Text>
             <Text style={styles.doneSub}>
-              Saved as {result.image_id} under {result.disease.replace(/_/g, ' ')}.
+              Saved as {result.image_id}. An orchid expert checks every photo
+              before it counts.
             </Text>
+
+            {result.possible_copy && (
+              <View style={styles.warnBox}>
+                <Ionicons name="copy-outline" size={16} color={COLORS.warning} />
+                <Text style={styles.warnText}>
+                  This looks very like a photo already sent. The expert will see
+                  both; near-identical photos count once.
+                </Text>
+              </View>
+            )}
 
             <View style={styles.progressBox}>
               <View style={styles.progressTop}>
                 <Text style={styles.progressLabel}>
-                  {result.disease.replace(/_/g, ' ')}
+                  {result.display_name || result.disease.replace(/_/g, ' ')}
                 </Text>
                 <Text style={styles.progressCount}>
-                  {result.count_verified} / {result.minimum_required}
+                  {approved} / {minPhotos} approved
                 </Text>
               </View>
               <View style={styles.progressTrack}>
                 <View style={[styles.progressFill, { width: `${Math.max(2, pct)}%` }]} />
               </View>
+              <Text style={styles.progressMeta}>
+                {p.growers ?? 0} of {minGrowers} growers · {p.waiting ?? 1} waiting for review
+              </Text>
               <Text style={styles.progressNote}>
                 {result.ready_for_training
-                  ? 'Enough images have been collected. A researcher can now retrain the model — the new version replaces the current one only if accuracy does not get worse.'
-                  : `${result.needed} more confirmed image${result.needed === 1 ? '' : 's'} needed before this condition can be added.`}
+                  ? 'Enough approved photos have been collected. A researcher can now retrain the model; the new version replaces the current one only if the diseases it already knows do not get worse.'
+                  : `Still needed: ${(p.blockers || []).join(' and ') || 'expert approval'}.`}
               </Text>
             </View>
 
-            {!result.verified && (
-              <View style={styles.warnBox}>
-                <Ionicons name="alert-circle-outline" size={16} color={COLORS.warning} />
-                <Text style={styles.warnText}>
-                  This image was not confirmed by an institute, so it is stored
-                  but will not be used for training.
-                </Text>
-              </View>
-            )}
-
             <Text style={styles.doneFoot}>
-              The system has not changed. Your photograph joins a collection a
-              researcher reviews before any retraining happens.
+              The system has not changed. Photos are only used for training once
+              {` ${minPhotos}`} have been approved, from at least {minGrowers} growers.
             </Text>
 
             <TouchableOpacity style={styles.primaryBtn} onPress={startAnother}>
               <Ionicons name="add" size={18} color={COLORS.textInverse} />
-              <Text style={styles.primaryBtnText}>Contribute another</Text>
+              <Text style={styles.primaryBtnText}>Send another</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.secondaryBtn} onPress={() => navigation.goBack()}>
-              <Text style={styles.secondaryBtnText}>Done</Text>
+            <TouchableOpacity style={styles.secondaryBtn}
+              onPress={() => navigation.navigate('DiseaseSubmissions')}>
+              <Text style={styles.secondaryBtnText}>See my photos</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -384,30 +389,19 @@ const DiseaseContributeScreen = ({ navigation }) => {
           Judged by percentage of the part's area showing symptoms.
         </Text>
 
-        <Text style={styles.sectionLabel}>CONFIRMATION</Text>
+        <Text style={styles.sectionLabel}>ALREADY IDENTIFIED BY SOMEONE? (OPTIONAL)</Text>
         <View style={[styles.card, SHADOW.sm]}>
-          <View style={styles.switchRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchLabel}>
-                Confirmed by an orchid research institute
-              </Text>
-              <Text style={styles.fieldHint}>
-                Only confirmed images count toward training.
-              </Text>
-            </View>
-            <Switch value={verified} onValueChange={setVerified}
-              trackColor={{ true: COLORS.primary, false: COLORS.border }}
-              thumbColor={COLORS.bgCard} />
-          </View>
-          {verified && (
-            <TextInput
-              style={[styles.input, { marginTop: SPACE.md }]}
-              placeholder="Which institute or expert?"
-              placeholderTextColor={COLORS.textTertiary}
-              value={verifiedBy}
-              onChangeText={setVerifiedBy}
-            />
-          )}
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. an orchid research institute"
+            placeholderTextColor={COLORS.textTertiary}
+            value={confirmedBy}
+            onChangeText={setConfirmedBy}
+          />
+          <Text style={styles.fieldHint}>
+            An orchid expert reviews every photo before it counts. Saying who
+            identified it helps them.
+          </Text>
         </View>
 
         <Text style={styles.sectionLabel}>NOTES (OPTIONAL)</Text>
@@ -428,16 +422,23 @@ const DiseaseContributeScreen = ({ navigation }) => {
             <View style={[styles.card, SHADOW.sm]}>
               {counts.diseases.map((d) => (
                 <View key={d.disease} style={styles.countRow}>
-                  <Text style={styles.countName}>{d.display_name}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.countName}>{d.display_name}</Text>
+                    <Text style={styles.countMeta}>
+                      {d.growers ?? 0} of {counts.minimum_growers || 3} growers
+                      {d.waiting ? ` · ${d.waiting} waiting for review` : ''}
+                    </Text>
+                  </View>
                   <Text style={styles.countValue}>
-                    {d.verified} / {counts.minimum_required}
+                    {d.approved_unique ?? d.verified} / {counts.minimum_required}
                   </Text>
                 </View>
               ))}
               <Text style={styles.fieldHint}>
-                A condition needs {counts.minimum_required} confirmed images from
-                different plants before it can be added. Fewer would produce an
-                unreliable class that degrades the diseases already working.
+                A condition needs {counts.minimum_required} photos approved by an
+                orchid expert, from at least {counts.minimum_growers || 3} different
+                growers, before it can be added. Fewer would produce an unreliable
+                class that degrades the diseases already working.
               </Text>
             </View>
           </>
@@ -549,14 +550,12 @@ const styles = StyleSheet.create({
   choiceNote: { fontSize: FONT.xs, color: COLORS.textTertiary },
   choiceTextOn: { color: COLORS.textInverse },
 
-  switchRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  switchLabel: { fontSize: FONT.md, fontWeight: '600', color: COLORS.text },
-
   countRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingVertical: SPACE.sm, borderBottomWidth: 1, borderBottomColor: COLORS.borderLight,
   },
   countName: { fontSize: FONT.sm, color: COLORS.text, fontWeight: '600' },
+  countMeta: { fontSize: FONT.xs, color: COLORS.textTertiary, marginTop: 2 },
   countValue: { fontSize: FONT.sm, color: COLORS.primary, fontWeight: '700' },
 
   errorCard: {
@@ -598,6 +597,7 @@ const styles = StyleSheet.create({
   progressCount: { fontSize: FONT.md, fontWeight: '700', color: COLORS.primary },
   progressTrack: { height: 8, backgroundColor: COLORS.border, borderRadius: 4, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: COLORS.primary, borderRadius: 4 },
+  progressMeta: { fontSize: FONT.xs, color: COLORS.textTertiary, marginTop: SPACE.sm },
   progressNote: { fontSize: FONT.sm, color: COLORS.textSecondary, marginTop: SPACE.sm, lineHeight: 18 },
 
   warnBox: {

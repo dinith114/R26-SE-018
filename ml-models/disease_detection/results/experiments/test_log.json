@@ -1,0 +1,82 @@
+[
+  {
+    "row": "D7",
+    "label": "Keep the best-F1 epoch, not the lowest-loss one",
+    "task": "disease",
+    "split": "original",
+    "tested_at": "2026-10-18T09:03:16",
+    "smoke_test": false,
+    "n": 67,
+    "accuracy": 0.8208955223880597,
+    "macro_f1": 0.8026143790849675,
+    "beyond_accuracy": {
+      "majority_baseline": {
+        "accuracy": 0.417910447761194,
+        "macro_f1": 0.19649122807017547,
+        "class_index": 2
+      },
+      "balanced_accuracy": 0.815873015873016,
+      "cohen_kappa": 0.7279187817258883,
+      "mcc": 0.7346558273369874,
+      "roc_auc_per_class": {
+        "black_leaf_spot": 0.8794871794871795,
+        "healthy": 0.9912790697674418,
+        "phyllosticta_leaf_spot": 0.9560439560439561
+      },
+      "roc_auc_macro": 0.9422700684328591,
+      "expected_calibration_error": 0.1287156779374649,
+      "ci95_accuracy": [
+        0.7313432835820896,
+        0.9104477611940298
+      ],
+      "ci95_macro_f1": [
+        0.6951039771995655,
+        0.8992225252169832
+      ],
+      "bootstrap": {
+        "resamples": 2000,
+        "seed": 42
+      }
+    }
+  },
+  {
+    "row": "S3",
+    "label": "Severity, frozen, balanced split",
+    "task": "severity",
+    "split": "balanced",
+    "tested_at": "2026-10-18T09:05:32",
+    "smoke_test": false,
+    "n": 43,
+    "accuracy": 0.5116279069767442,
+    "macro_f1": 0.514021164021164,
+    "beyond_accuracy": {
+      "majority_baseline": {
+        "accuracy": 0.4186046511627907,
+        "macro_f1": 0.19672131147540983,
+        "class_index": 2
+      },
+      "balanced_accuracy": 0.5375180375180375,
+      "cohen_kappa": 0.27759999999999996,
+      "quadratic_weighted_kappa": 0.36905291240551363,
+      "mcc": 0.29338758208029464,
+      "mean_grade_error": 0.5813953488372093,
+      "expected_calibration_error": 0.11134366517843203,
+      "ci95_exact_accuracy": [
+        0.3488372093023256,
+        0.6511627906976745
+      ],
+      "ci95_within_one_grade": [
+        0.813953488372093,
+        0.9767441860465116
+      ],
+      "ci95_quadratic_weighted_kappa": [
+        0.08134380113632379,
+        0.6066566648325195
+      ],
+      "bootstrap": {
+        "resamples": 2000,
+        "seed": 42
+      }
+    }
+  }
+]

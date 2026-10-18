@@ -1,0 +1,32 @@
+======================================================================
+  FINAL TEST -- D7 (Keep the best-F1 epoch, not the lowest-loss one)
+  67 test photographs, original split, never used for training or choosing
+======================================================================
+  accuracy 0.8209   macro F1 0.8026
+                        precision    recall  f1-score   support
+
+       black_leaf_spot     0.6111    0.7333    0.6667        15
+               healthy     0.8889    1.0000    0.9412        24
+phyllosticta_leaf_spot     0.9091    0.7143    0.8000        28
+
+              accuracy                         0.8209        67
+             macro avg     0.8030    0.8159    0.8026        67
+          weighted avg     0.8351    0.8209    0.8207        67
+
+
+----------------------------------------------------------------------
+  BEYOND ACCURACY
+----------------------------------------------------------------------
+  majority-class baseline : accuracy 0.4179, macro F1 0.1965
+      what always guessing the commonest class would score
+  balanced accuracy       : 0.8159   mean recall; small classes count equally
+  Cohen's kappa           : 0.7279   agreement beyond chance (0 chance, 1 perfect)
+  MCC                     : 0.7347   -1 to 1, honest under unequal classes
+  ROC-AUC (macro)         : 0.9423   ranking quality; 0.5 = guessing
+      black_leaf_spot            0.8795
+      healthy                    0.9913
+      phyllosticta_leaf_spot     0.9560
+  calibration error (ECE) : 0.1287   0 = '90% sure' is right 90% of the time
+  95% range, accuracy     : 0.731 to 0.910
+  95% range, macro F1     : 0.695 to 0.899
+      from 2000 resamples of these photographs (seed 42)

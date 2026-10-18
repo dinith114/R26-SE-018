@@ -72,6 +72,8 @@ jobs:
             tests/test_water_once.py \
             tests/test_drop_predictions.py \
             tests/test_add_section_position.py \
+            tests/test_disease_contributions.py \
+            tests/test_disease_metrics.py \
             tests/test_ci_workflow_is_runnable.py
 
   mobile:

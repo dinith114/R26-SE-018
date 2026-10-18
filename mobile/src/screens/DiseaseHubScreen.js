@@ -2,16 +2,20 @@
  * DiseaseHubScreen — the landing screen for Component 1.
  *
  * The Detect tab used to open the analysis screen directly. It now opens here,
- * because the component does three separate jobs and a tab that silently does
- * one of them hides the other two.
+ * because the component does several separate jobs and a tab that silently does
+ * one of them hides the others.
  *
  *   1  Check a plant      -> DiseaseDetection
  *   2  History            -> DiseaseHistory
  *   3  Contribute         -> DiseaseContribute
+ *   4  My photos          -> DiseaseSubmissions
+ *   5  Expert review      -> DiseaseReview      (experts only)
  *
  * Card 3 collects photographs of conditions the classifier does not know. It
- * does not change the model: contributions are stored, and a class needs 30
- * human-confirmed images before it can be trained at all.
+ * does not change the model: every photo waits for an orchid expert, and a
+ * class needs 30 approved photos from at least 3 growers before it can be
+ * trained at all. Card 5 appears only when the server says this account is on
+ * its expert list, and the server checks that list again on every review.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -24,23 +28,50 @@ import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import { historySummary } from '../services/diseaseHistory';
+import {
+  getMyContributions, getExpertStatus, getPendingCounts,
+} from '../services/diseaseApi';
 
 const DiseaseHubScreen = ({ navigation }) => {
   const [summary, setSummary] = useState({ total: 0, diseased: 0, lastAt: null });
+  const [mine, setMine] = useState(null);
+  const [expert, setExpert] = useState(false);
+  const [waitingReview, setWaitingReview] = useState(0);
 
   // useFocusEffect, not useEffect: the counts must refresh when the user comes
-  // BACK from analysing a plant, not only when the screen first mounts.
+  // BACK from analysing a plant, not only when the screen first mounts. The
+  // network counts are optional extras: offline, the cards still work.
   useFocusEffect(
     useCallback(() => {
       let active = true;
       historySummary().then((s) => {
         if (active) setSummary(s);
       });
+      getMyContributions()
+        .then((b) => active && setMine(b.contributions || []))
+        .catch(() => active && setMine(null));
+      getExpertStatus().then((isExpert) => {
+        if (!active) return;
+        setExpert(isExpert);
+        if (isExpert) {
+          getPendingCounts()
+            .then((c) => active && setWaitingReview(
+              (c.diseases || []).reduce((n, d) => n + (d.waiting || 0), 0)))
+            .catch(() => {});
+        }
+      });
       return () => {
         active = false;
       };
     }, [])
   );
+
+  const mineSubtitle = !mine
+    ? 'Your contributions and their review'
+    : mine.length === 0
+      ? 'No photos sent yet'
+      : `${mine.length} sent · ${mine.filter((m) => m.status === 'pending').length} waiting` +
+        ` · ${mine.filter((m) => m.counts).length} approved`;
 
   const historySubtitle = summary.total
     ? `${summary.total} check${summary.total === 1 ? '' : 's'}` +
@@ -123,9 +154,32 @@ const DiseaseHubScreen = ({ navigation }) => {
           dim={COLORS.fertilizerDim}
           title="Contribute an image"
           subtitle="Help extend the system"
-          body="Submit a photograph of a condition the system cannot identify — including stems and flowers — so it can be added once enough confirmed examples exist."
+          body="Submit a photograph of a condition the system cannot identify — including stems and flowers. An orchid expert reviews each one before it counts toward adding the condition."
           onPress={() => navigation.navigate('DiseaseContribute')}
         />
+
+        <Card
+          icon="images"
+          tint={COLORS.success}
+          dim={COLORS.successDim}
+          title="My photos"
+          subtitle={mineSubtitle}
+          body="See whether an orchid expert approved, corrected or did not accept each photo you sent, and why."
+          onPress={() => navigation.navigate('DiseaseSubmissions')}
+        />
+
+        {expert && (
+          <Card
+            icon="shield-checkmark"
+            tint={COLORS.warning}
+            dim={COLORS.warningDim}
+            title="Expert review"
+            subtitle={waitingReview ? `${waitingReview} waiting for review` : 'Nothing waiting'}
+            body="Approve, correct or reject contributed photos. Only approved photos count toward adding a new condition."
+            badge={waitingReview ? String(waitingReview) : null}
+            onPress={() => navigation.navigate('DiseaseReview')}
+          />
+        )}
 
         <View style={styles.noteBox}>
           <Ionicons name="information-circle-outline" size={16} color={COLORS.textTertiary} />

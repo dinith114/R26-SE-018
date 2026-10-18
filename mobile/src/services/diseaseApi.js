@@ -57,6 +57,8 @@
 
 import { Platform } from 'react-native';
 
+import { getToken, signOutNow } from './auth';
+import { makeRequest } from './request';
 import {
   DISEASE_API,
   API_BASE_URL,
@@ -140,13 +142,14 @@ function describeImage(uri, fallbackMime) {
  * not a transport failure, so the caller decides what it means. Rejects only
  * when the request never completed.
  */
-function postForm(url, formData, timeoutMs = REQUEST_TIMEOUT_MS) {
+function postForm(url, formData, timeoutMs = REQUEST_TIMEOUT_MS, token = null) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
     xhr.open('POST', url);
     xhr.timeout = timeoutMs;
     xhr.setRequestHeader('Accept', 'application/json');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     // Content-Type is deliberately NOT set. XMLHttpRequest must generate it
     // itself so it can include the multipart boundary. Setting it by hand is
     // the classic cause of a 422 on a file upload.
@@ -344,17 +347,44 @@ export async function getTreatment(disease, severity) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Submit a photograph plus the contributor's own labels.
+ * Signed-in JSON calls (my photos, expert review) go through the team's shared
+ * request helper, which adds the Firebase token and, on a 401, refreshes it
+ * once before giving up. The disease routes are /api/v1, which the backend's
+ * X-API-Key middleware does not cover, so no key is passed.
+ */
+const signedInRequest = makeRequest({ getToken, signOutNow, apiKey: '' });
+
+async function signedIn(path, options = {}) {
+  try {
+    return await signedInRequest(DISEASE_API, path, options);
+  } catch (err) {
+    if (err?.status === 401) {
+      throw new ApiError('Please sign in again.', { kind: 'auth', status: 401 });
+    }
+    if (err?.status) {
+      // The server's message is written for a person ("Only an orchid
+      // expert can review contributed photos."), so it is shown as-is.
+      throw new ApiError(err.message, {
+        kind: err.status === 403 ? 'forbidden' : 'server', status: err.status,
+      });
+    }
+    throw new ApiError('Cannot reach the server.', { kind: 'network', hint: NETWORK_HINT });
+  }
+}
+
+/**
+ * Submit a photograph plus the contributor's own labels. Needs a signed-in
+ * account: the server records who sent each photo, because the counter for a
+ * new disease needs photos from at least three different growers.
  *
- * Nothing about the live model changes. The image is stored as an ORIGINAL on
- * the server and counted toward a threshold; it is never augmented on upload,
- * because augmenting before the train/test split would put variants of the same
- * leaf on both sides of it.
+ * Nothing about the live model changes. The photo is checked (too small, dark
+ * or blurred is refused with the reason), stored as an ORIGINAL, and waits for
+ * an orchid expert. It counts for nothing until the expert approves it.
  *
- * `form` is { disease, plantPart, severity, verified, verifiedBy, notes }.
+ * `form` is { disease, plantPart, severity, confirmedBy, notes }. confirmedBy
+ * is optional information for the expert; it does not make the photo count.
  *
- * Returns { count_verified, minimum_required, needed, ready_for_training, ... }
- * so the screen can show "Anthracnose: 8 / 30".
+ * Returns { image_id, status: 'pending', possible_copy, progress, ... }.
  */
 export async function contributeImage(asset, form) {
   const uri = typeof asset === 'string' ? asset : asset?.uri;
@@ -365,26 +395,51 @@ export async function contributeImage(asset, form) {
   const described = describeImage(uri, typeof asset === 'object' ? asset?.mimeType : null);
   const name = (typeof asset === 'object' && asset?.fileName) || described.name;
 
-  // Same web/native split as detectDisease: a Blob for browsers, a
-  // { uri, name, type } object for native. See buildImageForm above.
-  const body = await buildImageForm(uri, name, described.type);
-  body.append('disease', form.disease || '');
-  body.append('plant_part', form.plantPart || '');
-  body.append('severity', form.severity || '');
-  body.append('verified', form.verified ? 'true' : 'false');
-  body.append('verified_by', form.verifiedBy || '');
-  body.append('notes', form.notes || '');
+  // Built fresh for every attempt: a multipart body is not guaranteed to be
+  // re-readable once sent, and the 401 path below sends it a second time.
+  const makeBody = async () => {
+    const body = await buildImageForm(uri, name, described.type);
+    body.append('disease', form.disease || '');
+    body.append('plant_part', form.plantPart || '');
+    body.append('severity', form.severity || '');
+    body.append('confirmed_by', form.confirmedBy || '');
+    body.append('notes', form.notes || '');
+    return body;
+  };
 
-  const { status, text } = await postForm(`${DISEASE_API}/contribute`, body);
+  const token = await getToken();
+  if (!token) {
+    throw new ApiError('Please sign in to send a photo.', { kind: 'auth' });
+  }
+  const url = `${DISEASE_API}/contribute`;
+  let { status, text } = await postForm(url, await makeBody(), REQUEST_TIMEOUT_MS, token);
+
+  // Same rule as services/request.js: a 401 earns exactly one retry behind a
+  // forced token refresh, and only a second refusal signs the account out.
+  if (status === 401) {
+    let fresh = null;
+    try { fresh = await getToken({ force: true }); } catch (_) { fresh = null; }
+    if (fresh) ({ status, text } = await postForm(url, await makeBody(), REQUEST_TIMEOUT_MS, fresh));
+    if (status === 401) {
+      try { await signOutNow(); } catch (_) { /* already gone */ }
+      throw new ApiError('Your sign-in has expired. Please sign in again.', {
+        kind: 'auth', status,
+      });
+    }
+  }
 
   if (status === 422) {
-    // The form failed the server's checks -- a missing field, an invalid
-    // severity, or the attestation ticked without naming an institute. The
-    // message is written for a person, so show it as-is.
+    // A missing field, or the photo failed a check ("too dark"). Either way
+    // the message is written for a person, so it is shown as-is.
     throw new ApiError(
       detailFromText(text, 'Please check the form and try again.'),
       { kind: 'form', status }
     );
+  }
+  if (status === 409 || status === 429) {
+    throw new ApiError(detailFromText(text, 'This photo was not accepted.'), {
+      kind: 'form', status,
+    });
   }
   if (status === 400) {
     throw new ApiError(
@@ -421,7 +476,50 @@ export async function contributeImage(asset, form) {
   }
 }
 
-/** How close each contributed disease is to being trainable. */
+/** How close each contributed disease is to being trainable. Open to read. */
 export async function getPendingCounts() {
   return getJson(`${DISEASE_API}/pending-counts`);
+}
+
+/** The signed-in grower's own photos, newest first, with the expert's decision. */
+export async function getMyContributions() {
+  return signedIn('/contributions/mine');
+}
+
+/**
+ * Whether this account is on the server's expert list. Only decides whether
+ * the Disease hub shows the review card: the server checks every review
+ * request again, so a wrong answer here could never let anyone approve.
+ */
+export async function getExpertStatus() {
+  try {
+    const body = await signedIn('/review/whoami');
+    return body?.expert === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** status: 'pending' | 'approved' | 'rejected' | 'all' */
+export async function getReviewQueue(status = 'pending') {
+  return signedIn(`/review/queue?status=${encodeURIComponent(status)}`);
+}
+
+export async function getReviewItem(imageId) {
+  return signedIn(`/review/items/${encodeURIComponent(imageId)}`);
+}
+
+/**
+ * body: { decision: 'approve' | 'correct' | 'reject', reason?, note?,
+ *         disease?, plant_part?, severity? }
+ */
+export async function submitReview(imageId, body) {
+  return signedIn(`/review/items/${encodeURIComponent(imageId)}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getReviewLog(limit = 50) {
+  return signedIn(`/review/log?limit=${limit}`);
 }

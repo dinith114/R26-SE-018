@@ -454,3 +454,50 @@ async def log_delete_cross(cross_id: str):
         return {"status": "success", "removed": removed["crossId"]}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No cross {cross_id}")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  VARIETIES
+#
+#  Two lists, kept apart because they answer different questions: what
+#  this grower has, and what the knowledge base has evidence for. The
+#  tab used to return only the second, which is the register's contents
+#  rather than the grower's - fifty-three names of plants they had never
+#  grown, and none of their own.
+# ══════════════════════════════════════════════════════════════════
+
+from app.services.varieties_service import varieties_service
+
+
+@router.get("/varieties")
+async def list_varieties():
+    """
+    The grower's plants and the register's names, with a confidence tier on
+    every name.
+
+    A name typed by a grower is not the same kind of fact as a name in the
+    register, so each entry says which it is. A mistyped name appears as
+    `named` rather than sitting unmarked beside a registered one.
+    """
+    return {"status": "success", **varieties_service.summary()}
+
+
+@router.get("/varieties/photo/{source}/{name}")
+async def variety_photo(source: str, name: str):
+    """
+    Serve a plant photograph.
+
+    Two stores, because they are filled in two different ways: `collection`
+    ships with the repository and holds the plants this project was built on,
+    while `log` holds what the grower has photographed since.
+    """
+    if source == "collection":
+        path = varieties_service.photo_path(name)
+    elif source == "log":
+        path = cross_log_service.photo_path(name)
+    else:
+        raise HTTPException(status_code=404, detail="Unknown photo store")
+
+    if not path:
+        raise HTTPException(status_code=404, detail="No such photo")
+    return FileResponse(path)

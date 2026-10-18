@@ -197,3 +197,30 @@ export const deleteCross = async (crossId) => {
     throw reachable(error);
   }
 };
+
+/**
+ * The two lists behind the Varieties tab.
+ *
+ * `mine` is what this grower has — the collection shipped with the project
+ * plus every plant registered through the logbook, each with a photograph
+ * where one exists. `register` is what the knowledge base has evidence for,
+ * names only.
+ *
+ * They are kept apart because they answer different questions, and because
+ * the second doubles as an honest statement of coverage: a grower can see
+ * exactly how much the register knows before relying on it.
+ */
+export const getVarieties = async () => {
+  try {
+    return await unwrap(
+      await fetch(`${BASE_URL}/api/v1/pollination/varieties`),
+      'load the varieties'
+    );
+  } catch (error) {
+    throw reachable(error);
+  }
+};
+
+/** Absolute URL for a plant photograph, for <Image source={{ uri }} />. */
+export const varietyPhotoUrl = (photo) =>
+  photo ? `${BASE_URL}/api/v1/pollination/varieties/photo/${photo}` : null;
