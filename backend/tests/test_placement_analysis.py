@@ -217,3 +217,71 @@ def test_a_fitted_radius_is_never_beyond_a_closer_pair_that_disagrees():
     assert t["radius"] is None
     assert t["status"] in ("direction-dependent", "below-spacing")
     assert t["atMost"] <= 3.0
+
+
+# ── stuck and jumping sensors are left out (18 Oct 2026) ────────────────────
+# The health checker alarms on both; the analysis used to keep their readings,
+# so a frozen or loose sensor could still decide where the sensors go.
+
+def _sorted_recs(hist, sid):
+    return [hist[sid][k] for k in sorted(hist[sid])]
+
+
+def test_normal_noisy_readings_are_not_called_unbelievable():
+    hist = _house(LINE, 900)
+    stats, _ = pa.collect(hist)
+    for sid in LINE:
+        assert stats[sid]["unbelievable"] == {"stuck": 0, "jumping": 0}
+
+
+def test_a_stuck_sensor_is_left_out_of_the_buckets():
+    hist = _house(LINE, 900)
+    recs = _sorted_recs(hist, "S2")
+    for r in recs[300:480]:                      # three hours, the same value to the 0.1
+        r["temperature"], r["humidity"] = 27.4, 81.0
+    stats, buckets = pa.collect(hist)
+    assert stats["S2"]["unbelievable"]["stuck"] == 180
+    frozen = {pa._bucket_of(r["timestamp"]) for r in recs[300:480]}
+    # every bucket wholly inside the frozen run is gone for S2, and only S2
+    inside = {b for b in frozen if all(pa._bucket_of(r["timestamp"]) != b
+                                       for r in recs[:300] + recs[480:])}
+    assert inside and not (inside & set(buckets["S2"]))
+    assert inside <= set(buckets["S1"])
+
+
+def test_saturated_air_that_sits_still_is_not_called_stuck():
+    hist = _house(LINE, 900)
+    for r in _sorted_recs(hist, "S3")[300:480]:
+        r["temperature"], r["humidity"] = 24.0, 99.0     # fog at night is real
+    stats, _ = pa.collect(hist)
+    assert stats["S3"]["unbelievable"]["stuck"] == 0
+
+
+def test_a_single_spike_is_dropped_and_its_neighbours_kept():
+    hist = _house(LINE, 900)
+    recs = _sorted_recs(hist, "S4")
+    recs[400]["temperature"] += 8.0              # one impossible leap, then back
+    stats, buckets = pa.collect(hist)
+    assert stats["S4"]["unbelievable"]["jumping"] == 1
+    b = pa._bucket_of(recs[400]["timestamp"])
+    assert b in buckets["S4"] and recs[400]["temperature"] not in buckets["S4"][b]["temperature"]
+
+
+def test_a_flapping_hour_is_dropped_whole():
+    hist = _house(LINE, 900)
+    recs = _sorted_recs(hist, "S5")
+    hour = int(recs[600]["timestamp"] // 3_600_000)
+    in_hour = [r for r in recs if int(r["timestamp"] // 3_600_000) == hour]
+    for r in in_hour[::6]:                       # a loose connector: ten leaps in one hour
+        r["humidity"] -= 30.0
+    stats, _ = pa.collect(hist)
+    assert stats["S5"]["unbelievable"]["jumping"] >= len(in_hour) - 1
+
+
+def test_the_analysis_still_runs_with_a_stuck_sensor_and_reports_it():
+    hist = _house(LINE, 1500)
+    for r in _sorted_recs(hist, "S2")[300:480]:
+        r["temperature"], r["humidity"] = 27.4, 81.0
+    out = pa.analyse(hist, LINE)
+    assert out["raw"]["S2"]["unbelievable"]["stuck"] == 180
+    assert out["buckets"]["common"] >= pa.MIN_COMMON_BUCKETS

@@ -1917,6 +1917,37 @@ def _drop_risk(house_id: str, section_id: str, latest: dict, now: datetime) -> O
         return None
 
 
+# At most one kept prediction per section per this many ms. The tray pass runs
+# every 15 minutes and the app can ask in between; keying by the 15-minute slot
+# keeps the record to one per pass instead of one per screen refresh.
+DROP_LOG_EVERY_MS = 15 * 60_000
+
+
+def _log_drop_prediction(house_id: str, section_id: str, now: datetime, risk: float,
+                         threshold: float, horizon_h, humidity, low_band: float) -> None:
+    """Keep what the humidity-drop model said, so it can be checked later (18 Oct 2026).
+
+    Only the latest decision used to survive, inside the section's `tray`, so
+    nobody could look back and ask "it said a drop was coming at 09:15 - did one
+    come?". drop_predictions() answers that from these records and the readings.
+
+    Its own branch, outside the section subtree, for the same reason as events:
+    /farm/houses.json is downloaded every minute, and anything inside a section
+    is paid for on every one of those downloads. A lost record never blocks the
+    tray, so failures are swallowed.
+    """
+    try:
+        at = int(now.timestamp() * 1000)
+        key = str(at - at % DROP_LOG_EVERY_MS)
+        _fb_put(f"/farm/trayPredictions/{house_id}/{section_id}/{key}.json", {
+            "at": at, "atLocal": to_farm_time(at).strftime("%Y-%m-%d %H:%M"),
+            "risk": round(float(risk), 3), "threshold": float(threshold),
+            "horizonHours": float(horizon_h), "humidity": humidity,
+            "lowBand": float(low_band), "saysDrop": bool(risk >= threshold)})
+    except Exception:
+        pass
+
+
 def _tray_decision(house_id: str, section_id: str, section: dict,
                    now: Optional[datetime] = None) -> dict:
     latest = _clean((section or {}).get("latest") or {})
@@ -2006,6 +2037,9 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     if secs == 0 and TRAY_DAY_START <= hour <= TRAY_DAY_END and rh < hi:
         risk = _drop_risk(house_id, section_id, latest, now)
         thr = float((_tray or {}).get("drop_threshold") or 0.70)
+        if risk is not None:
+            _log_drop_prediction(house_id, section_id, now, risk, thr,
+                                 (_tray or {}).get("drop_horizon_hours", 3), rh, lo)
         if risk is not None and risk >= thr:
             secs = amount
             status = "prefill"
@@ -2064,10 +2098,13 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
             cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                    "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
             _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
+            # `reason` says WHY it filled: "prefill" is the drop model acting
+            # ahead of time, "fill"/"topup" the humidity already being low.
             _log_event(house_id, section_id, section,
                        action="tray", durationSec=secs, withFertilizer=False,
                        by="auto", commandId=node_cmd.get("id"),
-                       confirmed=False)
+                       confirmed=False, reason=status,
+                       risk=(prefill or {}).get("risk"))
             commanded = True
             msg += " Auto mode: filling now."
         else:
@@ -2440,6 +2477,11 @@ class SectionIn(BaseModel):
     plantCount: int = 0
     growthStage: str = "Active"
     lightExposure: float = Field(0.8, ge=0.0, le=1.0)
+    # Where it sits, metres from the house's corner. Optional for old callers,
+    # but a section without it never appears on the house map - which is how a
+    # "Section 5" went missing on 18 Oct 2026. The app's new-spot flow sends it.
+    x: Optional[float] = Field(None, ge=0.0, le=500.0)
+    y: Optional[float] = Field(None, ge=0.0, le=500.0)
 
 
 class HouseIn(BaseModel):
@@ -2547,11 +2589,24 @@ async def add_section(house_id: str, s: SectionIn, ctx: AuthContext = Depends(re
         sid = f"S{n}"
     if sid in existing:
         raise HTTPException(409, f"Section '{sid}' already exists in {house_id}")
+    if (s.x is None) != (s.y is None):
+        raise HTTPException(400, "Give both x and y, or neither.")
+    if s.x is not None:
+        # Inside the house when its size is known: a spot outside the walls would
+        # anchor kriging to air that is not in the house.
+        try:
+            w, ln = float(house.get("width")), float(house.get("length"))
+        except (TypeError, ValueError):
+            w = ln = None
+        if w and ln and (s.x > w or s.y > ln):
+            raise HTTPException(400, f"That spot is outside the house ({w} m x {ln} m).")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/meta.json", {
-        "name": s.name, "label": s.label, "plantCount": s.plantCount,
-        "growthStage": s.growthStage, "lightExposure": s.lightExposure,
-        "deviceId": f"{house_id}-{sid}", "createdAt": now})
+    meta = {"name": s.name, "label": s.label, "plantCount": s.plantCount,
+            "growthStage": s.growthStage, "lightExposure": s.lightExposure,
+            "deviceId": f"{house_id}-{sid}", "createdAt": now}
+    if s.x is not None:
+        meta["x"], meta["y"] = round(float(s.x), 2), round(float(s.y), 2)
+    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/meta.json", meta)
     _fb_put(f"/farm/houses/{house_id}/sections/{sid}/control.json",
             {"mode": "auto", "trayEnabled": True})
     house["sectionCount"] = len(existing) + 1   # existing was read before the write
@@ -3019,6 +3074,76 @@ def water_house_once(house_id: str, cmd: HouseWaterCmd,
             "leadSection": lead, "covers": ids,
             "message": (f"One {secs}s run of the watering pump covers {n} "
                         f"section{'' if n == 1 else 's'}.")}
+
+
+@router.get("/houses/{house_id}/sections/{section_id}/drop-predictions")
+def drop_predictions(house_id: str, section_id: str, days: int = 7,
+                     ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Each humidity-drop prediction, checked against what humidity then did (18 Oct 2026).
+
+    The model says "humidity will fall below the band within N hours" or not.
+    For every kept prediction (_log_drop_prediction) this looks at the section's
+    own readings over the next N hours:
+
+      hit             said drop, and humidity did go below the band
+      false alarm     said drop, and it never did
+      missed          said no drop, and it did
+      correct quiet   said no drop, and it never did
+
+    A window in which the tray was filled is set aside ("tray filled"): the fill
+    changes what humidity does, so neither verdict would be honest - which is
+    exactly the case of a prefill the model triggered. A window still running is
+    "pending", and one with fewer than three readings "no data".
+    """
+    days = max(1, min(int(days), 31))
+    end = int(_server_now_ms())
+    start = end - days * 86_400_000
+    raw = _fb_get(f'/farm/trayPredictions/{house_id}/{section_id}.json'
+                  f'?orderBy="$key"&startAt="{start}"&endAt="{end}"') or {}
+    preds = sorted((p for p in (raw or {}).values()
+                    if isinstance(p, dict) and isinstance(p.get("at"), (int, float))
+                    and start <= p["at"] <= end), key=lambda p: p["at"])
+    counts = {"hit": 0, "false alarm": 0, "missed": 0, "correct quiet": 0,
+              "tray filled": 0, "pending": 0, "no data": 0}
+    rows = []
+    if preds:
+        longest = max(float(p.get("horizonHours") or 3) for p in preds)
+        last_end = int(preds[-1]["at"] + longest * 3_600_000)
+        rh = sorted((t, v) for t, _k, r in _readings_between(house_id, section_id,
+                                                             int(preds[0]["at"]), last_end)
+                    if (v := _measured(r, "humidity")) is not None)
+        fills = [t for t, e in _events_between(house_id, section_id, int(preds[0]["at"]) - 60_000,
+                                               last_end) if e.get("action") == "tray"]
+        for p in preds:
+            a = int(p["at"])
+            b = int(a + float(p.get("horizonHours") or 3) * 3_600_000)
+            if b > end:
+                outcome = "pending"
+            elif any(a - 60_000 <= t <= b for t in fills):
+                outcome = "tray filled"
+            else:
+                window = [v for t, v in rh if a < t <= b]
+                if len(window) < 3:
+                    outcome = "no data"
+                else:
+                    dropped = min(window) < float(p.get("lowBand") or 60)
+                    says = bool(p.get("saysDrop"))
+                    outcome = ("hit" if says and dropped else "false alarm" if says
+                               else "missed" if dropped else "correct quiet")
+            counts[outcome] += 1
+            rows.append({"at": a, "atLocal": p.get("atLocal"), "risk": p.get("risk"),
+                         "saysDrop": bool(p.get("saysDrop")), "humidity": p.get("humidity"),
+                         "outcome": outcome})
+    said = counts["hit"] + counts["false alarm"]
+    real = counts["hit"] + counts["missed"]
+    return {"status": "success", "houseId": house_id, "sectionId": section_id, "days": days,
+            "summary": {**counts,
+                        "judged": said + counts["missed"] + counts["correct quiet"],
+                        # None, not 0, when there is nothing to divide by: "no alarms
+                        # yet" is not "every alarm was wrong".
+                        "precision": round(counts["hit"] / said, 3) if said else None,
+                        "recall": round(counts["hit"] / real, 3) if real else None},
+            "predictions": rows}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/events")

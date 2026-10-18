@@ -32,7 +32,11 @@ import ScreenHeader from '../components/ScreenHeader';
 import DigitalTwin from '../components/DigitalTwin';
 import NodePicker from '../components/NodePicker';
 import Toast from '../components/Toast';
-import { getHouse, analyzePlacement, assignDevice } from '../services/careV2';
+import { getHouse, analyzePlacement, assignDevice, addSection } from '../services/careV2';
+import { useCan } from '../config/auth';
+import { usePrefs } from '../config/prefs';
+import { formatLength } from '../services/lengthUnits';
+import { furthestPoint } from '../services/placementHint';
 
 export default function AddSensorScreen({ route, navigation }) {
   const houseId = route.params?.houseId;
@@ -45,6 +49,11 @@ export default function AddSensorScreen({ route, navigation }) {
   // { sectionId, short } while a link is in flight - see CalibrationScreen
   const [linking, setLinking] = useState(null);
   const [toast,   setToast]   = useState(null);
+  // A NEW spot (18 Oct 2026): { x, y } metres, chosen by tapping the plan.
+  const [spot,     setSpot]     = useState(null);
+  const [creating, setCreating] = useState(false);
+  const can = useCan();
+  const { lengthUnit } = usePrefs();
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +124,44 @@ export default function AddSensorScreen({ route, navigation }) {
   const openIds = Object.keys(sections)
     .filter((id) => !(sections[id]?.node || {}).mac)
     .sort();
+
+  /* A NEW SPOT, not one of the zones above (18 Oct 2026). "Add a sensor" used to
+     mean only "put a board into a zone that has none", so in a house where every
+     zone already had one there was nothing to offer. Here the farmer taps the
+     plan (or takes the suggestion), the section is created at that spot, and the
+     board picker opens for it straight away. */
+  const sized = Number(meta.width) > 0 && Number(meta.length) > 0;
+  const hint = sized ? furthestPoint(meta.width, meta.length,
+    Object.values(sections).filter((s) => (s?.node || {}).mac && s?.meta?.x != null && s?.meta?.y != null)
+      .map((s) => ({ x: Number(s.meta.x), y: Number(s.meta.y) }))) : null;
+  const target = spot || hint;
+  const nextName = () => {
+    let n = 1;
+    while (sections[`S${n}`]) n += 1;
+    return `Section ${n}`;
+  };
+  const createAtSpot = async () => {
+    if (!target) return;
+    setCreating(true);
+    try {
+      const r = await addSection(houseId, { name: nextName(), x: target.x, y: target.y });
+      setSpot(null);
+      await load();
+      setToast({ text: `${r.sectionId} added at ${formatLength(target.x, lengthUnit)}, `
+                     + `${formatLength(target.y, lengthUnit)}. Now pick its board.`, kind: 'success' });
+      setPicking(r.sectionId);
+    } catch (e) {
+      setToast({ text: e.message, kind: 'error' });
+    } finally { setCreating(false); }
+  };
+  const spotNodes = [
+    ...Object.entries(sections)
+      .filter(([, s]) => s?.meta?.x != null && s?.meta?.y != null)
+      .map(([id, s]) => ({ id, short: String(id).replace(/^S/, ''), x: Number(s.meta.x), y: Number(s.meta.y),
+                           kind: (s.node || {}).mac ? 'real' : 'nonode' })),
+    ...(hint && !spot ? [{ id: 'suggested', short: '+', x: hint.x, y: hint.y, kind: 'planned' }] : []),
+    ...(spot ? [{ id: 'chosen', short: '+', x: spot.x, y: spot.y, kind: 'here' }] : []),
+  ];
 
   if (picking) {
     return (
@@ -231,6 +278,51 @@ export default function AddSensorScreen({ route, navigation }) {
               </Text>
             )}
           </View>
+
+          {can('addSection') ? (
+            <>
+              <Text style={styles.h}>Or a new spot</Text>
+              <View style={[styles.card, SHADOW.sm]}>
+                {sized ? (
+                  <>
+                    <Text style={styles.tipTxt}>
+                      Tap the plan where the new sensor will go.
+                      {hint && hint.distance != null
+                        ? ` The blue ring is the spot furthest from every working sensor `
+                          + `(${formatLength(hint.distance, lengthUnit)} from the nearest), where `
+                          + 'the estimates for this house know the least. Only a suggestion.'
+                        : ''}
+                    </Text>
+                    <View style={{ marginTop: SPACE.md }}>
+                      <DigitalTwin width={meta.width} length={meta.length} nodes={spotNodes}
+                        plantRows={0} showPipes={false} onPressMap={setSpot} />
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.spotBtn, (!target || creating) && { opacity: 0.5 }]}
+                      disabled={!target || creating || !!linking} activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Add a section at this spot and pick its board"
+                      onPress={createAtSpot}>
+                      {creating
+                        ? <ActivityIndicator size="small" color="#FFF" />
+                        : <Ionicons name="add-circle" size={18} color="#FFF" />}
+                      <Text style={styles.spotBtnTxt}>
+                        {target
+                          ? `${spot ? 'Add a section here' : 'Use the suggested spot'} `
+                            + `(${formatLength(target.x, lengthUnit)}, ${formatLength(target.y, lengthUnit)})`
+                          : 'Tap the plan first'}
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <Text style={styles.tipTxt}>
+                    Set this house's size first (My Farm, the house's menu, House size),
+                    so a spot can be picked on the plan.
+                  </Text>
+                )}
+              </View>
+            </>
+          ) : null}
           <View style={{ height: 60 }} />
         </ScrollView>
       )}
@@ -260,4 +352,13 @@ const styles = StyleSheet.create({
              borderTopColor: COLORS.borderLight },
   rowName: { flex: 1, color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
   rowTag:  { color: COLORS.info, fontSize: FONT.xs, fontWeight: '800' },
+
+  // Stretched to the card's width, not sized to its text: the phone's Bold
+  // text setting clips self-sized labels (orchid-project-gotchas).
+  spotBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                gap: SPACE.sm, alignSelf: 'stretch', marginTop: SPACE.md,
+                backgroundColor: COLORS.primary, borderRadius: RADIUS.md,
+                paddingVertical: SPACE.md, paddingHorizontal: SPACE.md },
+  spotBtnTxt: { flexShrink: 1, color: '#FFF', fontSize: FONT.sm, fontWeight: '800',
+                textAlign: 'center' },
 });

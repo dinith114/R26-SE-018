@@ -1,0 +1,52 @@
+name: deploy
+
+# Puts main on the hosted server, but only after the tests passed on it.
+#
+# A merge into main runs `tests` (tests.yml). When that finishes green for a
+# push to main, this job connects to the server with a key that can do exactly
+# one thing there: run /root/deploy-orchid.sh (deploy/deploy-orchid.sh is the
+# reference copy). That script refuses the 06:00-09:00 watering window, checks
+# the service really started, and rolls back if it did not.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   VPS_DEPLOY_KEY    the private half of the deploy key
+#   VPS_HOST          the server's address
+#   VPS_KNOWN_HOSTS   the server's host key line, so the job cannot be pointed
+#                     at an impostor
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy to the server
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run the server's deploy script
+        env:
+          DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ] || [ -z "$VPS_HOST" ] || [ -z "$VPS_KNOWN_HOSTS" ]; then
+            echo "::error::Deploy secrets are not set: VPS_DEPLOY_KEY, VPS_HOST, VPS_KNOWN_HOSTS."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              root@"$VPS_HOST" deploy
