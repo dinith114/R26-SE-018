@@ -47,3 +47,14 @@ test('times are farm time, UTC+5:30', () => {
   assert.equal(dh.farmClock(Date.UTC(2026, 9, 8, 8, 50)), '14:20');
   assert.equal(dh.farmClock(undefined), '');
 });
+
+test('a never-working light sensor is a note, listed after any real fault', () => {
+  const health = { sections: { S5: [
+    { kind: 'light_none', title: 'Light sensor not working', message: 'm', sinceMs: 1 },
+    { kind: 'dht', title: 'Temperature sensor not answering', message: 'm', sinceMs: 9 },
+  ] } };
+  const list = dh.sectionIssues(health, 'S5');
+  assert.deepEqual(list.map((i) => i.kind), ['dht', 'light_none']);
+  assert.equal(dh.isNote(list[1]), true);
+  assert.equal(dh.isNote(list[0]), false);
+});

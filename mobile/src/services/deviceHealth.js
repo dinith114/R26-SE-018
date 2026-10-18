@@ -8,12 +8,20 @@
  */
 
 /** The issues standing for one section, oldest first. Junk entries dropped. */
+/* Kinds the server SHOWS but never pushes (device_health.SHOW_ONLY): a light
+   sensor that has never given a reading - or a board built without one, which
+   looks exactly the same. A one-line note, not a red warning box. */
+export const NOTE_KINDS = new Set(['light_none']);
+export const isNote = (issue) => !!issue && NOTE_KINDS.has(issue.kind);
+
 export function sectionIssues(health, sectionId) {
   const list = (((health || {}).sections) || {})[sectionId];
   if (!Array.isArray(list)) return [];
+  // Faults before notes, so a screen showing only the first one shows a fault.
   return list
     .filter((i) => i && typeof i.title === 'string' && typeof i.message === 'string')
-    .sort((a, b) => (Number(a.sinceMs) || 0) - (Number(b.sinceMs) || 0));
+    .sort((a, b) => (isNote(a) - isNote(b))
+      || (Number(a.sinceMs) || 0) - (Number(b.sinceMs) || 0));
 }
 
 /** How many sections of the house have at least one issue. */

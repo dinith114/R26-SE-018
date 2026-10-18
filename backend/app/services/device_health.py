@@ -141,10 +141,9 @@ TEXT = {
     "light": ("Light sensor stopped",
               "{where}: the light sensor (BH1750) was working and has read nothing since "
               "{since}. Check its four wires: VCC to 3V3, GND, SDA to D21, SCL to D22."),
+    # Shown as one small line, not a warning box (the user's call, 18 Oct 2026).
     "light_none": ("Light sensor not working",
-                   "{where}: no light reading since {since}. If this node has a light sensor "
-                   "(BH1750), check its four wires: VCC to 3V3, GND, SDA to D21, SCL to D22. "
-                   "A node built without one always shows this."),
+                   "{where}: no light reading since {since}."),
     "frozen": ("Sensor reading is stuck",
                "{where}: exactly the same temperature and humidity since {since}. A working "
                "sensor always moves a little - unplug the node and plug it back in."),

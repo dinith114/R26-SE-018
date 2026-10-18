@@ -298,6 +298,10 @@ export const getDropPredictions = (h, s, days = 7) =>
 export const getSectionEvents = (h, s, limit = 40) =>
   req(`/houses/${h}/sections/${s}/events?limit=${limit}`);
 
+/** Every pour on the farm that is waiting, running or just finished - the live
+ *  status strip (components/ActivityBar, hooks/useActivity). */
+export const getActivity = () => req('/activity');
+
 export const stopSection = (h, s) =>
   req(`/houses/${h}/sections/${s}/stop`, { method: 'POST' });
 
