@@ -27,13 +27,16 @@ import ScreenHeader from '../components/ScreenHeader';
 import Toast from '../components/Toast';
 import DigitalTwin from '../components/DigitalTwin';
 import { addHouse, setSectionPosition, setLifecycle } from '../services/careV2';
+import { usePrefs } from '../config/prefs';
+import UnitToggle from '../components/UnitToggle';
+import { editText, parseLength, convertText } from '../services/lengthUnits';
 
 const HOUSE_TYPES = ['shade-net', 'greenhouse', 'open'];
 // 3 and 5 so a house can match the boards actually built: calibration waits for
 // EVERY section, so a section with no board would hold the analysis back for good.
 // Three is the analysis minimum (placement_analysis.analyse).
 const SECTION_CHOICES = [3, 4, 5, 6, 8, 9, 12, 16, 20];
-const NODE_COST_LKR = 2350;
+const NODE_COST_LKR = 2140;
 
 /* Sections on an even grid, kept clear of the walls.
  *
@@ -61,15 +64,19 @@ function evenGrid(width, length, n) {
 export default function HousePlannerScreen({ navigation }) {
   const [name,     setName]     = useState('');
   const [type,     setType]     = useState('shade-net');
-  const [w,        setW]        = useState('10');
-  const [l,        setL]        = useState('14');
+  // Typed in the farmer's unit; everything below works in metres.
+  const { lengthUnit: unit } = usePrefs();
+  const [w,        setW]        = useState(() => editText(10, unit));
+  const [l,        setL]        = useState(() => editText(14, unit));
   const [sections, setSections] = useState(9);
   const [saving,   setSaving]   = useState(false);
   const [toast,    setToast]    = useState(null);
 
-  const width  = parseFloat(w);
-  const length = parseFloat(l);
-  const sizeOk = width > 1 && length > 1 && width <= 200 && length <= 200;
+  const pw = parseLength(w, unit, { min: 1.01, max: 200, what: 'Width' });
+  const pl = parseLength(l, unit, { min: 1.01, max: 200, what: 'Length' });
+  const width  = pw.m ?? NaN;
+  const length = pl.m ?? NaN;
+  const sizeOk = !pw.error && !pl.error;
 
   const grid = sizeOk ? evenGrid(width, length, sections) : [];
 
@@ -79,7 +86,7 @@ export default function HousePlannerScreen({ navigation }) {
       return;
     }
     if (!sizeOk) {
-      setToast({ text: 'Enter a width and length in metres, both above 1.', kind: 'error' });
+      setToast({ text: pw.error || pl.error, kind: 'error' });
       return;
     }
     try {
@@ -137,14 +144,17 @@ export default function HousePlannerScreen({ navigation }) {
             placeholder="e.g. Back House" placeholderTextColor={COLORS.textTertiary}
             maxFontSizeMultiplier={1.15} />
 
+          <Text style={styles.lbl}>Measured in</Text>
+          <UnitToggle
+            onChange={(from, to) => { setW((t) => convertText(t, from, to)); setL((t) => convertText(t, from, to)); }} />
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.lbl}>Width (m)</Text>
+              <Text style={styles.lbl}>Width ({unit})</Text>
               <TextInput style={styles.input} value={w} onChangeText={setW}
                 keyboardType="decimal-pad" maxFontSizeMultiplier={1.15} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.lbl}>Length (m)</Text>
+              <Text style={styles.lbl}>Length ({unit})</Text>
               <TextInput style={styles.input} value={l} onChangeText={setL}
                 keyboardType="decimal-pad" maxFontSizeMultiplier={1.15} />
             </View>

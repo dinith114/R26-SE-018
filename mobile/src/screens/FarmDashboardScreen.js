@@ -13,22 +13,31 @@
  * a section that needed water rendered identically to one that was fine, so
  * finding the one that mattered meant reading all eight.
  *
- * The order now answers three questions, in the order a farmer asks them:
+ * REORDERED 15 Oct 2026, at the grower's request: "when someone comes to this
+ * page he first needs to see the farm". The top had become four warning blocks
+ * (a red device banner, a "need fixing" band, a master-controller card and the
+ * Needs-you list) before the first house. Now:
  *
- *   1. Does anything need me?      -> the status band, then Needs you now
- *   2. Is the system doing its job -> what is scheduled next, then Automation
- *   3. Show me the farm            -> houses, collapsed, urgent sections first
+ *   1. One status line           -> how many things need you; tap to jump
+ *   2. The farm in one line      -> houses, sections, sensors
+ *   3. Automation                -> the mode, and what is scheduled next
+ *   4. Water Now / Fill Tray
+ *   5. Add another house
+ *   6. The houses                -> collapsed, urgent sections first; a house's
+ *                                   own problem (no master) inside it
+ *   7. Needs you                 -> the full list, each with its house
  *
- * The single biggest change is **Needs you now**: sections that want something
- * are lifted OUT of their houses to the top, with the reason written out. That
- * is what the app is opened for. Everything else on this screen is browsing.
+ * Steps 3 to 5 above the houses is the grower's order (15 Oct, second pass).
+ *
+ * Nothing is hidden by this: the status line names the count and links to the
+ * list, and every house still says what is wrong inside it.
  *
  * Colour discipline: one accent per card, derived from state. Readings are
  * neutral text and only take colour when the value is outside its band, so
  * colour means "look here" rather than "this is a temperature". The four
  * per-metric colours the old cards used made every card equally loud.
  */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   RefreshControl, Alert,
@@ -41,15 +50,19 @@ import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
 import { FarmSkeleton } from '../components/Skeleton';
-import { FreshnessBadge, FarmStaleBanner, STATE_STYLE, isFault } from '../components/Freshness';
+import { FreshnessBadge, STATE_STYLE, isFault } from '../components/Freshness';
+import useNotifications from '../hooks/useNotifications';
 import RenameDialog from '../components/RenameDialog';
 import SelectSheet from '../components/SelectSheet';
 import ConfirmSheet from '../components/ConfirmSheet';
 import {
   getOverview, deleteHouse,
   renameFarm, renameHouse, getAlarms, humidityStatus, vpdStatus,
-  getDevices, setHouseMaster, setHousePumps,
+  getDevices, setHouseMaster, setHousePumps, setHouseDimensions,
 } from '../services/careV2';
+import HouseSizeDialog from '../components/HouseSizeDialog';
+import { usePrefs } from '../config/prefs';
+import { formatLength } from '../services/lengthUnits';
 
 /** "GOOD" shouted at the farmer; "Good" just tells them. */
 const titleCase = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : t);
@@ -145,6 +158,14 @@ export default function FarmDashboardScreen({ navigation }) {
     useLiveData(getOverview, LIVE_MS);
   // the farm's Auto switch + how many things are waiting on the farmer
   const { data: auto, reload: refreshAuto } = useLiveData(() => getAlarms(1), LIVE_MS);
+  /* The bell counts the notifications this person has not cleared, the same
+     number on every screen. It used to count the Needs-you rows, so clearing
+     notifications never moved it. Polled at half the farm's rate: the badge
+     can lag a minute without misleading anyone. */
+  const { badge } = useNotifications(LIVE_MS * 2);
+  // The status line scrolls here.
+  const scrollRef = useRef(null);
+  const [needsY, setNeedsY] = useState(null);
 
   /* Farm-level Water Now / Fill Tray.
      These are NOT the section buttons. A section button acts on the one zone
@@ -176,6 +197,27 @@ export default function FarmDashboardScreen({ navigation }) {
      a house whose master was chosen in the app still refused every Water Now
      with "no watering pump channel is set". Found in the end-to-end run. */
   const [pumps, setPumps] = useState(null);
+  /* The house whose size is being corrected, and whether it is saving. A size
+     could only be typed when a house was planned (17 Oct 2026). */
+  const [sizing, setSizing] = useState(null);
+  const [savingSize, setSavingSize] = useState(false);
+  const { lengthUnit } = usePrefs();
+  const saveSize = async (width, length, scaleSections) => {
+    const h = sizing;
+    setSavingSize(true);
+    try {
+      const r = await setHouseDimensions(h.houseId, width, length, scaleSections);
+      setSizing(null);
+      const n = Object.keys(r?.moved || {}).length;
+      Alert.alert('House size saved',
+        `${h.meta?.name || h.houseId} is now ${formatLength(width, lengthUnit)} x `
+        + `${formatLength(length, lengthUnit)}.`
+        + (n ? ` ${n} section${n === 1 ? '' : 's'} moved to fit.` : ''));
+      await load();
+    } catch (e) {
+      Alert.alert('Could not save the size', e.message);
+    } finally { setSavingSize(false); }
+  };
   /* What this account may do. The server refuses the rest whatever happens
      here; this only stops the screen offering a control that would 403. */
   const can = useCan();
@@ -304,12 +346,35 @@ export default function FarmDashboardScreen({ navigation }) {
      left out because this list predates the master: "a command is a document
      the node polls". After the placement decision that is most of a house, so
      the farmer could not water most of it by hand. Trays stay live-only:
-     their cooldown and fill checks read the section's own probe. */
+     their cooldown and fill checks read the section's own humidity. */
   const flowLive = flowSections.filter((x) => x.freshness?.state === 'live'
     || (!isTrayFlow && x.freshness?.state === 'estimated'));
   const flowPickable = flowLive.filter((x) => !(isTrayFlow && trayCooling(x)));
   const coolingHidden = flowLive.length - flowPickable.length;
   const chosen = flowSections.filter((x) => (flow?.sectionIds || []).includes(x.sectionId));
+
+  /* ONE SHARED WATERING PUMP (18 Oct 2026). When the house's pump channel is set
+     and no chosen section has a valve of its own, every section is watered by
+     the same pump, so "one at a time" ran it once per section and each plant got
+     all the durations added together. One run as long as the longest is then
+     offered, and chosen by default. With valves per section it is not offered
+     (afterSections decides). */
+  const runSecs = chosen.map((x) => x.plan?.durationSec || 45);
+  const longestSecs = runSecs.length ? Math.max(...runSecs) : 0;
+  const totalSecs = runSecs.reduce((a, b) => a + b, 0);
+  const feedDueNames = chosen.filter((x) => x.fertilizer?.due).map((x) => x.meta?.name || x.sectionId);
+  const oneRun = flow?.kind === 'water' && flow?.mode === 'once' && chosen.length > 1;
+
+  const afterSections = (sectionIds) => {
+    const many = flow.kind === 'water' && sectionIds.length > 1;
+    // `chosen` is from the previous render; work the shared pump out for the new pick.
+    const picked = flowSections.filter((x) => sectionIds.includes(x.sectionId));
+    const shared = flowHouse?.meta?.waterChannel != null
+      && picked.every((x) => x.meta?.relayChannel == null
+        || Number(x.meta.relayChannel) === Number(flowHouse.meta.waterChannel));
+    setFlow({ ...flow, sectionIds, mode: many && shared ? 'once' : 'each',
+              step: many && shared ? 'mode' : 'confirm' });
+  };
 
   const launch = () => {
     const kind = flow.kind;
@@ -318,11 +383,12 @@ export default function FarmDashboardScreen({ navigation }) {
       sectionId: x.sectionId,
       name: x.meta?.name || x.sectionId,
       durationSec: x.plan?.durationSec || 45,
-      fillSeconds: x.tray?.fillSeconds || 15,
+      fillSeconds: x.tray?.fillSeconds || x.tray?.amountSeconds || 15,
       withFertilizer: !!x.fertilizer?.due,
     }));
     setFlow(null);
-    navigation.navigate('Run', { action: kind === 'water' ? 'water' : 'tray', targets });
+    navigation.navigate('Run', { action: kind === 'water' ? 'water' : 'tray', targets,
+                                 mode: oneRun ? 'once' : 'each' });
   };
 
   const houses   = data?.houses || [];
@@ -338,18 +404,7 @@ export default function FarmDashboardScreen({ navigation }) {
     .map(s => ({ s, a: attentionOf(s) }))
     .filter(x => x.a)
     .sort((x, y) => x.a.rank - y.a.rank);
-  const calibrating = houses.filter(h => h.meta?.lifecycle === 'calibrating').length;
   const nodes       = flat.filter(s => s.node?.mac || s.meta?.deviceMac).length;
-  /* Sections running WITHOUT hardware. After the placement flow this is the
-     normal state of most of a house, not a fault, so it is reported here as a
-     fact and never in the action list.
-
-     It replaces an `estimated` count that was structurally always zero:
-     /overview does not return an `estimated` field on sections at all, so
-     `flat.filter(s => s.estimated)` could never match anything. A number that
-     can only ever read 0 is worse than no number - it says the farm has no
-     interpolated zones, which is a claim, not an absence. */
-  const noNode      = flat.filter(s => s.freshness?.state === 'nonode').length;
   /* Zones being interpolated. Now real data - /overview reports the state, so
      unlike the count this replaced, this one can actually be non-zero. */
   const estimated   = flat.filter(s => s.freshness?.state === 'estimated').length;
@@ -366,7 +421,8 @@ export default function FarmDashboardScreen({ navigation }) {
     !h.meta?.masterMac
     && (h.sections || []).some(x => x.freshness?.state === 'nonode'
                                  || x.freshness?.state === 'estimated'));
-  const alertCount  = needing.length;
+  const needMasterIds = new Set(needMaster.map(h => h.houseId));
+  const problems    = needing.length + needMaster.length;
 
   /* The next thing the farm will do on its own. Buried in a chip inside an
      expanded section card before, which meant the single most useful fact on
@@ -390,15 +446,18 @@ export default function FarmDashboardScreen({ navigation }) {
   // nobody answered), and this line cannot tell which.
   const doneToday = !!upcoming.length && !nextUp;
 
-  /* The band's tone. Danger only for things that STOP the farm working; a tray
+  /* The status line's tone. Danger only for things that STOP the farm working; a tray
      wanting a top-up is ordinary business and must not paint the screen red,
      or red stops meaning anything. */
-  const tone = urgent ? COLORS.danger : needing.length ? COLORS.warning : COLORS.success;
-  const headline = urgent
-    ? `${urgent} section${urgent === 1 ? '' : 's'} need${urgent === 1 ? 's' : ''} fixing`
-    : needing.length
-      ? `${needing.length} section${needing.length === 1 ? '' : 's'} need${needing.length === 1 ? 's' : ''} you`
-      : sections ? 'Everything is running' : 'No sections yet';
+  const tone = urgent ? COLORS.danger : problems ? COLORS.warning : COLORS.success;
+  const statusText = problems
+    ? [urgent ? `${urgent} not reporting` : null,
+       needing.length - urgent
+         ? `${needing.length - urgent} need${needing.length - urgent === 1 ? 's' : ''} you` : null,
+       needMaster.length
+         ? `${needMaster.length} need${needMaster.length === 1 ? 's' : ''} a controller` : null,
+      ].filter(Boolean).join('  ·  ')
+    : sections ? 'Everything is running' : 'No sections yet';
 
   return (
     <View style={styles.container}>
@@ -411,10 +470,11 @@ export default function FarmDashboardScreen({ navigation }) {
       <ScreenHeader
         title={data?.farm?.farmName || 'My Farm'}
         navigation={navigation}
-        alertCount={alertCount}
+        alertCount={badge}
         showSettings
       />
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} tintColor={COLORS.primary}
@@ -436,130 +496,40 @@ export default function FarmDashboardScreen({ navigation }) {
               own conditions and its own sensor device.
             </Text>
             <TouchableOpacity style={[styles.setupBtn, SHADOW.md]}
-              onPress={() => navigation.navigate('FarmSetup')} activeOpacity={0.85}>
+              onPress={() => setAdding(true)} activeOpacity={0.85}>
               <Ionicons name="add-circle-outline" size={20} color="#FFF" />
               <Text style={styles.setupBtnText}>Set Up My Farm</Text>
             </TouchableOpacity>
           </View>
         ) : (
           <>
-            {/* devices that stopped reporting, before any numbers they affect */}
-            <FarmStaleBanner sections={flat} />
+            {/* ── 1. One line: does anything need me? ────────────────────── */}
+            {/* No shadow: on Android a shadow under a see-through tint is drawn
+                through it as a grey box, which is what made the old master
+                card look broken. */}
+            <TouchableOpacity
+              style={[styles.status, { backgroundColor: problems ? `${tone}14` : COLORS.successDim }]}
+              activeOpacity={0.75}
+              disabled={!problems}
+              onPress={() => needsY != null && scrollRef.current?.scrollTo({ y: needsY - SPACE.md, animated: true })}
+              accessibilityRole={problems ? 'button' : undefined}
+              accessibilityLabel={problems ? `${statusText}. Tap to see the list.` : statusText}>
+              <Ionicons name={urgent ? 'alert-circle' : problems ? 'time-outline' : 'checkmark-circle'}
+                size={19} color={tone} />
+              <Text style={[styles.statusTxt, { color: tone }]}>{statusText}</Text>
+              {problems > 0 && <Text style={[styles.statusView, { color: tone }]}>View</Text>}
+            </TouchableOpacity>
 
-            {/* ── 1. Does anything need me? ─────────────────────────────── */}
-            <View style={[styles.band, { borderLeftColor: tone }, SHADOW.sm]}>
-              <View style={styles.bandTop}>
-                <View style={[styles.bandIcon, { backgroundColor: `${tone}1A` }]}>
-                  <Ionicons
-                    name={urgent ? 'alert-circle' : needing.length ? 'time-outline' : 'checkmark-circle'}
-                    size={22} color={tone} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.bandTitle, { color: tone }]}>{headline}</Text>
-                  {/* Counts, stated ONCE. This line replaces a four-tile summary
-                      and a five-number strip that between them said "sections"
-                      twice and "houses" twice more than the header already did. */}
-                  <Text style={styles.bandSub}>
-                    {houses.length} house{houses.length === 1 ? '' : 's'}
-                    {' · '}{sections} section{sections === 1 ? '' : 's'}
-                    {' · '}{nodes} node{nodes === 1 ? '' : 's'}
-                    {estimated > 0 ? ` · ${estimated} estimated` : ''}
-                    {noNode > 0 ? ` · ${noNode} without one` : ''}
-                  </Text>
-                </View>
-              </View>
-
-              {calibrating > 0 && (
-                <Text style={styles.bandNote}>
-                  <Text style={{ fontWeight: '800' }}>{calibrating} house
-                  {calibrating === 1 ? ' is' : 's are'} calibrating</Text>
-                  {' — collecting data before their sensor positions are decided. '}
-                  They are not watering to a plan yet.
-                </Text>
-              )}
-            </View>
-
-            {/* The one blocker the farm cannot route around. Above the section
-                list because no amount of section-level action fixes it. */}
-            {needMaster.map(h => (
-              <TouchableOpacity key={`nm-${h.houseId}`}
-                style={[styles.card, styles.blockCard, SHADOW.sm]}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel={`Choose a master controller for ${h.meta?.name || h.houseId}`}
-                disabled={!can('setHouseMaster')}
-                onPress={can('setHouseMaster') ? () => openMaster(h) : undefined}>
-                <View style={styles.blockHead}>
-                  <Ionicons name="git-network" size={18} color={COLORS.warning} />
-                  <Text style={styles.blockTitle}>
-                    {h.meta?.name || h.houseId} needs a master controller
-                  </Text>
-                  <Ionicons name="chevron-forward" size={16} color={COLORS.warning} />
-                </View>
-                <Text style={styles.blockTxt}>
-                  Its zones without a sensor of their own are watered through the
-                  relay board. Until one board is named as the controller, nothing
-                  can water them — the command has nowhere to go. Tap to choose.
-                </Text>
-              </TouchableOpacity>
-            ))}
-
-            {/* ── 2. What needs doing, lifted out of the houses ──────────── */}
-            {needing.length > 0 && (
-              <View style={[styles.card, SHADOW.sm]}>
-                <Text style={styles.cardTitle}>Needs you now</Text>
-                {needing.map(({ s, a }) => (
-                  <TouchableOpacity
-                    key={`${s.houseId}/${s.sectionId}`}
-                    style={styles.needRow}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${s.meta?.name || s.sectionId} in ${s.houseName}. ${a.text}. ${a.fix}.`}
-                    onPress={() => navigation.navigate('SectionDetail', {
-                      houseId: s.houseId, sectionId: s.sectionId, houseName: s.houseName })}>
-                    <View style={[styles.needIcon, { backgroundColor: `${a.tone}1A` }]}>
-                      <Ionicons name={a.icon} size={16} color={a.tone} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={styles.needName} numberOfLines={1}>
-                        {s.meta?.name || s.sectionId}
-                        <Text style={styles.needWhere}>  {s.houseName}</Text>
-                      </Text>
-                      <Text style={[styles.needText, { color: a.tone }]} numberOfLines={1}>
-                        {a.text}
-                      </Text>
-                    </View>
-                    <Text style={styles.needFix} numberOfLines={1}>{a.fix}</Text>
-                    <Ionicons name="chevron-forward" size={15} color={COLORS.textTertiary} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {/* ── 3. The two actions, reachable without scrolling ────────── */}
-            <View style={styles.actRow}>
-              {/* These two look like siblings but are not: watering soaks the
-                  roots, filling a tray only raises the air humidity around the
-                  plants. The labels have to carry that difference. */}
-              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.primary }, SHADOW.md]}
-                onPress={() => startFlow('water')}
-                disabled={!sections || !can('waterSection')} activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Water. Choose which sections, then watch each one run.">
-                <Ionicons name="rainy-outline" size={17} color="#FFF" />
-                <Text style={styles.actText}>Water Now</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.info }, SHADOW.md]}
-                onPress={() => startFlow('tray')}
-                disabled={!sections || !can('fillTray')} activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Fill humidity trays. Choose which sections, then watch each one run.">
-                <Ionicons name="add-circle-outline" size={17} color="#FFF" />
-                <Text style={styles.actText}>Fill Tray</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* ── 4. Is the system doing its job? ────────────────────────── */}
+            {/* ── 2. The farm ─────────────────────────────────────────────── */}
+            <Text style={styles.farmLine}>
+              {houses.length} house{houses.length === 1 ? '' : 's'}
+              {' · '}{sections} section{sections === 1 ? '' : 's'}
+              {' · '}{nodes} sensor{nodes === 1 ? '' : 's'}
+              {estimated > 0 ? ` · ${estimated} estimated` : ''}
+            </Text>
+            {/* ── 3. Automation, as the grower asked (15 Oct): is the farm
+                running itself, then the two manual actions, then a new house,
+                then the houses themselves. ─────────────────────────────── */}
             <View style={[styles.card, SHADOW.sm]}>
               <Text style={styles.cardTitle}>Automation</Text>
               {/* ModeToggle and AutoControls used to sit eighty lines apart with
@@ -595,7 +565,40 @@ export default function FarmDashboardScreen({ navigation }) {
               )}
             </View>
 
-            {/* ── 5. The farm itself ─────────────────────────────────────── */}
+            {/* ── 4. The two actions ─────────────────────────────────────── */}
+            <View style={styles.actRow}>
+              {/* These two look like siblings but are not: watering soaks the
+                  roots, filling a tray only raises the air humidity around the
+                  plants. The labels have to carry that difference. */}
+              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.primary }, SHADOW.md]}
+                onPress={() => startFlow('water')}
+                disabled={!sections || !can('waterSection')} activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Water. Choose which sections, then watch each one run.">
+                <Ionicons name="rainy-outline" size={17} color="#FFF" />
+                <Text style={styles.actText}>Water Now</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actBtn, { backgroundColor: COLORS.info }, SHADOW.md]}
+                onPress={() => startFlow('tray')}
+                disabled={!sections || !can('fillTray')} activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Fill humidity trays. Choose which sections, then watch each one run.">
+                <Ionicons name="add-circle-outline" size={17} color="#FFF" />
+                <Text style={styles.actText}>Fill Tray</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* ── 5. A new house ─────────────────────────────────────────── */}
+            {can('addHouse') && (
+            <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
+              onPress={() => setAdding(true)} activeOpacity={0.8}
+              accessibilityRole="button" accessibilityLabel="Add another house">
+              <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
+              <Text style={styles.addHouseText}>Add another house</Text>
+            </TouchableOpacity>
+            )}
+
+            {/* ── 6. The houses ────────────────────────────────────────────── */}
             {houses.map(h => {
               /* Urgent sections first, so a farmer who opens a house can stop
                  reading once the rows stop being coloured. Within a rank the
@@ -608,7 +611,13 @@ export default function FarmDashboardScreen({ navigation }) {
               // isFault, not !trusted: an estimated zone carries trusted:false
               // because it is not a measurement, and counting those made a
               // correctly working house report "4 not reporting".
-              const bad  = secs.filter(z => isFault(z.freshness)).length;
+              /* A section with no board is not "not reporting": there is
+                 nothing there to report. House "1" read "4 not reporting" while
+                 the status line above said 3 for the farm (15 Oct), because
+                 isFault counts 'nonode' and the Needs-you list rightly does not. */
+              const bad  = secs.filter(z => isFault(z.freshness)
+                                         && z.freshness?.state !== 'nonode').length;
+              const bare = secs.filter(z => z.freshness?.state === 'nonode').length;
               const est  = secs.filter(z => z.freshness?.state === 'estimated').length;
               const need = secs.filter(z => z.tray?.status === 'fill').length;
 
@@ -707,12 +716,29 @@ export default function FarmDashboardScreen({ navigation }) {
                   </TouchableOpacity>
                 </View>
 
+                {/* The house's own blocker, inside the house it belongs to,
+                    rather than a card above the whole farm. */}
+                {needMasterIds.has(h.houseId) && (
+                  <TouchableOpacity style={styles.houseWarn} activeOpacity={0.75}
+                    disabled={!can('setHouseMaster')}
+                    onPress={can('setHouseMaster') ? () => openMaster(h) : undefined}
+                    accessibilityRole="button"
+                    accessibilityLabel="No master controller. Sections without a sensor cannot be watered. Choose one.">
+                    <Ionicons name="git-network-outline" size={15} color={COLORS.warning} />
+                    <Text style={styles.houseWarnTxt}>
+                      No master controller, so its sections without a sensor cannot be watered
+                    </Text>
+                    {can('setHouseMaster') && <Text style={styles.houseWarnAct}>Choose</Text>}
+                  </TouchableOpacity>
+                )}
+
                 {isCollapsed(h.houseId) ? (
                   <Text style={styles.collapsedNote}>
                     {(() => {
                       const bits = [];
                       if (bad)  bits.push(`${bad} not reporting`);
                       if (need) bits.push(`${need} need water`);
+                      if (bare) bits.push(`${bare} without a sensor`);
                       // Stated, but as a fact rather than a problem - and only
                       // when there is nothing wrong to say instead.
                       if (!bits.length && est) return `${est} estimated, the rest are fine`;
@@ -870,42 +896,57 @@ export default function FarmDashboardScreen({ navigation }) {
               );
             })}
 
-            {can('addHouse') && (
-            <TouchableOpacity style={[styles.addHouse, SHADOW.sm]}
-              onPress={() => setAdding(true)} activeOpacity={0.8}
-              accessibilityRole="button" accessibilityLabel="Add another house">
-              <Ionicons name="add-circle-outline" size={19} color={COLORS.primary} />
-              <Text style={styles.addHouseText}>Add another house</Text>
-            </TouchableOpacity>
+            {/* ── 7. Everything that wants something, each with its house ─ */}
+            {problems > 0 && (
+              <View style={[styles.card, SHADOW.sm]}
+                onLayout={(e) => setNeedsY(e.nativeEvent.layout.y)}>
+                <Text style={styles.cardTitle}>Needs you ({problems})</Text>
+                {needMaster.map(h => (
+                  <TouchableOpacity key={`nm-${h.houseId}`} style={styles.needRow}
+                    activeOpacity={0.7}
+                    disabled={!can('setHouseMaster')}
+                    onPress={can('setHouseMaster') ? () => openMaster(h) : undefined}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${h.meta?.name || h.houseId} has no master controller. Choose one.`}>
+                    <View style={[styles.needIcon, { backgroundColor: COLORS.warningDim }]}>
+                      <Ionicons name="git-network-outline" size={16} color={COLORS.warning} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.needName} numberOfLines={1}>{h.meta?.name || h.houseId}</Text>
+                      <Text style={[styles.needText, { color: COLORS.warning }]}>No master controller</Text>
+                    </View>
+                    <Text style={styles.needFix}>{can('setHouseMaster') ? 'Choose one' : 'Ask an admin'}</Text>
+                    <Ionicons name="chevron-forward" size={15} color={COLORS.textTertiary} />
+                  </TouchableOpacity>
+                ))}
+                {needing.map(({ s, a }) => (
+                  <TouchableOpacity
+                    key={`${s.houseId}/${s.sectionId}`}
+                    style={styles.needRow}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${s.meta?.name || s.sectionId} in ${s.houseName}. ${a.text}. ${a.fix}.`}
+                    onPress={() => navigation.navigate('SectionDetail', {
+                      houseId: s.houseId, sectionId: s.sectionId, houseName: s.houseName })}>
+                    <View style={[styles.needIcon, { backgroundColor: `${a.tone}1A` }]}>
+                      <Ionicons name={a.icon} size={16} color={a.tone} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.needName} numberOfLines={1}>
+                        {s.meta?.name || s.sectionId}
+                        <Text style={styles.needWhere}>  {s.houseName}</Text>
+                      </Text>
+                      <Text style={[styles.needText, { color: a.tone }]} numberOfLines={1}>
+                        {a.text}
+                      </Text>
+                    </View>
+                    <Text style={styles.needFix}>{a.fix}</Text>
+                    <Ionicons name="chevron-forward" size={15} color={COLORS.textTertiary} />
+                  </TouchableOpacity>
+                ))}
+              </View>
             )}
 
-            {/* Two genuinely different ways to add a house, and the difference is
-                not cosmetic: one ends with sensors already placed and a calibration
-                window running, the other with an empty house the farmer fills in by
-                hand. Sending everyone down one path would either force a three-day
-                wait on somebody who already knows their layout, or hide the whole
-                placement feature from somebody who does not. */}
-            <SelectSheet
-              visible={adding}
-              title="How do you want to set this house up?"
-              subtitle="Both create a real house. They differ in who decides where the sensors go."
-              options={[
-                { key: 'plan',
-                  label: 'Work out the best sensor positions',
-                  sub: 'Sections are spread evenly, you run them for three days, then '
-                     + 'the app says which positions matter and which sensors you can '
-                     + 'take out. Needs a sensor in every section to start.' },
-                { key: 'manual',
-                  label: 'I know my layout — set it up myself',
-                  sub: 'Name the sections yourself and place nodes by hand. No '
-                     + 'calibration window, and no placement suggestion.' },
-              ]}
-              confirmOnSelect
-              onCancel={() => setAdding(false)}
-              onConfirm={(k) => {
-                setAdding(false);
-                navigation.navigate(k === 'plan' ? 'HousePlanner' : 'FarmSetup');
-              }} />
 
             {/* the farm name was previously fixed at setup, a typo was permanent */}
             {can('renameFarm') && (
@@ -922,6 +963,39 @@ export default function FarmDashboardScreen({ navigation }) {
         <View style={{ height: 100 }} />
       </ScrollView>
 
+      {/* Rendered outside the house list so the FIRST house gets this choice too.
+          The empty farm's "Set Up My Farm" went straight to the manual setup, so a
+          new farm - or one whose houses were all deleted - could not start a
+          calibration at all. Found 10 Oct 2026, setting up the farm for real.
+
+          Two genuinely different ways to add a house, and the difference is
+          not cosmetic: one ends with sensors already placed and a calibration
+          window running, the other with an empty house the farmer fills in by
+          hand. Sending everyone down one path would either force a three-day
+          wait on somebody who already knows their layout, or hide the whole
+          placement feature from somebody who does not. */}
+      <SelectSheet
+        visible={adding}
+        title="How do you want to set this house up?"
+        subtitle="Both create a real house. They differ in who decides where the sensors go."
+        options={[
+          { key: 'plan',
+            label: 'Work out the best sensor positions',
+            sub: 'Sections are spread evenly, you run them for three days, then '
+               + 'the app says which positions matter and which sensors you can '
+               + 'take out. Needs a sensor in every section to start.' },
+          { key: 'manual',
+            label: 'I know my layout — set it up myself',
+            sub: 'Name the sections yourself and place nodes by hand. No '
+               + 'calibration window, and no placement suggestion.' },
+        ]}
+        confirmOnSelect
+        onCancel={() => setAdding(false)}
+        onConfirm={(k) => {
+          setAdding(false);
+          navigation.navigate(k === 'plan' ? 'HousePlanner' : 'FarmSetup');
+        }} />
+
       {/* The house's own menu, in the app's shape rather than Android's. */}
       <SelectSheet
         visible={!!houseMenu}
@@ -932,6 +1006,11 @@ export default function FarmDashboardScreen({ navigation }) {
         options={[
           can('renameHouse') && { key: 'rename', label: 'Rename house',
             sub: 'Only the name changes. Sections and readings are untouched.' },
+          can('setHouseDimensions') && { key: 'size', label: 'House size',
+            sub: houseMenu?.meta?.width != null && houseMenu?.meta?.length != null
+              ? `${formatLength(houseMenu.meta.width, lengthUnit)} x `
+                + `${formatLength(houseMenu.meta.length, lengthUnit)}. Change it in metres or feet.`
+              : 'Not set. The map and the estimates need it.' },
           can('setHousePumps') && { key: 'pumps', label: 'Pump channels',
             sub: houseMenu?.meta?.waterChannel != null || houseMenu?.meta?.trayChannel != null
               ? `Watering pump on channel ${houseMenu?.meta?.waterChannel ?? '-'}, `
@@ -947,6 +1026,8 @@ export default function FarmDashboardScreen({ navigation }) {
           setHouseMenu(null);
           if (k === 'rename') {
             setRenaming({ kind: 'house', id: h.houseId, name: h.meta?.name || h.houseId });
+          } else if (k === 'size') {
+            setSizing(h);
           } else if (k === 'pumps') {
             setPumps({ houseId: h.houseId, name: h.meta?.name || h.houseId, step: 'water',
                        water: h.meta?.waterChannel ?? null, tray: h.meta?.trayChannel ?? null });
@@ -954,6 +1035,9 @@ export default function FarmDashboardScreen({ navigation }) {
             setConfirmDel(h);
           }
         }} />
+
+      <HouseSizeDialog visible={!!sizing} house={sizing} busy={savingSize}
+        onCancel={() => setSizing(null)} onSave={saveSize} />
 
       {/* Pump channels, one pump at a time. The tray step leaves out the
           watering pump's channel: one relay drives one motor, and the server
@@ -1081,7 +1165,32 @@ export default function FarmDashboardScreen({ navigation }) {
         values={flow?.sectionIds || []}
         confirmLabel="Next"
         onCancel={() => setFlow(null)}
-        onConfirm={(sectionIds) => setFlow({ ...flow, sectionIds, step: 'confirm' })}
+        onConfirm={afterSections}
+      />
+
+      {/* Step 2b, watering several sections on one shared pump: one run or one
+          at a time. Only shown when one run is possible (sharedPump). */}
+      <SelectSheet
+        visible={flow?.step === 'mode'}
+        title="How should they be watered?"
+        subtitle={`${chosen.length} sections share one watering pump`}
+        options={[
+          { key: 'once',
+            label: 'Whole house, one run',
+            sub: `The pump runs once for ${longestSecs}s, the longest of the plans, and `
+               + 'every chosen section gets that one watering.'
+               + (feedDueNames.length
+                   ? ` No plant food in this run (due in ${feedDueNames.join(', ')}).`
+                   : '') },
+          { key: 'each',
+            label: 'One section at a time',
+            sub: `${chosen.length} runs back to back, ${totalSecs}s of pumping. With one `
+               + 'shared pump every run waters the whole house.' },
+        ]}
+        value={flow?.mode || 'once'}
+        confirmLabel="Next"
+        onCancel={() => setFlow(null)}
+        onConfirm={(mode) => setFlow({ ...flow, mode, step: 'confirm' })}
       />
 
       {/* Step 3 — say exactly what is about to happen, and to what. */}
@@ -1093,7 +1202,9 @@ export default function FarmDashboardScreen({ navigation }) {
           : `Fill ${chosen.length} tray${chosen.length === 1 ? '' : 's'}?`}
         body={`${chosen.map((x) => x.meta?.name || x.sectionId).join(', ')}.\n\n`
             + (flow?.kind === 'water'
-                ? 'Each pump runs for its own planned duration, one section at a time.'
+                ? (oneRun
+                    ? `One run of the shared pump, ${longestSecs} seconds, waters all of them.`
+                    : 'Each pump runs for its own planned duration, one section at a time.')
                 : 'Each tray gets a short burst of water, one section at a time. It raises '
                   + 'humidity around the plants and does not touch the roots.')}
         caution={flow?.kind === 'water'
@@ -1136,30 +1247,27 @@ const styles = StyleSheet.create({
   setupBtn:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, backgroundColor: COLORS.primary, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.md, marginTop: SPACE.sm },
   setupBtnText:{ color: '#FFF', fontSize: FONT.md, fontWeight: '700' },
 
-  /* ── the status band ─────────────────────────────────────────────────
-     One block where there used to be three. The left rail carries the tone so
-     the sentence itself can stay near-black and readable; a fully tinted card
-     would make the headline compete with its own background. */
-  band:      { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.lg,
-               borderLeftWidth: 4, padding: SPACE.lg, marginBottom: SPACE.lg },
-  bandTop:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
-  bandIcon:  { width: 42, height: 42, borderRadius: RADIUS.md,
-               alignItems: 'center', justifyContent: 'center' },
-  bandTitle: { fontSize: FONT.lg, fontWeight: '800' },
-  bandSub:   { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2 },
-  bandNote:  { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18,
-               marginTop: SPACE.md, paddingTop: SPACE.md,
-               borderTopWidth: 1, borderTopColor: COLORS.border },
+  /* ── the status line ──────────────────────────────────────────────────
+     One slim row where there used to be a red banner, a band and a card.
+     Tinted, so it carries NO shadow (see the note where it is drawn). */
+  status:    { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+               paddingVertical: SPACE.md, paddingHorizontal: SPACE.md,
+               borderRadius: RADIUS.md, marginBottom: SPACE.lg },
+  statusTxt: { flex: 1, fontSize: FONT.md, fontWeight: '800' },
+  statusView:{ width: 44, textAlign: 'right', fontSize: FONT.sm, fontWeight: '800' },
+  farmLine:  { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '700',
+               letterSpacing: 0.2, marginBottom: SPACE.sm, marginLeft: 2 },
 
   /* ── generic section card used by Needs-you-now and Automation ─────── */
   card:      { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.lg,
                padding: SPACE.lg, marginBottom: SPACE.lg },
-  blockCard: { backgroundColor: COLORS.warningDim, borderWidth: 1,
-               borderColor: COLORS.warning },
-  blockHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
-  blockTitle:{ flex: 1, color: COLORS.warning, fontSize: FONT.md, fontWeight: '800' },
-  blockTxt:  { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19,
-               marginTop: SPACE.sm },
+  // a house's own blocker, drawn inside its (opaque, shadowed) card
+  houseWarn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+               backgroundColor: COLORS.warningDim, borderRadius: RADIUS.sm,
+               paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md, marginBottom: SPACE.md },
+  houseWarnTxt: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18 },
+  houseWarnAct: { width: 58, textAlign: 'right', color: COLORS.warning,
+                  fontSize: FONT.sm, fontWeight: '800' },
 
   cardTitle: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '800',
                letterSpacing: 0.6, textTransform: 'uppercase',
@@ -1173,8 +1281,10 @@ const styles = StyleSheet.create({
   needName:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
   needWhere: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '500' },
   needText:  { fontSize: FONT.sm, fontWeight: '600', marginTop: 1 },
-  needFix:   { color: COLORS.textTertiary, fontSize: FONT.xs, maxWidth: 92,
-               textAlign: 'right' },
+  // A fixed width, not sized to its own words: those clipped on a phone with
+  // Bold text on ("Check power an...").
+  needFix:   { width: 84, color: COLORS.textTertiary, fontSize: FONT.xs,
+               lineHeight: 14, textAlign: 'right' },
 
   modeInCard:{ marginBottom: SPACE.md },
   nextRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
@@ -1251,7 +1361,8 @@ const styles = StyleSheet.create({
                    borderColor: COLORS.borderLight, gap: 6 },
   addSecOffText: { color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '600' },
 
-  addHouse:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, borderWidth: 1, borderColor: COLORS.primaryDim },
+  addHouse:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, borderWidth: 1, borderColor: COLORS.primaryDim,
+                  marginBottom: SPACE.lg },   // it sits above the houses now
   addHouseText: { color: COLORS.primary, fontSize: FONT.md, fontWeight: '700' },
 
   renameFarm:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

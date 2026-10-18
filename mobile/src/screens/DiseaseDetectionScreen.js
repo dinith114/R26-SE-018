@@ -179,7 +179,11 @@ const DiseaseDetectionScreen = ({ navigation }) => {
       // null on failure -- a history write must never stop the user seeing the
       // diagnosis they just asked for, so it is not awaited into the try/catch
       // that reports analysis failures.
-      addToHistory(data, imageUri);
+      //
+      // A refused photograph is not a check of a plant, so it is not recorded.
+      // Recording it made History list it as an unidentified plant needing an
+      // expert, contradicting the "not an orchid" result the user had just seen.
+      if (data?.disease !== 'invalid_image') addToHistory(data, imageUri);
     } catch (err) {
       // Everything the service could not handle arrives here as an ApiError
       // with a message written for a person, plus a practical hint.

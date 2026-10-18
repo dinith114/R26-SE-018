@@ -25,8 +25,8 @@ struct BufRec {          // 40 bytes, no padding (checked below)
   int32_t  vpd1000;      // 20  kPa x1000, or -999000
   int16_t  t10;          // 24  C x10, or -9990
   int16_t  rh10;         // 26  % x10, or -9990
-  int16_t  soil10;       // 28  sampleMoisture % x10, or -9990
-  int16_t  soilRaw;      // 30  ADC counts, as sent live
+  int16_t  unused28;     // 28  was the tray probe (% x10) until 2.7; written as 0
+  int16_t  unused30;     // 30  was the probe's ADC counts until 2.7; written as 0
   uint8_t  flags;        // 32  bit0 = sensorFault
   uint8_t  ver;          // 33  layout version - a record from other firmware is refused
   uint16_t reserved;     // 34  zero
@@ -34,4 +34,7 @@ struct BufRec {          // 40 bytes, no padding (checked below)
 };
 static_assert(sizeof(BufRec) == 40, "BufRec must stay 40 bytes: the file is indexed by N*40");
 
+/* Still 1 after the tray probe was removed (2.7): the layout did not change, its
+   two fields are simply no longer filled, so readings a 2.6 board buffered
+   before being reflashed are still uploaded - without the probe fields. */
 #define BUF_REC_VER 1

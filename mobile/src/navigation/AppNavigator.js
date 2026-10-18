@@ -11,6 +11,8 @@ import DiseaseDetectionScreen from '../screens/DiseaseDetectionScreen';
 import DiseaseHubScreen from '../screens/DiseaseHubScreen';
 import DiseaseHistoryScreen from '../screens/DiseaseHistoryScreen';
 import DiseaseContributeScreen from '../screens/DiseaseContributeScreen';
+import DiseaseSubmissionsScreen from '../screens/DiseaseSubmissionsScreen';
+import DiseaseReviewScreen from '../screens/DiseaseReviewScreen';
 import GrowthStageScreen from '../screens/GrowthStageScreen';
 import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -24,8 +26,6 @@ import HousePlannerScreen from '../screens/HousePlannerScreen';
 import CalibrationScreen from '../screens/CalibrationScreen';
 import HouseMapScreen from '../screens/HouseMapScreen';
 import PlacementResultScreen from '../screens/PlacementResultScreen';
-import PlacementFlowScreen from '../screens/PlacementFlowScreen';
-import WateringCheckScreen from '../screens/WateringCheckScreen';
 import AddSensorScreen from '../screens/AddSensorScreen';
 import AdminOnly from '../components/AdminOnly';
 import TeamScreen from '../screens/TeamScreen';
@@ -163,6 +163,9 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="Team" component={TeamGuarded} />
         <Stack.Screen name="Notifications" component={NotificationsScreen} />
+        {/* The Growth screen again, pushed over a section to check its stage
+            with a photo, so Back returns to that section. */}
+        <Stack.Screen name="GrowthCheck" component={GrowthStageScreen} />
         <Stack.Screen name="FarmDashboard" component={FarmDashboardScreen} />
         <Stack.Screen name="SectionDetail" component={SectionDetailScreen} />
         <Stack.Screen name="Run" component={RunScreen} />
@@ -172,18 +175,14 @@ export default function AppNavigator({ navRef, onReady }) {
         <Stack.Screen name="Calibration" component={CalibrationGuarded} />
         <Stack.Screen name="HouseMap" component={HouseMapScreen} />
         <Stack.Screen name="PlacementResult" component={PlacementResultGuarded} />
-        {/* Not admin-only: anyone on the farm may see how the placement was
-            decided. Re-running it is gated at the button. */}
-        <Stack.Screen name="PlacementFlow" component={PlacementFlowScreen} />
-        {/* Not admin-only: how the watering times were checked. It only reads
-            (two GETs open to every signed-in role) and has no controls. */}
-        <Stack.Screen name="WateringCheck" component={WateringCheckScreen} />
         <Stack.Screen name="AddSensor" component={AddSensorGuarded} />
 
         {/* Component 1 - disease detection */}
         <Stack.Screen name="DiseaseDetection" component={DiseaseDetectionScreen} />
         <Stack.Screen name="DiseaseHistory" component={DiseaseHistoryScreen} />
         <Stack.Screen name="DiseaseContribute" component={DiseaseContributeScreen} />
+        <Stack.Screen name="DiseaseSubmissions" component={DiseaseSubmissionsScreen} />
+        <Stack.Screen name="DiseaseReview" component={DiseaseReviewScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -15,9 +15,8 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-from PIL import Image
-from sklearn.model_selection import GroupShuffleSplit
+from PIL import Image, ImageEnhance
+from sklearn.model_selection import ShuffleSplit
 from sklearn.preprocessing import StandardScaler
 
 from .config import (
@@ -25,6 +24,17 @@ from .config import (
     TARGET_COLUMN,
 )
 from .utils import preprocess_pil_image
+
+# tf is only needed by BloomDataGenerator/DataPreprocessor.load_data() below -
+# kept as a deferred import so load_bloom_dataset/split_dataset/
+# save_split_manifest stay usable (e.g. to inspect a split) without
+# TensorFlow installed.
+try:
+    import tensorflow as tf
+    _SequenceBase = tf.keras.utils.Sequence
+except ImportError:
+    tf = None
+    _SequenceBase = object
 
 
 def load_bloom_dataset(data_dir: Path) -> pd.DataFrame:
@@ -56,20 +66,44 @@ def load_bloom_dataset(data_dir: Path) -> pd.DataFrame:
     return dataset.reset_index(drop=True)
 
 
-def split_by_plant(dataset: pd.DataFrame, validation_split: float = 0.2,
-                    seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def split_dataset(dataset: pd.DataFrame, val_split: float = 0.15, test_split: float = 0.15,
+                   seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Split into train/validation by Plant ID, not by row: every photo of a
-    given plant (original + its augmented variants, across every date it was
-    photographed) lands entirely in one split, so validation never sees a
-    near-duplicate of a training image.
+    Split into train/validation/test by row, treating every image
+    (original or augmented variant) as an independent sample - not grouped
+    by Plant ID. Requested despite the leakage this causes: augmented
+    siblings of a training image, and other photos of the same plant, can
+    land in validation/test, so val/test metrics no longer estimate
+    performance on genuinely unseen plants.
     """
-    splitter = GroupShuffleSplit(n_splits=1, test_size=validation_split, random_state=seed)
-    train_idx, val_idx = next(splitter.split(dataset, groups=dataset['Plant ID']))
-    return dataset.iloc[train_idx].reset_index(drop=True), dataset.iloc[val_idx].reset_index(drop=True)
+    splitter1 = ShuffleSplit(n_splits=1, test_size=test_split, random_state=seed)
+    trainval_idx, test_idx = next(splitter1.split(dataset))
+    trainval_df = dataset.iloc[trainval_idx].reset_index(drop=True)
+    test_df = dataset.iloc[test_idx].reset_index(drop=True)
+
+    # val_split is a fraction of the whole dataset; re-express it as a
+    # fraction of what's left after carving out test.
+    relative_val = val_split / (1 - test_split)
+    splitter2 = ShuffleSplit(n_splits=1, test_size=relative_val, random_state=seed)
+    train_idx, val_idx = next(splitter2.split(trainval_df))
+    train_df = trainval_df.iloc[train_idx].reset_index(drop=True)
+    val_df = trainval_df.iloc[val_idx].reset_index(drop=True)
+
+    return train_df, val_df, test_df
 
 
-class BloomDataGenerator(tf.keras.utils.Sequence):
+def save_split_manifest(train_df: pd.DataFrame, val_df: pd.DataFrame,
+                         test_df: pd.DataFrame, output_dir: Path) -> None:
+    """Write exactly which rows/images went to which split, so it's inspectable after training."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cols = ['ID', 'Plant ID', 'image_path', 'capture_date', TARGET_COLUMN]
+    train_df[cols].to_csv(output_dir / 'train_split.csv', index=False)
+    val_df[cols].to_csv(output_dir / 'val_split.csv', index=False)
+    test_df[cols].to_csv(output_dir / 'test_split.csv', index=False)
+
+
+class BloomDataGenerator(_SequenceBase):
     """
     Keras Sequence that yields ([images, tabular_features], days_until_bloom)
     batches from a merged bloom dataset DataFrame.
@@ -78,6 +112,8 @@ class BloomDataGenerator(tf.keras.utils.Sequence):
     def __init__(self, dataframe: pd.DataFrame, scaler: StandardScaler,
                  batch_size: int = None, target_size: Tuple[int, int] = None,
                  shuffle: bool = True, augment: bool = False):
+        if tf is None:
+            raise ImportError("TensorFlow is required to build BloomDataGenerator/DataPreprocessor.load_data()")
         self.df = dataframe.reset_index(drop=True)
         self.scaler = scaler
         self.batch_size = batch_size or MODEL_CONFIG['batch_size']
@@ -100,9 +136,9 @@ class BloomDataGenerator(tf.keras.utils.Sequence):
 
         images = np.zeros((len(batch), *self.target_size, 3), dtype='float32')
         for i, image_path in enumerate(batch['image_path']):
-            img = Image.open(image_path)
-            if self.augment and np.random.random() > 0.5:
-                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            img = Image.open(image_path).convert('RGB')
+            if self.augment:
+                img = self._augment_image(img)
             images[i] = preprocess_pil_image(img, self.target_size)[0]
 
         tabular = self.scaler.transform(batch[TABULAR_FEATURES].to_numpy(dtype='float32'))
@@ -110,28 +146,58 @@ class BloomDataGenerator(tf.keras.utils.Sequence):
 
         return (images, tabular), targets
 
+    @staticmethod
+    def _augment_image(img: Image.Image) -> Image.Image:
+        """
+        Random flip/rotation/brightness/contrast jitter, applied on top of
+        whatever offline augmentation already produced this file. The offline
+        variants (rotated/brightness-shifted copies) are a fixed, finite set
+        shared identically across every epoch, so the model can still
+        memorize them; this adds a fresh, continuous perturbation each epoch
+        instead, matching growth_stage's richer augmentation
+        (see growth_stage/src/preprocess.py's ImageDataGenerator args).
+        """
+        if np.random.random() > 0.5:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        if np.random.random() > 0.5:
+            angle = np.random.uniform(-15, 15)
+            img = img.rotate(angle, resample=Image.BILINEAR, fillcolor=(255, 255, 255))
+        if np.random.random() > 0.5:
+            img = ImageEnhance.Brightness(img).enhance(np.random.uniform(0.8, 1.2))
+        if np.random.random() > 0.5:
+            img = ImageEnhance.Contrast(img).enhance(np.random.uniform(0.8, 1.2))
+        return img
+
 
 class DataPreprocessor:
     """
-    Loads the merged bloom dataset, splits it by plant, fits the tabular
-    feature scaler on the training split only, and builds the train/
-    validation generators.
+    Loads the merged bloom dataset, splits it by plant into train/
+    validation/test, fits the tabular feature scaler on the training split
+    only, and builds a generator for each.
     """
 
     def __init__(self, data_dir: Path, target_size: Tuple[int, int] = None,
-                 batch_size: int = None, validation_split: float = None):
+                 batch_size: int = None, val_split: float = None,
+                 test_split: float = None):
         self.data_dir = Path(data_dir)
         self.target_size = target_size or MODEL_CONFIG['target_size']
         self.batch_size = batch_size or MODEL_CONFIG['batch_size']
-        self.validation_split = validation_split or MODEL_CONFIG['validation_split']
+        self.val_split = val_split if val_split is not None else MODEL_CONFIG['validation_split']
+        self.test_split = test_split if test_split is not None else MODEL_CONFIG['test_split']
         self.scaler = StandardScaler()
 
         if not self.data_dir.exists():
             raise FileNotFoundError(f"Data directory not found: {self.data_dir}")
 
-    def load_data(self) -> Tuple[BloomDataGenerator, BloomDataGenerator]:
+    def load_data(self):
+        """
+        Returns (train_generator, validation_generator, test_generator,
+        (train_df, val_df, test_df)). The dataframes are what
+        save_split_manifest() writes out - callers that don't need the
+        manifest can ignore the last element.
+        """
         dataset = load_bloom_dataset(self.data_dir)
-        train_df, val_df = split_by_plant(dataset, self.validation_split)
+        train_df, val_df, test_df = split_dataset(dataset, self.val_split, self.test_split)
 
         self.scaler.fit(train_df[TABULAR_FEATURES].to_numpy(dtype='float32'))
 
@@ -143,8 +209,12 @@ class DataPreprocessor:
             val_df, self.scaler, batch_size=self.batch_size,
             target_size=self.target_size, shuffle=False, augment=False,
         )
+        test_generator = BloomDataGenerator(
+            test_df, self.scaler, batch_size=self.batch_size,
+            target_size=self.target_size, shuffle=False, augment=False,
+        )
 
-        return train_generator, validation_generator
+        return train_generator, validation_generator, test_generator, (train_df, val_df, test_df)
 
     def get_dataset_stats(self) -> dict:
         dataset = load_bloom_dataset(self.data_dir)

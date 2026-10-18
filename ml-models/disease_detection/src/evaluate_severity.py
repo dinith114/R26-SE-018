@@ -75,6 +75,8 @@ def main():
     ap.add_argument("--labels", default=str(DEFAULT_LABELS))
     ap.add_argument("--split", default="test", choices=["test", "validation"])
     ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--out", default=None,
+                    help="folder for the results; defaults to the models folder")
     args = ap.parse_args()
 
     try:
@@ -86,6 +88,8 @@ def main():
         sys.exit("ERROR: missing dependency ({}).".format(exc))
 
     models_dir = Path(args.models).resolve()
+    out_dir = Path(args.out).resolve() if args.out else models_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     model_path = models_dir / "severity_model.keras"
     if not model_path.exists():
         sys.exit("ERROR: {} not found.\nTrain it first, or download it from "
@@ -198,6 +202,10 @@ def main():
     prec, rec, f1, sup = precision_recall_fscore_support(
         y_true, y_pred, labels=[0, 1, 2], zero_division=0)
 
+    from extra_metrics import describe_ordinal, ordinal_extras
+    extras = ordinal_extras(y_true, y_pred, probs)
+    describe_ordinal(extras, out)
+
     metrics = {
         "evaluated_at": datetime.now().isoformat(timespec="seconds"),
         "model": "severity", "split": args.split,
@@ -217,11 +225,12 @@ def main():
              "predicted": SEVERITY_CLASSES[y_pred[i]],
              "confidence": float(probs[i].max())}
             for i in range(len(paths)) if y_pred[i] != y_true[i]],
+        "beyond_accuracy": extras,
     }
-    mp = models_dir / "severity_metrics_{}.json".format(args.split)
+    mp = out_dir / "severity_metrics_{}.json".format(args.split)
     json.dump(metrics, open(mp, "w", encoding="utf-8"), indent=2)
 
-    rp = models_dir / "severity_evaluation_{}.txt".format(args.split)
+    rp = out_dir / "severity_evaluation_{}.txt".format(args.split)
     rp.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     out("\n" + "=" * 70)

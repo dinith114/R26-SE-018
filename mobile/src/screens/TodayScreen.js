@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import useLiveData, { LIVE_MS } from '../hooks/useLiveData';
+import useNotifications from '../hooks/useNotifications';
 import ScreenHeader from '../components/ScreenHeader';
 import ModeToggle from '../components/ModeToggle';
 import AutoControls from '../components/AutoControls';
@@ -100,6 +101,8 @@ export default function TodayScreen({ navigation }) {
     useLiveData(getOverview, LIVE_MS);
   // the farm's Auto switch + how many things are waiting on the farmer
   const { data: auto, reload: refreshAuto } = useLiveData(() => getAlarms(1), LIVE_MS);
+  // The bell: notifications this person has not cleared, as on every screen.
+  const { badge } = useNotifications(LIVE_MS * 2);
 
   /** Runs a job, keeps a visible trace of it, then refreshes. */
   const run = useCallback(async (label, fn) => {
@@ -137,7 +140,7 @@ export default function TodayScreen({ navigation }) {
           + 'the humidity around the plants, it does not touch the roots.',
     onConfirm: () => run(
       `Filling ${dry.length} tray${dry.length !== 1 ? 's' : ''}`,
-      () => Promise.all(dry.map(s => fillTray(s.houseId, s.sectionId, s.tray?.fillSeconds || 15))),
+      () => Promise.all(dry.map(s => fillTray(s.houseId, s.sectionId, s.tray?.fillSeconds || s.tray?.amountSeconds || 15))),
     ),
   });
 
@@ -177,7 +180,6 @@ export default function TodayScreen({ navigation }) {
     ),
   });
 
-  const alertCount = dry.length + fertDue.length + untrusted.length;
 
   return (
     <View style={s.container}>
@@ -186,7 +188,7 @@ export default function TodayScreen({ navigation }) {
       title={data?.farm?.farmName || 'My Farm'}
       subtitle={greeting()}
       navigation={navigation}
-      alertCount={alertCount}
+      alertCount={badge}
       showSettings
     />
     <ScrollView

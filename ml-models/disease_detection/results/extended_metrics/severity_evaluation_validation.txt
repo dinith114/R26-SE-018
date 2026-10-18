@@ -1,0 +1,65 @@
+======================================================================
+  SEVERITY CLASSIFIER (Model 2) -- VALIDATION SET
+  model : D:\AI-Powered-Smart-Orchid-Care-System\R26-SE-018\ml-models\disease_detection\models\severity_model.keras
+  run at: 2026-10-12T20:59:23
+======================================================================
+
+  Grade distribution by split (stratified by DISEASE, not grade):
+  split            mild   moderate     severe
+  train             22%        33%        45%
+  validation        42%        37%        21%
+  test              40%        28%        33%
+
+  A mismatch here caps achievable accuracy and is a real limitation,
+  not a bug. Severity was unknown when the split was made.
+
+  validation images: {'mild': 18, 'moderate': 16, 'severe': 9}
+
+----------------------------------------------------------------------
+  HEADLINE
+----------------------------------------------------------------------
+  macro F1               : 0.5636
+  exact-grade accuracy   : 0.5581  (24/43)
+  within-one-grade       : 0.9535  <- ordered scale, so this matters
+  random baseline        : 0.3333 (three grades)
+
+  'Within one grade' counts moderate-called-severe as near-correct.
+  The serious error is a SEVERE leaf called MILD -- the grower then
+  under-treats a badly infected plant. That count is below.
+
+----------------------------------------------------------------------
+  PER-GRADE METRICS
+----------------------------------------------------------------------
+              precision    recall  f1-score   support
+
+        mild     0.6250    0.5556    0.5882        18
+    moderate     0.4737    0.5625    0.5143        16
+      severe     0.6250    0.5556    0.5882         9
+
+    accuracy                         0.5581        43
+   macro avg     0.5746    0.5579    0.5636        43
+weighted avg     0.5687    0.5581    0.5607        43
+
+  Confusion matrix (rows = true, columns = predicted)
+                    mild  moderate    severe   total
+  mild                10         7         1      18
+  moderate             5         9         2      16
+  severe               1         3         5       9
+
+  Dangerous errors:
+    SEVERE called MILD   : 1 of 9   <- grower under-treats
+    MILD called SEVERE   : 1 of 18   (over-treats, wasteful not harmful)
+
+----------------------------------------------------------------------
+  BEYOND ACCURACY (ordered grades)
+----------------------------------------------------------------------
+  majority-class baseline : exact accuracy 0.4186, macro F1 0.1967
+  quadratic weighted kappa: 0.4754   the standard score for graded scales
+  mean grade error        : 0.4884   grades out, on average
+  Cohen's kappa           : 0.3105   unweighted, every error equal
+  MCC                     : 0.3124
+  balanced accuracy       : 0.5579
+  calibration error (ECE) : 0.1780
+  95% range, exact        : 0.419 to 0.698
+  95% range, within one   : 0.884 to 1.000
+  95% range, QWK          : 0.192 to 0.692

@@ -319,3 +319,39 @@ python train.py --smoke-test
 One epoch on a few batches. It proves the code runs end to end and writes a
 model file, so a typo cannot waste an hour of GPU time. The metrics from a
 smoke test are meaningless — that is expected.
+
+## 6. Expert review of contributed photos
+
+A contributed photo counts toward adding a new disease only after an orchid
+expert approves it, and a disease needs 30 approved photos from at least 3
+different accounts before it can be trained (near-identical photos count once).
+The rules live in `backend/app/services/disease_contributions.py`; the tests in
+`backend/tests/test_disease_contributions.py` pin them.
+
+**Making someone an expert** — on the server, not in the app:
+
+1. A farm admin creates their account in the app's Team screen (any role;
+   *viewer* is enough, and gives no power over the farm).
+2. Put their sign-in email, or their account uid, in **either**
+   - `ml-models/disease_detection/data/experts.txt`, one per line
+     (`#` starts a comment), or
+   - the `DISEASE_EXPERTS` environment variable, comma-separated.
+
+The list is re-read on every request, so no restart is needed. `experts.txt`
+is git-ignored: it holds real people's emails and this repository is public.
+
+**Where the evidence is:**
+
+| File (under `data/pending/`) | What it holds |
+|---|---|
+| `contributions.csv` | one row per photo: who sent it, its status, the expert's labels |
+| `review_log.jsonl` | every decision — who, when, the labels before and after; only ever appended to |
+| `<disease>/<id>.jpg` | the photos, stored as originals |
+
+**Photo checks** (too small, too dark, washed out, blurred, exact or
+near-identical copy) use limits measured on the 667 dataset photos:
+
+```bash
+cd tools
+../.venv/Scripts/python.exe measure_photo_checks.py   # writes results/photo_checks/
+```

@@ -24,10 +24,9 @@ def _fresh():
     dh.reset()
 
 
-def rec(i, t=27.0, h=75.0, light=-999, soil=-999):
+def rec(i, t=27.0, h=75.0, light=-999):
     """One reading, i minutes after T0. Defaults: a DHT22-only calibration board."""
-    return {"timestamp": T0 + i * MIN, "temperature": t, "humidity": h,
-            "light": light, "sampleMoisture": soil}
+    return {"timestamp": T0 + i * MIN, "temperature": t, "humidity": h, "light": light}
 
 
 def farm(latest, lifecycle=None, extra=None):
@@ -218,17 +217,24 @@ def test_a_calibrating_house_gets_sensor_checks_but_no_care_checks():
     readings = [rec(i, *jitter(i)) for i in range(4)] + [rec(i, -999, -999) for i in range(4, 10)]
     started = []
     for r in readings:
-        f = farm(r, "calibrating", {"tray": {"trayResponds": False}})
+        f = farm(r, "calibrating")
         f["H1"]["meta"]["masterMac"] = MASTER
         started += dh.check_farm(TENANT, f, r["timestamp"] + 30_000, [],
                                  master_queues={MASTER: _queue(-25)})
     assert [x["kind"] for x in started] == ["dht"]
 
 
-def test_a_tray_that_did_not_fill_is_said():
-    readings = [rec(i, *jitter(i)) for i in range(3)]
-    started = run(readings, extra={"tray": {"trayResponds": False}})
-    assert [x["kind"] for x in started] == ["tray-fill"]
+def test_the_retired_tray_probe_fields_raise_nothing():
+    """Boards on firmware <= 2.6 still send the tray probe's fields until they are
+    reflashed. The probe was removed on 10 Oct 2026: a probe that read and then
+    stopped must not become an alarm, and neither may an old tray state."""
+    readings = []
+    for i in range(40):
+        r = rec(i, *jitter(i))
+        r["sampleMoisture"] = 55.0 if i < 10 else -999
+        r["soilRaw"] = 1800 if i < 10 else 0
+        readings.append(r)
+    assert run(readings, extra={"tray": {"trayResponds": False}}) == []
 
 
 # ── the engine raises them through the existing alarm path ──────────────────

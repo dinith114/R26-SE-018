@@ -16,7 +16,6 @@ import {
   getDevices, getOverview, getModelInfo, setFarmLocation,
   intervalLabel, lastSeenLabel, signalLabel,
 } from '../services/careV2';
-import { pickHouseId } from '../services/wateringCheck';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
    /prediction and /history - which nothing else in the v2 app touches. They
@@ -29,10 +28,8 @@ import { pickHouseId } from '../services/wateringCheck';
    Everything here now comes from the same v2 API the rest of the app uses, so a
    status shown on this page is a status the hardware really has.
 
-   The probe calibration below is likewise the MEASURED pair from
-   sensor_node_validate.ino, not the datasheet numbers that used to be here. */
-const SOIL_DRY_ADC = 2600;   // measured in open air, 23 Aug 2026
-const SOIL_WET_ADC = 1100;   // measured with the blade in water to the printed line
+   There is no tray probe: it was removed on 10 Oct 2026. The grower sets how
+   long a tray fill runs (a section's Pour lengths) and the models decide when. */
 
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 const Divider = () => <View style={s.divider} />;
@@ -103,10 +100,6 @@ export default function SettingsScreen({ navigation }) {
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
-  // The house "How watering times were checked" opens on: the one the node
-  // reports into, else the first real one (see wateringCheck.pickHouseId).
-  const [checkHouse, setCheckHouse] = useState(null);
-
   const [alerts, setAlerts] = useState({
     watering:      true,
     fertilizer:    true,
@@ -168,10 +161,6 @@ export default function SettingsScreen({ navigation }) {
         });
         setSection(sec);
         setFarm(ov.farm || null);
-
-        const hid = pickHouseId(ov, dev);
-        const h = (ov.houses || []).find((x) => x && x.houseId === hid);
-        setCheckHouse(hid ? { houseId: hid, houseName: h?.meta?.name || null } : null);
       } catch (_) {
         if (alive) setOnline(false);
       }
@@ -200,23 +189,13 @@ export default function SettingsScreen({ navigation }) {
   const isESP32Live  = !!device?.online;
   const isDHT22OK    = !!latest && !bad(latest.temperature) && !bad(latest.humidity);
   const isBH1750OK   = !!latest && !bad(latest.light) && latest.sensorFault !== true;
-  const isMoisOK     = !!latest && latest.soilRaw != null;
   const isFirebaseOK = online === true;
   const mlOK         = !!models;
 
   const sig          = signalLabel(device?.rssi);
   const lastSeenStr  = section?.freshness?.label ?? (device ? lastSeenLabel(device.lastSeenSec) : '-');
   const intervalStr  = device ? intervalLabel(device.readIntervalMs) : '-';
-  const rawStr       = latest?.soilRaw != null ? String(latest.soilRaw) : '-';
 
-  const wm = models?.watering?.metrics;
-  const tm = models?.tray?.metrics;
-  const waterStr = wm
-    ? 'MAE ' + Math.round(wm.hour?.mae_minutes ?? 0) + ' min · R² ' + (wm.hour?.r2 ?? 0).toFixed(3)
-    : '…';
-  const trayStr = tm
-    ? 'MAE ' + (tm.mae_seconds ?? tm.mae ?? 0).toFixed(2) + ' s'
-    : '…';
   const planStr = section?.plan?.waterTime
     ? section.plan.waterTime + ' for ' + section.plan.durationSec + 's'
     : 'not planned yet';
@@ -255,7 +234,6 @@ export default function SettingsScreen({ navigation }) {
               { label: 'Temp',  value: isDHT22OK  ? `${latest.temperature.toFixed(1)}°` : '-',  color: COLORS.temperature },
               { label: 'Humid', value: isDHT22OK  ? `${latest.humidity.toFixed(0)}%`     : '-',  color: COLORS.humidity    },
               { label: 'Light', value: isBH1750OK ? `${latest.light.toFixed(0)} lx`      : 'N/A', color: COLORS.light      },
-              { label: 'Tray',  value: latest?.sampleMoisture != null ? `${latest.sampleMoisture.toFixed(0)}%` : '-', color: COLORS.soil },
             ].map((item, i, arr) => (
               <React.Fragment key={i}>
                 <View style={s.snapCell}>
@@ -307,8 +285,6 @@ export default function SettingsScreen({ navigation }) {
             <Divider />
             <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<SensorBadge ok={isBH1750OK} live={isESP32Live} />} />
             <Divider />
-            <Row icon="leaf-outline"         iconColor={COLORS.soil}        label="Tray Water Probe"      right={<SensorBadge ok={isMoisOK} live={isESP32Live} />} />
-            <Divider />
             <Row icon="wifi-outline"         iconColor={COLORS.info}        label="Wi-Fi Signal"          value={sig.label} hint={device?.ip || undefined} />
             <Divider />
             <Row icon="time-outline"         iconColor={COLORS.textSecondary} label="Last Reading"        value={lastSeenStr} />
@@ -325,44 +301,6 @@ export default function SettingsScreen({ navigation }) {
             <Row icon="sparkles-outline"  iconColor={COLORS.warning} label="ML Backend"       right={<StatusBadge ok={mlOK}         label={mlOK         ? 'Running' : 'No data'} />} />
             <Divider />
             <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
-            <Divider />
-            {/* Tappable: "how do we know these times are right" is the first
-                question this number raises. Opens without a house when none is
-                known yet; that screen then says the indoor check needs one. */}
-            <Row icon="layers-outline"    iconColor={COLORS.info}    label="Watering Model"
-                 hint="Random Forest regressor · decides the hour from dawn conditions"
-                 onPress={() => navigation.navigate('WateringCheck', checkHouse || {})}
-                 right={(
-                   <View style={s.rowRight}>
-                     <Text style={s.rowValue}>{waterStr}</Text>
-                     <Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />
-                   </View>
-                 )} />
-            <Divider />
-            <Row icon="water-outline"     iconColor={COLORS.humidity} label="Tray Model"      value={trayStr}
-                 hint="Random Forest regressor · valve seconds" />
-            <Divider />
-            <Row icon="flask-outline"     iconColor={COLORS.fertilizer} label="Fertilizer" value="Encoded schedule"
-                 hint="A deterministic rule, not a learned model — reported honestly" />
-          </View>
-
-          {/* ── SENSOR CALIBRATION ───────────────────────────────────── */}
-          <Text style={s.sectionLabel}>SENSOR CALIBRATION</Text>
-          <View style={[s.card, SHADOW.sm]}>
-            <Row icon="options-outline" iconColor={COLORS.textSecondary} label="Probe Dry Value (ADC)" value={String(SOIL_DRY_ADC)} hint="Measured in open air" />
-            <Divider />
-            <Row icon="water"           iconColor={COLORS.humidity}      label="Probe Wet Value (ADC)" value={String(SOIL_WET_ADC)} hint="Blade in water to the printed line" />
-            <Divider />
-            <Row icon="pulse"           iconColor={COLORS.soil}          label="Current Raw Reading"   value={rawStr} hint="Falls as the tray fills" />
-            <Divider />
-            <Row
-              icon="construct-outline"
-              iconColor={COLORS.warning}
-              label="Recalibrate Sensor"
-              hint="Tap to start calibration wizard"
-              onPress={() => Alert.alert('Calibration', 'Point the sensor at dry air, then wet roots as prompted.\n\nCalibration wizard coming soon.')}
-              right={<Ionicons name="chevron-forward" size={16} color={COLORS.textTertiary} />}
-            />
           </View>
 
           {/* ── ALERTS ───────────────────────────────────────────────── */}

@@ -27,10 +27,9 @@
  *      GND      ------->  GND
  *      (the red breakout has its own pull-up resistor - none needed)
  *
- *    Soil probe          ESP32     (capacitive v1.2)
- *      AOUT     ------->  D34     (GPIO34 - ADC1, input-only)
- *      VCC      ------->  3V3     <-- 3V3, NOT VIN. Powered at 5 V this probe
- *      GND      ------->  GND         puts >3.3 V on AOUT and damages the ADC.
+ *    D34 is unused. A capacitive probe sat there until 2.7, reporting the
+ *    humidity tray's water level; it was removed on 10 Oct 2026 because the
+ *    grower sets the tray fill in the app. Nothing needs to be tied to it.
  *
  *    BH1750 module       ESP32
  *      VCC      ------->  3V3
@@ -67,7 +66,7 @@
 
 /* Reported in the device record, and printed in the boot banner so the serial
    monitor alone shows which build is on the board. */
-#define FW_VERSION "validation-2.5"
+#define FW_VERSION "validation-2.8"
 
 /* ═══════════ QUIET_NODE: battery boards that only record ═══════════
    0 (the default) changes nothing. Set it to 1 for a board that runs from a
@@ -131,7 +130,6 @@ const char* WIFI_PASSWORD = "EF4282A7";
 // short enough that a farmer who reconnects a wire sees it return while still
 // standing there, and long enough to cost a healthy node nothing.
 #define LIGHT_RETRY_MS 300000UL
-#define SOIL_PIN  34          // GPIO34: ADC1, input-only, safe for an analogue sensor
 
 /* Relay outputs.
    The 4-channel SONGLE module is opto-isolated and ACTIVE LOW: pulling an IN
@@ -458,6 +456,7 @@ void reduceCurrentDraw() {
    and Preferences all ship with the core, and one less dependency is one less
    thing to break at 2am before a demo. */
 #include <Preferences.h>
+#include <esp_mac.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 
@@ -467,11 +466,27 @@ DNSServer  dnsServer;
 bool  portalRunning = false;
 String provSsid, provPass;
 
+/* How long the setup hotspot is left alone once it is up. The farmer has to
+   notice the node needs Wi-Fi, find the phone's Wi-Fi settings, join
+   OrchidNode-XXXX and type a password: minutes, not seconds. Until 2.6 the
+   next reading cycle (60 s on a QUIET board) called connectWiFi(), whose
+   WiFi.mode(WIFI_STA) switched the hotspot off - and portalRunning stayed true,
+   so it never came back. A forced (BOOT-held) portal was switched off even
+   sooner, by the connectWiFi() straight after it in setup(). Found testing the
+   farm move on the bench, 9 Oct 2026. */
+const uint32_t PORTAL_HOLD_MS = 10UL * 60UL * 1000UL;
+uint32_t portalStartedAt = 0;
+
 static String apName() {
   // Last two bytes of the MAC make each node distinguishable on a bench where
   // four identical boxes are advertising at once.
+  // Read from the chip's eFuse, not WiFi.macAddress(): startPortal() calls this
+  // with the radio just switched off, when the Wi-Fi driver reports
+  // 00:00:00:00:00:00 - every node's hotspot came up as "OrchidNode-0000"
+  // while the serial log, printed a moment later, named the right one.
+  // Seen on the bench, 9 Oct 2026.
   uint8_t m[6];
-  WiFi.macAddress(m);
+  esp_read_mac(m, ESP_MAC_WIFI_STA);
   char buf[24];
   snprintf(buf, sizeof(buf), "OrchidNode-%02X%02X", m[4], m[5]);
   return String(buf);
@@ -606,9 +621,27 @@ static String portalPage(const String& msg) {
 void startPortal() {
   WiFi.disconnect(true, true);
   delay(200);
+  /* From a clean radio. connectWiFi() leaves the deepest modem sleep and an
+     11 dBm transmitter on, and the station half-way through a failed join;
+     on the bench (9 Oct 2026) the hotspot then never appeared at all - another
+     ESP32 a metre away scanned 6-16 networks every 18 s for 5 minutes and
+     never saw OrchidNode-5F10, while the node logged "SETUP MODE". softAP()'s
+     result was not checked, so nothing said so. */
+  WiFi.mode(WIFI_OFF);
+  delay(300);
   WiFi.mode(WIFI_AP_STA);                   // AP for the phone, STA so we can scan
-  WiFi.softAP(apName().c_str());            // open network: the farmer has no password yet
+  WiFi.setSleep(false);                     // beacons must go out on time
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);      // the phone may be across the shade house
+  bool apUp = WiFi.softAP(apName().c_str(), nullptr, 1);   // open network, channel 1
+  if (!apUp) {                              // one more try from scratch
+    WiFi.mode(WIFI_OFF);
+    delay(500);
+    WiFi.mode(WIFI_AP);
+    apUp = WiFi.softAP(apName().c_str(), nullptr, 1);
+  }
   delay(400);
+  Serial.printf("[PROV] hotspot %s: mode=%d ip=%s channel=%d\n", apUp ? "UP" : "FAILED TO START",
+                (int)WiFi.getMode(), WiFi.softAPIP().toString().c_str(), WiFi.channel());
 
   dnsServer.start(53, "*", WiFi.softAPIP());  // any hostname resolves here -> captive portal
 
@@ -635,6 +668,7 @@ void startPortal() {
   portalServer.begin();
 
   portalRunning = true;
+  portalStartedAt = millis();
   Serial.printf("\n[PROV] ===== SETUP MODE =====\n");
   Serial.printf("[PROV] join WiFi network '%s' on your phone\n", apName().c_str());
   Serial.printf("[PROV] then open http://192.168.4.1\n\n");
@@ -646,6 +680,41 @@ void servePortal() {
   portalServer.handleClient();
 }
 
+void stopPortal() {
+  portalServer.stop();
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  portalRunning = false;
+  Serial.println("[PROV] network is back - setup hotspot closed");
+}
+
+/* While the hotspot is up: leave it alone for PORTAL_HOLD_MS, then try the
+   saved network once in the background WITHOUT taking the hotspot down (a
+   router that was only rebooting brings the node back here). The portal page
+   keeps being served through the attempt. */
+void retryWiFiUnderPortal() {
+  if (millis() - portalStartedAt < PORTAL_HOLD_MS) return;
+  loadCreds();
+  Serial.printf("\n[WIFI] hotspot still up; retrying %s in the background", provSsid.c_str());
+  WiFi.begin(provSsid.c_str(), provPass.c_str());
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(100);
+    servePortal();
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    confirmCreds();
+    stopPortal();
+    WiFi.mode(WIFI_STA);
+    Serial.printf("[WIFI] connected, ip=%s rssi=%d dBm\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  } else {
+    WiFi.disconnect(false, false);          // stop the station only; the hotspot stays
+    Serial.println(" - not yet, hotspot kept");
+    portalStartedAt = millis();             // a full window again before the next try
+  }
+}
+
 void connectWiFi() {
   /* CONSECUTIVE failed joins. It lived inside the failure branch and was never
      reset, so it counted every failure since boot: three short router drops
@@ -654,6 +723,8 @@ void connectWiFi() {
      the clock, and with it everything store-and-forward could have kept.
      Found in review, 8 Oct 2026. */
   static uint8_t failures = 0;
+  // The hotspot must not be switched off under a farmer typing a password.
+  if (portalRunning) { retryWiFiUnderPortal(); return; }
   loadCreds();
   Serial.printf("\n[WIFI] joining %s", provSsid.c_str());
   // Tear the previous attempt down first. Calling begin() while the station is
@@ -1353,43 +1424,6 @@ void takeReading() {
   float rh = dht.readHumidity();
   float lx = lightOK ? lightMeter.readLightLevel() : SENTINEL;
 
-  // Capacitive probe: raw ADC counts fall as moisture rises.
-  //
-  // These are MEASURED on this physical probe, 23 Aug 2026, not datasheet
-  // guesses: 2596-2607 counts held in open air, 1095-1103 with the blade in
-  // water to the printed line. Both ends repeated within ~11 counts, and the
-  // 1500-count span between them is the usable range.
-  //
-  // On a Vanda there is no growing medium to measure, so this probe sits in the
-  // humidity tray and reports its water level: 0% is an empty tray, 100% is
-  // full. A different probe, or a move to a different medium, needs these two
-  // numbers re-measured the same way.
-  const int SOIL_DRY = 2600, SOIL_WET = 1100;
-  int raw = analogRead(SOIL_PIN);
-
-  /* A count outside the calibrated span is a DISCONNECTED PROBE, not a very wet
-     or very dry one, and must not be clamped into a confident answer.
-
-     Clamping is what this did, and it turned a floating ADC pin into a
-     measurement: raw 3015 - drier than open air, which is physically impossible
-     - clamped to 0% "empty tray", and raw 111 - wetter than water - clamped to
-     100% "full tray". Both were sent with sensorFault false and both were
-     believed. A false empty makes the system fill a tray it cannot see; a false
-     full stops it filling one that needs it. -999 is safe because the backend
-     already knows to distrust it; a clamped 0 or 100 is not.
-
-     The margin lets a healthy probe drift past either end without being called
-     faulty. */
-  const int SOIL_MARGIN = 150;
-  bool soilOK = (raw >= SOIL_WET - SOIL_MARGIN) && (raw <= SOIL_DRY + SOIL_MARGIN);
-  float soil = 100.0 * (SOIL_DRY - raw) / (float)(SOIL_DRY - SOIL_WET);
-  if (soil < 0) soil = 0; if (soil > 100) soil = 100;
-  if (!soilOK) {
-    Serial.printf("[SOIL] raw %d outside %d-%d - probe disconnected\n",
-                  raw, SOIL_WET - SOIL_MARGIN, SOIL_DRY + SOIL_MARGIN);
-    soil = SENTINEL;
-  }
-
   bool tempOK  = !isnan(t) && !isnan(rh);
   bool lightIsOK = lightOK && lx >= 0;
   if (!tempOK) { t = SENTINEL; rh = SENTINEL; }
@@ -1404,19 +1438,14 @@ void takeReading() {
   d["light"]        = lightIsOK ? roundf(lx) : SENTINEL;
   d["vpd"]          = tempOK ? roundf(vpdKpa(t, rh) * 1000) / 1000.0 : SENTINEL;
   d["timestamp"]    = ms;
-  d["sampleMoisture"] = roundf(soil * 10) / 10.0;
-  d["soilRaw"]        = raw;
-  d["sensorFault"]    = (!tempOK || !lightIsOK);
+  d["sensorFault"]  = (!tempOK || !lightIsOK);
   d["node"]         = "validation";
 
   String body;
   serializeJson(d, body);
 
-  // soilRaw is printed so the probe can be calibrated: note the value in open
-  // air (dry end) and in a glass of water (wet end), then correct SOIL_DRY and
-  // SOIL_WET above. Until then the percentage is indicative only.
-  Serial.printf("[READ] %.1fC  %.1f%%  %.0f lux  soil=%.0f%% (raw %d)  vpd=%.3f%s\n",
-                t, rh, lx, soil, raw, tempOK ? vpdKpa(t, rh) : 0.0,
+  Serial.printf("[READ] %.1fC  %.1f%%  %.0f lux  vpd=%.3f%s\n",
+                t, rh, lx, tempOK ? vpdKpa(t, rh) : 0.0,
                 (!tempOK || !lightIsOK) ? "   <-- SENSOR FAULT" : "");
 
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
@@ -1610,6 +1639,11 @@ void loop() {
      anybody else. Harmless until a master is named for the house - the queue
      path is keyed by this board's MAC and simply reads back empty. */
   if (!firstCycle) masterPollQueue();
+
+  /* Then the offline fallback (queue_fallback.ino): while online, keep the
+     engine's plan and beat; online or not, water from that plan if the cloud
+     has gone quiet past a section's planned minute. */
+  if (!firstCycle) { fallbackSync(); fallbackTick(); }
 #else
   (void)lastCmdAt;   // a QUIET board never polls for commands - see QUIET_NODE
 #endif

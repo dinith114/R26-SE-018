@@ -332,12 +332,15 @@ def set_read_interval(mac: str, body: IntervalBody, ctx: AuthContext = Depends(r
     if not _fb_put(f"/devices/{mac}/readIntervalMs.json", clamped):
         raise HTTPException(502, "Could not write the interval to Firebase.")
 
-    secs = clamped / 1000.0
-    if secs < 60:
-        pretty = f"{secs:.0f} seconds"
-    else:
-        mins = round(secs / 60)
-        pretty = "1 minute" if mins == 1 else f"{mins} minutes"
+    # Exact, now the app allows any value: 90 s used to read "2 minutes".
+    total = round(clamped / 1000)
+    mins, secs = divmod(total, 60)
+    parts = []
+    if mins:
+        parts.append("1 minute" if mins == 1 else f"{mins} minutes")
+    if secs or not mins:
+        parts.append("1 second" if secs == 1 else f"{secs} seconds")
+    pretty = " ".join(parts)
     return {"status": "success", "mac": mac,
             "readIntervalMs": clamped,
             "requestedMs": ms,
