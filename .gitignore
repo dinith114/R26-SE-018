@@ -212,6 +212,7 @@ ml-models/hybrid_pollination/results/segmentation_check/
 # unaffected, and the Peradeniya guide stays because the knowledge base cites it.
 /*.docx
 /*.pdf
+/*.pptx
 !/Peradeniya_Collection_Guide.pdf
 
 # Word's lock files

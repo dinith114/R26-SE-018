@@ -911,10 +911,17 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.border,
   },
   statsRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACE.lg },
-  statCell: { flex: 1, alignItems: 'center' },
-  statDivider: { width: 1, height: 28, backgroundColor: COLORS.borderLight },
+  /* `alignItems: center` alone let each label size itself to its own content
+     and then clip against the next cell - on a 426px screen "Logged" rendered
+     as "Logge" and "In progress" as "In". The cell now fills its share of the
+     row and the label is centred inside it with room to wrap. */
+  statCell: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
+  statDivider: { width: 1, height: 30, backgroundColor: COLORS.borderLight },
   statValue: { fontSize: FONT.xl, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  statLabel: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2 },
+  statLabel: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2,
+    textAlign: 'center', alignSelf: 'stretch',
+  },
   gatesHead: {
     color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '700',
     marginBottom: SPACE.sm,
