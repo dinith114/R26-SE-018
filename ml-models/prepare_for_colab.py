@@ -16,6 +16,7 @@ Usage:
 """
 import argparse
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from PIL import Image
@@ -53,29 +54,44 @@ def _collect_files(src_dir: Path):
             print(f'    - {d}')
 
 
+def _process_one(job):
+    src_path, dst_path = job
+    try:
+        if src_path.suffix.lower() in IMAGE_EXTENSIONS:
+            with Image.open(src_path) as img:
+                # Let libjpeg decode at 1/2-1/8 scale directly - far faster than
+                # decoding 4000x3000 and then throwing almost all of it away.
+                img.draft('RGB', (TARGET_SIZE[0] * 2, TARGET_SIZE[1] * 2))
+                img.convert('RGB').resize(TARGET_SIZE).save(
+                    dst_path.with_suffix('.jpg'), format='JPEG', quality=JPEG_QUALITY)
+        else:
+            shutil.copy2(src_path, dst_path)
+    except (OSError, FileNotFoundError) as e:
+        return src_path, e
+    return src_path, None
+
+
 def resize_tree(src_dir: Path, dst_dir: Path) -> int:
     dst_dir.mkdir(parents=True, exist_ok=True)
     count = 0
     errors = []
 
+    jobs = []
     for src_path in _collect_files(src_dir):
-        rel = src_path.relative_to(src_dir)
-        dst_path = dst_dir / rel
+        dst_path = dst_dir / src_path.relative_to(src_dir)
         dst_path.parent.mkdir(parents=True, exist_ok=True)
+        jobs.append((src_path, dst_path))
 
-        try:
-            if src_path.suffix.lower() in IMAGE_EXTENSIONS:
-                img = Image.open(src_path).convert('RGB').resize(TARGET_SIZE)
-                img.save(dst_path.with_suffix('.jpg'), format='JPEG', quality=JPEG_QUALITY)
-            else:
-                shutil.copy2(src_path, dst_path)
-        except (OSError, FileNotFoundError) as e:
-            errors.append((src_path, e))
-            continue
-
-        count += 1
-        if count % 2000 == 0:
-            print(f'  ...{count} files processed', flush=True)
+    # Full-res decoding is CPU-bound (~4 images/s on one core), so a 60k-photo
+    # dataset took hours serially; fan it out across every core.
+    with ProcessPoolExecutor() as pool:
+        for src_path, err in pool.map(_process_one, jobs, chunksize=64):
+            if err is not None:
+                errors.append((src_path, err))
+                continue
+            count += 1
+            if count % 2000 == 0:
+                print(f'  ...{count} files processed', flush=True)
 
     if errors:
         print(f'  Skipped {len(errors)} file(s) that could not be read:')
