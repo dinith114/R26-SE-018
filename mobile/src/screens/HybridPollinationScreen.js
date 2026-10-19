@@ -20,18 +20,9 @@ const HybridPollinationScreen = ({ navigation }) => {
 
   // ── State ──────────────────────────────────
   const [selectedImage, setSelectedImage] = useState(null);
-  const [traits, setTraits] = useState({
-    leaf_condition: null,
-    plant_strength: null,
-    disease_visible: null,
-    flower_condition: null,
-  });
   const [result, setResult] = useState(null);
   // Set when the input gate refuses the photograph as not an orchid.
   const [rejection, setRejection] = useState(null);
-  // Corrections start folded: the photograph answers all four traits,
-  // so showing empty inputs first is what made the system look input-driven.
-  const [showCorrections, setShowCorrections] = useState(false);
   /* The leaf close-up is optional and folded away by default, for the same
      reason the corrections are: an open card the size of the main photo one
      reads as a second required step. */
@@ -51,14 +42,7 @@ const HybridPollinationScreen = ({ navigation }) => {
   const [guidanceData, setGuidanceData] = useState(null);
   const [activeTab, setActiveTab] = useState('assess'); // 'assess' | 'cross' | 'varieties'
 
-  // ── Trait Options ──────────────────────────
-  const traitOptions = {
-    leaf_condition: ['healthy', 'moderate', 'weak'],
-    plant_strength: ['strong', 'moderate', 'weak'],
-    disease_visible: ['no', 'yes'],
-    flower_condition: ['good', 'moderate', 'weak', 'unknown'],
-  };
-
+  // ── Trait Display Names ──────────────
   const traitLabels = {
     leaf_condition: 'Leaf Condition',
     plant_strength: 'Plant Strength',
@@ -91,12 +75,6 @@ const HybridPollinationScreen = ({ navigation }) => {
       setSelectedImage(pickerResult.assets[0].uri);
       setResult(null);
       setRejection(null);
-      setTraits({
-        leaf_condition: null,
-        plant_strength: null,
-        disease_visible: null,
-        flower_condition: null,
-      });
     }
   };
 
@@ -170,12 +148,6 @@ const HybridPollinationScreen = ({ navigation }) => {
       setSelectedImage(pickerResult.assets[0].uri);
       setResult(null);
       setRejection(null);
-      setTraits({
-        leaf_condition: null,
-        plant_strength: null,
-        disease_visible: null,
-        flower_condition: null,
-      });
     }
   };
 
@@ -191,7 +163,7 @@ const HybridPollinationScreen = ({ navigation }) => {
     setRejection(null);
 
     try {
-      const response = await assessSuitability(selectedImage, traits, closeupImage);
+      const response = await assessSuitability(selectedImage, {}, closeupImage);
       setResult(response);
 
       // Auto-fetch guidance
@@ -351,7 +323,7 @@ const HybridPollinationScreen = ({ navigation }) => {
           span 1-3 px at that distance. Component 1's model is trained on
           leaves, so this is the image that actually reaches it. Optional
           because the rest of the assessment works without it. */}
-      {/* Folded away, like the corrections below it.
+      {/* Folded away, because it is optional.
           It has to stay - disease measured AUC 0.51 from a whole-plant frame,
           so without this image the disease half of the reading is not
           evidence. But it is optional, and an open photo card the size of the
@@ -412,60 +384,13 @@ const HybridPollinationScreen = ({ navigation }) => {
         </>
       )}
 
-      {/* Collapsed by default, and that is the point.
-          The review asked whether user input was necessary. It is not - all
-          four traits are read from the photograph. Keeping the fields visible
-          and open invited the grower to fill them in, which is what made the
-          system look input-driven. Kept but folded away: available to whoever
-          disagrees with a reading, invisible to everyone else. */}
-      <TouchableOpacity
-        style={styles.correctionsToggle}
-        onPress={() => setShowCorrections((v) => !v)}
-        activeOpacity={0.7}
-      >
-        <Ionicons
-          name={showCorrections ? 'chevron-down' : 'chevron-forward'}
-          size={15}
-          color={COLORS.textSecondary}
-        />
-        <Text style={styles.correctionsToggleText}>
-          Disagree with a reading? Correct it
-        </Text>
-        <Text style={styles.correctionsOptional}>optional</Text>
-      </TouchableOpacity>
-
-      {showCorrections && (
-      <View style={[styles.traitsCard, SHADOW.sm]}>
-        {Object.entries(traitOptions).map(([key, options]) => (
-          <View key={key} style={styles.traitRow}>
-            <View style={styles.traitLabelRow}>
-              <Ionicons name={traitIcons[key]} size={14} color={COLORS.textSecondary} />
-              <Text style={styles.traitLabel}>{traitLabels[key]}</Text>
-            </View>
-            <View style={styles.traitChips}>
-              {options.map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  style={[
-                    styles.traitChip,
-                    traits[key] === opt && styles.traitChipActive
-                  ]}
-                  onPress={() => setTraits(prev => ({
-                    ...prev,
-                    [key]: prev[key] === opt ? null : opt
-                  }))}
-                >
-                  <Text style={[
-                    styles.traitChipText,
-                    traits[key] === opt && styles.traitChipTextActive
-                  ]}>{opt}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
-      </View>
-      )}
+      {/* The trait input card used to sit here.
+          Progress Presentation 1 asked the question that removed it: if you
+          upload an image to get a result, why does the system need user
+          input? It does not. All four traits are read from the photograph,
+          and a weak reading now holds the verdict at Not Suitable on its own,
+          so there is nothing the grower has to type for the assessment to
+          reach the right answer. */}
 
       {/* Assess Button */}
       <TouchableOpacity
@@ -498,15 +423,6 @@ const HybridPollinationScreen = ({ navigation }) => {
 
           <Text style={styles.resultRec}>{rejection.message}</Text>
 
-          {rejection.check && rejection.check.vegetation != null && (
-            <Text style={styles.rejectDetail}>
-              Plant tissue in frame: {(rejection.check.vegetation * 100).toFixed(1)}%
-              {'  ·  '}novelty {rejection.check.distance} (limit {rejection.check.threshold})
-              {rejection.check.orchid_probability != null
-                ? `  ·  orchid likelihood ${(rejection.check.orchid_probability * 100).toFixed(0)}%`
-                : ''}
-            </Text>
-          )}
 
           <Text style={styles.rejectHint}>
             Photograph one Vanda plant, filling most of the frame, in daylight.
@@ -523,27 +439,71 @@ const HybridPollinationScreen = ({ navigation }) => {
               <Text style={[styles.resultLabel, { color: getSuitabilityColor(result.suitability) }]}>
                 {result.suitability}
               </Text>
+              {/* Two different numbers used to appear here under names that
+                  looked like the same thing: "Confidence 49.2%" in the header
+                  and "Suitable 98%" on the bar below it. 98 is what the model
+                  scored; 49 is what is left after the cross-checks cut it. A
+                  reader seeing both could only conclude one was wrong, and
+                  reasonably read 49% as "under half, so not suitable". */}
+              {/* No percentage when the verdict was vetoed. `confidence` is
+                  then the classifier's score for the label that was
+                  OVERRIDDEN, so printing it beside the new headline would be
+                  the same mismatch in a new place. The veto is a rule, not a
+                  probability, and the box below says which rule. */}
               <Text style={styles.resultConf}>
-                Confidence: {(result.confidence * 100).toFixed(1)}%
+                {result.vetoed_by
+                  ? 'Held by image analysis'
+                  : result.confidence_reduced_because?.length > 0
+                  ? 'Read with less certainty — see below'
+                  : 'Read clearly from your photo'}
               </Text>
             </View>
           </View>
 
-          {/* Probability Bars */}
-          <View style={styles.probSection}>
-            {result.probabilities && Object.entries(result.probabilities).map(([cls, prob]) => (
-              <View key={cls} style={styles.probRow}>
-                <Text style={styles.probLabel}>{cls}</Text>
-                <View style={styles.probBarBg}>
-                  <View style={[styles.probBar, {
-                    width: `${prob * 100}%`,
-                    backgroundColor: getSuitabilityColor(cls)
-                  }]} />
-                </View>
-                <Text style={styles.probVal}>{(prob * 100).toFixed(0)}%</Text>
+          {/* When image analysis overrode the classifier, say so plainly and
+              name the reason. The screen previously showed "weak" traits
+              beside a Suitable headline and left the grower to reconcile
+              them. */}
+          {result.vetoed_by ? (
+            <View style={styles.vetoBox}>
+              <Ionicons name="hand-left-outline" size={15} color={COLORS.danger} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.vetoTitle}>Held at Not Suitable</Text>
+                <Text style={styles.vetoText}>{result.vetoed_by}</Text>
               </View>
-            ))}
-          </View>
+            </View>
+          ) : result.confidence_reduced_because?.length > 0 ? (
+            <View style={styles.dampBox}>
+              <Ionicons name="alert-circle-outline" size={14} color={COLORS.warning} />
+              {/* Two percentages and the phrase "unlike the training set"
+                  used to sit here. The warning is worth keeping - this
+                  verdict IS less reliable and the grower should know - but
+                  the mechanism behind it is not theirs to carry, and a pair
+                  of numbers in one sentence only raises the question of which
+                  one describes the plant. Neither does. `model_score` and
+                  `confidence_reduced_because` are still in the API response
+                  for the evaluation chapter. */}
+              <Text style={styles.dampText}>
+                This photo is harder than usual to read. Take the verdict as a
+                guide and look at the plant yourself before acting on it.
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Probability Bars */}
+          {/* The three class-probability bars were here.
+              Removed, for the reason the grower gave: after a veto the bar
+              that filled furthest was still "Suitable", under a headline
+              reading Not Suitable. That is the contradiction this whole
+              change set out to remove, reappearing one row lower.
+
+              Fading the overruled bar was the first attempt and it was not
+              enough. The bars are the classifier's raw scores, and no reading
+              of them tells a grower anything they can act on - the plant is
+              either worth pollinating or it is not. The numbers are not lost:
+              `probabilities` and `model_score` are still in the API response
+              for the evaluation chapter, and the hold notice above states the
+              model's own score in words whenever a verdict was overridden. */}
 
           {/* Recommendation */}
           <Text style={styles.resultRec}>{result.recommendation}</Text>
@@ -568,7 +528,7 @@ const HybridPollinationScreen = ({ navigation }) => {
             {Object.values(result.trait_resolution.traits || {})
               .some((t) => t.source === 'user')
               ? 'Your values are marked. Tap any row for detail.'
-              : 'You typed nothing — all four came from the photo. Tap a row for detail.'}
+              : 'You typed nothing — every reading came from the photo. Tap a row for detail.'}
           </Text>
 
           {/* Two lines per trait, not five.
@@ -578,7 +538,18 @@ const HybridPollinationScreen = ({ navigation }) => {
               grower standing over the plant needs: they need to know whether
               to trust the reading. The number means something to an examiner,
               so it is kept, one tap away, rather than thrown out. */}
-          {Object.entries(result.trait_resolution.traits || {}).map(([key, t]) => {
+          {Object.entries(result.trait_resolution.traits || {})
+            /* flower_condition is not shown.
+               The bloom detector's recall on a whole-plant frame is 1% at the
+               shipped threshold (MIN_FLOWER_FRACTION, flower_analysis.py), so
+               on the photographs growers actually take it answers "none"
+               almost every time - including for a plant in full bloom. A row
+               that is wrong that often is worse than no row: it reads as the
+               system failing to see what the grower can plainly see. The
+               value is still measured and still goes to the model as a
+               feature; it is only withheld from the screen. */
+            .filter(([key]) => key !== 'flower_condition')
+            .map(([key, t]) => {
             const measured = t.source === 'measured';
             const known = t.value && t.value !== 'unknown';
             const tone = t.source === 'user'
@@ -602,14 +573,16 @@ const HybridPollinationScreen = ({ navigation }) => {
                   title: traitLabels[key] || key,
                   message: t.explanation || summary,
                   sections: [
-                    measured && {
-                      label: 'How sure the model is',
-                      text: `${(c * 100).toFixed(0)}% confident in this reading.`,
+                    measured && c < 0.7 && {
+                      label: 'How clear was it',
+                      text: c >= 0.4
+                        ? 'Readable, but not beyond doubt.'
+                        : 'Hard to read from this photo.',
                     },
                     t.needs_user_input && {
                       label: 'Worth confirming',
-                      text: 'Open "Disagree with a reading? Correct it" above the '
-                          + 'button to set this yourself.',
+                      text: 'This reading is too weak to rely on. Look at the '
+                          + 'plant itself before acting on the verdict.',
                     },
                   ].filter(Boolean),
                 })}
@@ -630,12 +603,11 @@ const HybridPollinationScreen = ({ navigation }) => {
             );
           })}
 
-          {result.trait_resolution.asked_for?.length > 0 && (
-            <Text style={styles.traitReadAsk}>
-              Still unknown: {result.trait_resolution.asked_for
-                .map((k) => traitLabels[k] || k).join(', ')}
-            </Text>
-          )}
+          {/* "Still unknown: Leaf Condition, Plant Strength" used to print
+              here. It restated what each row above already says in its own
+              second line, and listed traits that HAD been read - `asked_for`
+              means the reading was weak enough to be worth confirming, not
+              that nothing was found. Two different meanings under one word. */}
         </View>
       )}
 
@@ -945,15 +917,6 @@ const styles = StyleSheet.create({
   imageBtnText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '600' },
 
   // Traits
-  traitsCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.lg },
-  traitRow: { marginBottom: SPACE.md },
-  traitLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACE.xs },
-  traitLabel: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
-  traitChips: { flexDirection: 'row', gap: SPACE.xs, flexWrap: 'wrap' },
-  traitChip: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: RADIUS.full, backgroundColor: COLORS.bgCardAlt, borderWidth: 1, borderColor: COLORS.border },
-  traitChipActive: { backgroundColor: COLORS.primaryDim, borderColor: COLORS.primary },
-  traitChipText: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600', textTransform: 'capitalize' },
-  traitChipTextActive: { color: COLORS.primary },
 
   // Assess Button
   assessBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.sm, paddingVertical: SPACE.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, marginBottom: SPACE.xl },
@@ -975,7 +938,6 @@ const styles = StyleSheet.create({
   traitReadValue: { fontSize: FONT.sm, fontWeight: '800' },
   traitReadSource: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 3, fontVariant: ['tabular-nums'] },
   traitReadWhy: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 16, marginTop: 4 },
-  traitReadAsk: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 17, fontStyle: 'italic' },
   varietyIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: SPACE.md },
   varietyEmpty: { color: COLORS.textTertiary, fontSize: FONT.sm, fontStyle: 'italic', marginBottom: SPACE.md },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, marginBottom: SPACE.md },
@@ -984,18 +946,25 @@ const styles = StyleSheet.create({
   useBtn: { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: 6 },
   useBtnText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '600' },
   rejectCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.md, borderLeftWidth: 4, borderLeftColor: COLORS.danger },
-  rejectDetail: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
   rejectHint: { color: COLORS.textSecondary, fontSize: FONT.sm, marginTop: SPACE.sm, fontStyle: 'italic' },
   resultHeader: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md, marginBottom: SPACE.lg },
   resultHeaderText: { flex: 1 },
   resultLabel: { fontSize: FONT.xl, fontWeight: '800' },
   resultConf: { color: COLORS.textSecondary, fontSize: FONT.sm },
-  probSection: { marginBottom: SPACE.lg },
-  probRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACE.sm },
-  probLabel: { width: 90, color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
-  probBarBg: { flex: 1, height: 6, backgroundColor: COLORS.bgCardAlt, borderRadius: 3, marginHorizontal: SPACE.sm, overflow: 'hidden' },
-  probBar: { height: '100%', borderRadius: 3 },
-  probVal: { width: 36, color: COLORS.text, fontSize: FONT.sm, fontWeight: '700', textAlign: 'right' },
+  dampBox: {
+    flexDirection: 'row', gap: 6, alignItems: 'flex-start',
+    backgroundColor: COLORS.warningDim, borderRadius: RADIUS.sm,
+    padding: SPACE.md, marginBottom: SPACE.md,
+  },
+  dampText: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
+  vetoBox: {
+    flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start',
+    backgroundColor: COLORS.dangerDim, borderRadius: RADIUS.sm,
+    padding: SPACE.md, marginBottom: SPACE.md,
+    borderLeftWidth: 3, borderLeftColor: COLORS.danger,
+  },
+  vetoTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800', marginBottom: 2 },
+  vetoText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
   resultRec: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 20 },
 
   // Guidance

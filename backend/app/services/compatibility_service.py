@@ -64,7 +64,29 @@ class CompatibilityService:
         result = self.engine.assess(pod_parent, pollen_parent,
                                     pod_health=pod_health,
                                     pollen_health=pollen_health)
-        return result.to_dict()
+        out = result.to_dict()
+
+        # The grower's own attempts at THIS pairing, from the crossing logbook.
+        #
+        # The register holds 27 crosses, all of them successes, because nobody
+        # registers a cross that died - so it can state that a pairing is
+        # possible and can never state how often it works. The logbook is the
+        # other half: the same grower's attempts, failures included, which is
+        # the only place a real rate could come from.
+        #
+        # Imported here rather than at module load: the logbook is a separate
+        # service with its own storage, and a failure to read it must leave the
+        # compatibility verdict intact rather than taking the endpoint down.
+        try:
+            from app.services.cross_log_service import cross_log_service
+            out["your_history"] = cross_log_service.history_for(
+                pod_parent, pollen_parent
+            )
+        except Exception as e:
+            print(f"[WARN] logbook history unavailable: {e}")
+            out["your_history"] = {}
+
+        return out
 
     def rank(self, pod_parent: str, candidates: list,
              pod_health: dict = None) -> list:

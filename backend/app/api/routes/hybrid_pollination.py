@@ -296,10 +296,26 @@ async def list_known_parents():
 
     A name absent from this list can still be assessed — it simply falls back
     to genus-level evidence rather than an exact registered precedent.
+
+    `mine` carries the grower's OWN plant names from the crossing logbook, kept
+    in a separate list rather than merged. The two mean different things: a
+    register name identifies a variety the RHS has recorded, while a logbook
+    name is whatever is written on that grower's tag. Merging them would let
+    the app imply it recognised a plant it has only ever been told about.
     """
+    try:
+        from app.services.cross_log_service import cross_log_service
+        mine = sorted({(p.get("name") or "").strip()
+                       for p in cross_log_service.plants()
+                       if (p.get("name") or "").strip()})
+    except Exception as e:
+        print(f"[WARN] logbook names unavailable: {e}")
+        mine = []
+
     return {
         "status": "success",
         "parents": compatibility_service.known_parents(),
+        "mine": mine,
         "info": compatibility_service.info(),
     }
 

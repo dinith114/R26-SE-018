@@ -125,7 +125,27 @@ class InputCheckOut(BaseModel):
 class SuitabilityResponse(BaseModel):
     """Response from the suitability assessment endpoint."""
     suitability: str = Field(..., description="Predicted suitability label")
-    confidence: float = Field(..., description="Prediction confidence (0-1)")
+    confidence: float = Field(
+        ..., description="How far the verdict can be trusted (0-1). This is the "
+                         "model's own score AFTER any reduction for a "
+                         "disagreement with image analysis or an unfamiliar "
+                         "photograph, so it is not the same number as the "
+                         "winning class probability below."
+    )
+    model_score: Optional[float] = Field(
+        None, description="The model's raw probability for the predicted class, "
+                          "before any reduction. Equal to `confidence` when "
+                          "nothing reduced it."
+    )
+    vetoed_by: str = Field(
+        "", description="Set when image analysis overrode a Suitable verdict "
+                        "because it measured the plant as weak. Explains the "
+                        "override to the grower. Empty otherwise."
+    )
+    confidence_reduced_because: list = Field(
+        [], description="Why `confidence` is lower than `model_score`. Empty "
+                        "when the two are equal."
+    )
     probabilities: Dict[str, float] = Field(
         ..., description="Probability for each class"
     )
@@ -217,6 +237,16 @@ class CompatibilityResponse(BaseModel):
     )
     health_used: bool = Field(
         False, description="Whether a Level 1 assessment was factored in"
+    )
+    your_history: Dict = Field(
+        {}, description="What this grower's own crossing logbook records for "
+                        "this exact pairing - attempts, how many set a pod, "
+                        "how many failed, and a rate once there are enough "
+                        "completed attempts to support one. Empty when the "
+                        "pairing has never been logged. Direction is kept: a "
+                        "reverse attempt is counted separately because the pod "
+                        "parent carries the capsule and the pollen parent does "
+                        "not, so A x B and B x A are different crosses."
     )
     name_check: Dict = Field(
         {}, description="How each typed name was understood — keys 'pod' and "

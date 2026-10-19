@@ -1,0 +1,25 @@
+# What NOT to upload to an EAS build.
+#
+# When this file exists EAS uses it INSTEAD of .gitignore. That is the whole
+# reason it is here: src/config/secret.js is gitignored (the repository is
+# public and the first API key had to be rotated after being published), but
+# the app imports API_KEY from it at build time. Without this file the upload
+# skips it and the build fails with "Cannot find module './secret'".
+#
+# So: keep secret.js OUT of git, and IN the build.
+
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+.DS_Store
+
+# Local build output
+android/
+ios/
+
+# Nothing below the app itself needs to reach a build server
+../backend/
+../ml-models/
+../docs/

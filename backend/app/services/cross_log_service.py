@@ -637,6 +637,110 @@ class CrossLogService:
                     f"{MIN_N_FOR_RATE} completed attempts behind it.",
         }
 
+    def history_for(self, pod_name: str, pollen_name: str) -> dict:
+        """
+        What this grower's own logbook says about ONE pairing.
+
+        The register answers "has anyone ever made this cross?" and holds only
+        successes, so it has no denominator and can never yield a rate. This
+        answers the question the register cannot: "what happened when I tried
+        it?" - failures included. For a grower deciding whether to commit a
+        flowering plant for nine months, their own three attempts outrank a
+        stranger's single registration from 1963.
+
+        Direction is kept. A x B and B x A are different crosses - the pod
+        parent carries the capsule and the pollen parent donates - so a reverse
+        attempt is reported separately rather than pooled, which would quietly
+        double the apparent evidence.
+
+        Censoring follows `stats()`: a cross still running, or one the grower
+        lost track of, is in neither the numerator nor the denominator. Calling
+        an unfinished cross a failure is the mistake that would make every
+        number here wrong.
+        """
+        pod = (pod_name or "").strip().lower()
+        pol = (pollen_name or "").strip().lower()
+        empty = {"attempts": 0, "reversed_attempts": 0, "statement": "",
+                 "succeeded": 0, "failed": 0, "running": 0, "lost": 0,
+                 "rate": None, "min_n_for_rate": MIN_N_FOR_RATE,
+                 "furthest": "", "outcomes": []}
+        if not pod or not pol:
+            return empty
+
+        same, rev = [], []
+        for c in self._store["crosses"].values():
+            cp = (c.get("podName") or "").strip().lower()
+            cl = (c.get("pollenName") or "").strip().lower()
+            if cp == pod and cl == pol:
+                same.append(c)
+            elif cp == pol and cl == pod:
+                rev.append(c)
+
+        if not same and not rev:
+            return empty
+
+        # A cross counts as succeeded once it has set a pod and is still
+        # going, or has gone further. `pod_set` is the first gate that says
+        # anything about whether the two plants are compatible at all - and it
+        # is the only one reachable inside a season, so insisting on a bloom
+        # would report "no evidence" for years.
+        succeeded = failed = running = lost = 0
+        furthest_idx, outcomes = -1, []
+        for c in same:
+            outcome = c.get("outcome") or ""
+            idx = STAGE_INDEX.get(c.get("stage", "pollinated"), 0)
+            furthest_idx = max(furthest_idx, idx)
+            if outcome == "lost":
+                lost += 1
+            elif outcome:
+                failed += 1
+                outcomes.append(EXITS.get(outcome, {}).get("label", outcome))
+            elif idx >= STAGE_INDEX["pod_set"]:
+                succeeded += 1
+            else:
+                running += 1
+
+        n = succeeded + failed
+        out = {
+            "attempts": len(same),
+            "reversed_attempts": len(rev),
+            "succeeded": succeeded, "failed": failed,
+            "running": running, "lost": lost,
+            "rate": round(succeeded / n, 3) if n >= MIN_N_FOR_RATE else None,
+            "min_n_for_rate": MIN_N_FOR_RATE,
+            "furthest": STAGES[furthest_idx]["label"] if furthest_idx >= 0 else "",
+            "outcomes": sorted(set(outcomes)),
+        }
+
+        # One sentence, because this sits in a result card the grower reads at
+        # a glance. The counts are all present above for anyone building on it.
+        if same:
+            bits = []
+            if succeeded:
+                bits.append("%d set a pod" % succeeded)
+            if failed:
+                bits.append("%d did not" % failed)
+            if running:
+                bits.append("%d still running" % running)
+            if lost:
+                bits.append("%d lost track of" % lost)
+            out["statement"] = ("You have attempted this pairing %d time%s - %s."
+                                % (len(same), "" if len(same) == 1 else "s",
+                                   ", ".join(bits) if bits else "no outcome yet"))
+            if out["rate"] is None and n:
+                out["statement"] += (" Too few completed attempts to quote a rate "
+                                     "(%d of %d needed)." % (n, MIN_N_FOR_RATE))
+        else:
+            out["statement"] = ""
+
+        if rev:
+            out["statement"] = (out["statement"] + " "
+                                if out["statement"] else "")
+            out["statement"] += ("You have attempted the reverse pairing %d time%s; "
+                                 "that is a different cross and is counted separately."
+                                 % (len(rev), "" if len(rev) == 1 else "s"))
+        return out
+
     def reference(self) -> dict:
         """The stage pipeline and exit vocabulary, so the app never hardcodes it."""
         return {"stages": STAGES, "exits": EXITS, "gates": GATES,

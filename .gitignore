@@ -230,3 +230,7 @@ backend/data/pollination_log/
 # and neither is source.
 *.bak
 /*.mp4
+
+# PP2 demo images. Copies of dataset files already tracked elsewhere, plus
+# third-party web photographs. Useful locally, not something to publish.
+demo_images/
