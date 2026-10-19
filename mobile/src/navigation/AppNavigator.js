@@ -18,7 +18,6 @@ import HybridPollinationScreen from '../screens/HybridPollinationScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import NotificationsScreen from '../screens/NotificationsScreen';
 import FarmDashboardScreen from '../screens/FarmDashboardScreen';
-import FarmTabScreen from '../screens/FarmTabScreen';
 import SectionDetailScreen from '../screens/SectionDetailScreen';
 import RunScreen from '../screens/RunScreen';
 import AlarmScreen from '../screens/AlarmScreen';
@@ -112,7 +111,10 @@ function MainTabs() {
       initialRouteName="Home"
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: false }}>
-      <Tab.Screen name="Farm" component={FarmTabScreen} />
+      {/* The full farm view, always. A Simple view (TodayScreen, behind a
+          Simple / Expert switch) was removed on 19 Oct 2026 at the grower's
+          request. */}
+      <Tab.Screen name="Farm" component={FarmDashboardScreen} />
       <Tab.Screen name="Disease" component={DiseaseHubScreen} />
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Hybrid" component={HybridPollinationScreen} />

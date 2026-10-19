@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ActivityBar from '../components/ActivityBar';
 import ScreenHeader from '../components/ScreenHeader';
+import FarmLocationBanner from '../components/FarmLocationBanner';
 import { getOverview, getAlerts, humidityStatus, vpdStatus } from '../services/careV2';
 
 const LEVEL = {
@@ -69,6 +70,13 @@ const HomeScreen = ({ navigation }) => {
 
           {/* Live: whatever is pouring now, wherever it was started (18 Oct 2026). */}
           <ActivityBar navigation={navigation} />
+
+          {/* Until the farm's location is saved (19 Oct 2026). Only once the
+              farm exists: a farm with no houses gets "Set up your farm" below,
+              and its setup asks for the location. */}
+          {!loading && !error && secs.length > 0 && (
+            <FarmLocationBanner farm={data?.farm} onSaved={load} />
+          )}
 
           {/* status + settings */}
           <View style={styles.statusRow}>

@@ -163,6 +163,14 @@ export default function FarmSetupScreen({ route, navigation }) {
     }
 
     if (!houseName.trim()) { Alert.alert('Enter a house name'); return; }
+    /* Required since 19 Oct 2026, at the grower's request. Skipped, the
+       backend quietly uses Peradeniya's weather and no screen looks wrong. */
+    if (firstRun === true && !loc) {
+      Alert.alert('Where is the farm?',
+        'Choose the farm’s location before saving. The nearest village is close enough.',
+        [{ text: 'Choose now', onPress: () => setLocOpen(true) }]);
+      return;
+    }
     setSaving(true);
     try {
       const house = {
@@ -278,7 +286,7 @@ export default function FarmSetupScreen({ route, navigation }) {
                   </Text>
                   <Text style={styles.locSub}>
                     {loc ? 'Weather forecasts will be downloaded for this position.'
-                         : 'Search your town or tap the map. Used for the weather forecast.'}
+                         : 'Required. Use your location or search your town. Used for the weather forecast.'}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
