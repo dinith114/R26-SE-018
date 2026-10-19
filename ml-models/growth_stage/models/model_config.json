@@ -14,7 +14,7 @@
     "wilting",
     "seed_formation"
   ],
-  "training_time": 2449.2427287101746,
-  "epochs": 68,
+  "training_time": 3106.5105895996094,
+  "epochs": 57,
   "batch_size": 32
 }

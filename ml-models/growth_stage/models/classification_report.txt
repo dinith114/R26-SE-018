@@ -1,12 +1,12 @@
                 precision    recall  f1-score   support
 
-    vegetative       0.94      0.83      0.88       280
-       budding       0.98      0.97      0.98       300
-     pre_bloom       0.94      0.94      0.94       311
-    full_bloom       0.95      0.94      0.95       346
-       wilting       0.94      0.93      0.93       220
-seed_formation       0.89      1.00      0.94       311
+    vegetative       0.95      0.96      0.95       456
+       budding       0.97      0.93      0.95       363
+     pre_bloom       0.92      0.88      0.90       346
+    full_bloom       0.85      0.92      0.89       330
+       wilting       0.96      0.97      0.96       355
+seed_formation       0.93      0.92      0.93       355
 
-      accuracy                           0.94      1768
-     macro avg       0.94      0.94      0.94      1768
-  weighted avg       0.94      0.94      0.94      1768
+      accuracy                           0.93      2205
+     macro avg       0.93      0.93      0.93      2205
+  weighted avg       0.93      0.93      0.93      2205

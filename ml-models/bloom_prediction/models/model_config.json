@@ -10,7 +10,7 @@
     "Humidity",
     "Light intensity"
   ],
-  "training_time": 2119.3355855941772,
-  "epochs": 49,
+  "training_time": 2878.901968717575,
+  "epochs": 50,
   "batch_size": 16
 }
