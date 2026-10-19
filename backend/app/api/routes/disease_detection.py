@@ -10,6 +10,8 @@ Endpoints
   GET  /api/v1/disease/status              are the models loaded?
   GET  /api/v1/disease/metrics             measured performance, from the result files
   POST /api/v1/disease/contribute          submit a photo of an unknown disease  (signed in)
+  POST /api/v1/disease/contribute/check    check a photo the moment it is chosen  (signed in)
+  GET  /api/v1/disease/contribute/check-name   is this name one the app already detects?
   GET  /api/v1/disease/pending-counts      progress toward the retrain threshold
   GET  /api/v1/disease/contributions/mine  your own photos and their review status  (signed in)
   GET  /api/v1/disease/review/whoami       is this account an expert?  (signed in)
@@ -155,6 +157,9 @@ async def contribute_image(
     severity: str = Form(..., description="mild | moderate | severe"),
     confirmed_by: str = Form("", description="Optional: who already identified it"),
     notes: str = Form("", description="Optional observations"),
+    confirmed_new: bool = Form(False, description=(
+        "The grower says the photo shows a different disease, after being told "
+        "it looks like one the app already detects")),
     # Sent by app builds from before expert review. Kept only as information
     # for the expert; it no longer makes a photograph count.
     verified: bool = Form(False),
@@ -165,10 +170,14 @@ async def contribute_image(
     Submit a photograph of a condition the system cannot yet identify.
 
     Signed in, so every photograph is tied to the account that sent it. It is
-    checked (too small, dark or blurred to judge is refused, with the reason),
-    stored as an ORIGINAL in `data/pending/<disease>/`, and joins the expert's
-    queue as `pending`. It counts toward a new class only once an expert
-    approves it; app/services/disease_contributions.py holds the full rule.
+    checked before it is stored: too small, dark or blurred to judge is refused;
+    a leaf photo unlike any orchid leaf is refused; a name the app already
+    detects is refused (422); and a leaf photo the model is very sure shows a
+    disease the app already knows is refused with code `looks_known` (409)
+    until the grower confirms it is different. The photo is then stored as an
+    ORIGINAL in `data/pending/<disease>/` and joins the expert's queue as
+    `pending`. It counts toward a new class only once an expert approves it;
+    app/services/disease_contributions.py holds the full rule.
 
     Never augmented here: augmenting before the train / test split would put
     variants of the same leaf on both sides of it.
@@ -189,9 +198,18 @@ async def contribute_image(
             notes=notes,
             original_filename=image.filename or "",
             claimed_confirmed_by=confirmed_by or (verified_by if verified else ""),
+            confirmed_new=confirmed_new,
         )
     except contributions.PhotoRefused as exc:
         raise HTTPException(status_code=422, detail="This photo can't be used. " + str(exc))
+    except contributions.KnownDisease as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except contributions.LooksKnown as exc:
+        # Structured, so the app can ask "send it anyway?" instead of failing.
+        raise HTTPException(status_code=409, detail={
+            "code": "looks_known", "message": str(exc),
+            "disease": exc.guess, "confidence": exc.confidence,
+        })
     except contributions.DuplicatePhoto as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except contributions.TooManyContributions as exc:
@@ -204,6 +222,43 @@ async def contribute_image(
         raise HTTPException(status_code=503, detail=str(exc))
 
     return {"status": "success", "result": result}
+
+
+@router.post("/contribute/check")
+async def check_contribution_photo(
+    image: UploadFile = File(..., description="The photo just chosen"),
+    disease: str = Form("", description="The name typed so far, if any"),
+    plant_part: str = Form("", description="leaf | stem | flower, if chosen yet"),
+    ctx: AuthContext = Depends(require_auth),
+):
+    """
+    Check a photo the moment it is chosen on Contribute, before the form is
+    filled in: too small, dark or blurred; already sent; unlike any orchid leaf;
+    or very like a disease the app already detects. `by_part` gives the verdict
+    for each plant part, so the app follows the grower's choice without sending
+    the photo again. Nothing is stored. POST /contribute applies the same rules
+    again, so an app that skips this check gains nothing.
+    """
+    data = await image.read()
+    try:
+        disease_service.validate_upload(image.content_type, data)
+        result = contributions.check_photo(data, disease=disease, plant_part=plant_part)
+    except disease_service.InvalidImage as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except disease_service.ModelUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"status": "success", "result": result}
+
+
+@router.get("/contribute/check-name")
+async def check_contribution_name(name: str = Query("", max_length=120)):
+    """
+    Whether a typed disease name can be sent: names the app already detects
+    ("black spot", "phylosticta") and names too general to count ("leaf spot")
+    are refused, with the reason. Also suggests a name already being collected
+    that this one may be a spelling of. Open to read, like /pending-counts.
+    """
+    return {"status": "success", "result": contributions.check_name(name)}
 
 
 @router.get("/pending-counts")

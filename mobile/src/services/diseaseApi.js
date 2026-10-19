@@ -372,50 +372,31 @@ async function signedIn(path, options = {}) {
   }
 }
 
-/**
- * Submit a photograph plus the contributor's own labels. Needs a signed-in
- * account: the server records who sent each photo, because the counter for a
- * new disease needs photos from at least three different growers.
- *
- * Nothing about the live model changes. The photo is checked (too small, dark
- * or blurred is refused with the reason), stored as an ORIGINAL, and waits for
- * an orchid expert. It counts for nothing until the expert approves it.
- *
- * `form` is { disease, plantPart, severity, confirmedBy, notes }. confirmedBy
- * is optional information for the expert; it does not make the photo count.
- *
- * Returns { image_id, status: 'pending', possible_copy, progress, ... }.
- */
-export async function contributeImage(asset, form) {
+/** The local file behind a picker asset (or a plain uri), named and typed for upload. */
+function imageParts(asset) {
   const uri = typeof asset === 'string' ? asset : asset?.uri;
   if (!uri) {
     throw new ApiError('No image selected.', { kind: 'image' });
   }
-
   const described = describeImage(uri, typeof asset === 'object' ? asset?.mimeType : null);
   const name = (typeof asset === 'object' && asset?.fileName) || described.name;
+  return { uri, name, type: described.type };
+}
 
-  // Built fresh for every attempt: a multipart body is not guaranteed to be
-  // re-readable once sent, and the 401 path below sends it a second time.
-  const makeBody = async () => {
-    const body = await buildImageForm(uri, name, described.type);
-    body.append('disease', form.disease || '');
-    body.append('plant_part', form.plantPart || '');
-    body.append('severity', form.severity || '');
-    body.append('confirmed_by', form.confirmedBy || '');
-    body.append('notes', form.notes || '');
-    return body;
-  };
-
+/**
+ * POST a multipart form as the signed-in grower. Same rule as
+ * services/request.js: a 401 earns exactly one retry behind a forced token
+ * refresh, and only a second refusal signs the account out. `makeBody` builds
+ * the form afresh for each attempt, because a multipart body is not guaranteed
+ * to be re-readable once sent.
+ */
+async function postSignedForm(path, makeBody) {
   const token = await getToken();
   if (!token) {
     throw new ApiError('Please sign in to send a photo.', { kind: 'auth' });
   }
-  const url = `${DISEASE_API}/contribute`;
+  const url = `${DISEASE_API}${path}`;
   let { status, text } = await postForm(url, await makeBody(), REQUEST_TIMEOUT_MS, token);
-
-  // Same rule as services/request.js: a 401 earns exactly one retry behind a
-  // forced token refresh, and only a second refusal signs the account out.
   if (status === 401) {
     let fresh = null;
     try { fresh = await getToken({ force: true }); } catch (_) { fresh = null; }
@@ -425,6 +406,102 @@ export async function contributeImage(asset, form) {
       throw new ApiError('Your sign-in has expired. Please sign in again.', {
         kind: 'auth', status,
       });
+    }
+  }
+  return { status, text };
+}
+
+/** The server's "looks like a disease the app already detects" answer, if this is one. */
+function looksKnownFrom(text) {
+  try {
+    const detail = JSON.parse(text)?.detail;
+    return detail && typeof detail === 'object' && detail.code === 'looks_known' ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check a photo the moment it is chosen on Contribute, before the rest of the
+ * form is filled in. Nothing is stored; the server applies the same rules
+ * again when the photo is sent.
+ *
+ * Returns { quality_ok, problems: [{code, message}], already_sent,
+ *           checked_by_model, is_orchid, model_guess,
+ *           by_part: { leaf|stem|flower: { verdict, message } }, name }
+ * where verdict is 'ok' | 'refuse' | 'confirm' | 'note' | 'not_checked'.
+ */
+export async function checkContributionPhoto(asset, { disease = '', plantPart = '' } = {}) {
+  const img = imageParts(asset);
+  const { status, text } = await postSignedForm('/contribute/check', async () => {
+    const body = await buildImageForm(img.uri, img.name, img.type);
+    body.append('disease', disease || '');
+    body.append('plant_part', plantPart || '');
+    return body;
+  });
+  if (status < 200 || status >= 300) {
+    throw new ApiError(
+      detailFromText(text, `Could not check the photo (HTTP ${status}).`),
+      { kind: status === 400 ? 'image' : 'server', status }
+    );
+  }
+  try {
+    return JSON.parse(text).result;
+  } catch {
+    throw new ApiError('The server sent a response the app could not read.', {
+      kind: 'server', status,
+    });
+  }
+}
+
+/**
+ * Whether a typed disease name can be sent: { ok, message, known,
+ * known_display_name, already_collecting, similar: [{disease, display_name}] }.
+ */
+export async function checkContributionName(name) {
+  const body = await getJson(
+    `${DISEASE_API}/contribute/check-name?name=${encodeURIComponent(name)}`
+  );
+  return body.result;
+}
+
+/**
+ * Submit a photograph plus the contributor's own labels. Needs a signed-in
+ * account: the server records who sent each photo, because the counter for a
+ * new disease needs photos from at least three different growers.
+ *
+ * Nothing about the live model changes. The photo is checked (too small, dark
+ * or blurred, or a leaf unlike any orchid, is refused with the reason), stored
+ * as an ORIGINAL, and waits for an orchid expert. It counts for nothing until
+ * the expert approves it.
+ *
+ * `form` is { disease, plantPart, severity, confirmedBy, notes, confirmedNew }.
+ * confirmedBy is optional information for the expert. confirmedNew is the
+ * grower saying the photo shows a different disease after being told it looks
+ * like one the app already detects; without it the server answers with an
+ * ApiError of kind 'looks_known'.
+ *
+ * Returns { image_id, status: 'pending', possible_copy, progress, ... }.
+ */
+export async function contributeImage(asset, form) {
+  const img = imageParts(asset);
+  const { status, text } = await postSignedForm('/contribute', async () => {
+    const body = await buildImageForm(img.uri, img.name, img.type);
+    body.append('disease', form.disease || '');
+    body.append('plant_part', form.plantPart || '');
+    body.append('severity', form.severity || '');
+    body.append('confirmed_by', form.confirmedBy || '');
+    body.append('notes', form.notes || '');
+    body.append('confirmed_new', form.confirmedNew ? 'true' : 'false');
+    return body;
+  });
+
+  if (status === 409) {
+    const looks = looksKnownFrom(text);
+    if (looks) {
+      const err = new ApiError(looks.message, { kind: 'looks_known', status });
+      err.looksKnown = looks;
+      throw err;
     }
   }
 

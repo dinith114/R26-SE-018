@@ -23,6 +23,23 @@ Photographs too small, dark or blurred for anyone to judge are refused at
 upload (src/photo_checks.py; its limits were measured on the 667 dataset
 photographs), so the expert's time goes on photographs that can be judged.
 
+Before a photograph reaches the expert, the live diagnosis model also looks at
+it, and the name typed for it is checked:
+
+  * a LEAF photo unlike every orchid leaf the model was trained on is refused
+    (the same distance check, and limit, that Check a plant uses). Stem and
+    flower photos are only marked for the expert, because that check learned
+    from leaves alone and would turn genuine stems and flowers away.
+  * a leaf photo the model is very sure shows a disease it ALREADY detects
+    needs the grower to say it is something different; it is then sent, and
+    the expert sees what the model thought.
+  * a name the app already detects ("black spot", "phylosticta") or one too
+    general to count ("leaf spot") is refused, with the reason.
+
+The app runs these the moment a photo is chosen (check_photo, check_name) and
+the server applies them again when the photo is sent, so no app build can skip
+them.
+
 Reaching the counter makes retraining POSSIBLE, not automatic: a person runs
 it, and the new model replaces the live one only if the diseases it already
 knows do not get worse.
@@ -39,9 +56,12 @@ contributions, not millions, and both files can be opened and read at the viva.
 
 import base64
 import csv
+import difflib
 import hashlib
 import json
+import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from io import BytesIO
@@ -67,6 +87,33 @@ MIN_GROWERS = 3
 # Keeps one account from burying the expert's queue. Generous for a real grower.
 DAILY_LIMIT = 25
 
+# A contributed leaf photo the live model is at least this sure belongs to a
+# class it already knows is probably not new. Stricter than the 0.70 Check a
+# plant uses, because a wrong "already known" here would turn away exactly the
+# new disease this screen exists to collect; even then the grower may send it.
+LOOKS_KNOWN_CONFIDENCE = 0.90
+
+# What growers type for the conditions the app already detects. Compared after
+# lower-casing and dropping punctuation and filler words, and also when a
+# letter or two is off ("phylosticta", "black lef spot").
+KNOWN_NAMES = {
+    "black_leaf_spot": ("black leaf spot", "black leaf spots", "black leafspot",
+                        "black spot", "black spots", "bls"),
+    "phyllosticta_leaf_spot": ("phyllosticta leaf spot", "phyllosticta leaf spots",
+                               "phyllosticta"),
+    "healthy": ("healthy", "no disease", "not diseased", "normal", "none"),
+}
+# A grower who names one of these could mean either known disease or a new
+# one, so the photo could never be counted toward anything.
+TOO_GENERAL = {"leaf spot", "leaf spots", "spot", "spots", "fungus", "fungal",
+               "fungi", "rot", "blight"}
+_FILLER = {"disease", "diseases", "infection", "orchid", "orchids", "vanda",
+           "the", "a", "an", "of", "on", "in"}
+SIMILAR_NAME = 0.88       # typo tolerance for the names above
+SUGGEST_NAME = 0.80       # looser: only suggests a name already being collected
+
+log = logging.getLogger(__name__)
+
 PENDING_STATUS = "pending"
 APPROVED = "approved"
 CORRECTED = "corrected"          # approved, with the expert's labels
@@ -88,6 +135,9 @@ FIELDS = [
     "submitted_at", "notes", "original_filename",
     "sha256", "dhash", "width", "height", "brightness", "sharpness",
     "reviewed_by", "reviewed_at", "review_reason", "review_note",
+    # What the live model made of the photo when it was sent (empty on rows
+    # from before this check existed).
+    "model_check", "model_guess", "model_confidence", "orchid_distance",
 ]
 
 _lock = threading.RLock()
@@ -115,6 +165,19 @@ class NotFound(LookupError):
 
 class SelfReview(PermissionError):
     pass
+
+
+class KnownDisease(ValueError):
+    """The typed name is a condition the app already detects, or too general."""
+
+
+class LooksKnown(ValueError):
+    """The model is very sure the photo shows something the app already detects."""
+
+    def __init__(self, message, guess, confidence):
+        self.guess = guess
+        self.confidence = confidence
+        super().__init__(message)
 
 
 def _now():
@@ -416,6 +479,13 @@ def _expert_view(row, rows, thumbnail=True):
         "quality": {k: _number(row[k]) for k in ("width", "height", "brightness", "sharpness")},
         "possible_copies": _copies_of(row, rows),
         "reviewed_by": row["reviewed_by"],
+        "model_check": {
+            "status": row.get("model_check") or "",
+            "text": _model_check_text(row),
+            "guess": row.get("model_guess") or None,
+            "confidence": _number(row.get("model_confidence")),
+            "orchid_distance": _number(row.get("orchid_distance")),
+        },
     })
     return view
 
@@ -476,6 +546,215 @@ def decisions(limit=50):
 
 
 # ---------------------------------------------------------------------------
+# checks before the expert sees a photograph
+# ---------------------------------------------------------------------------
+
+NOT_ORCHID = ("It doesn't look like an orchid leaf. Send a clear photo of the "
+              "affected orchid leaf.")
+
+
+def _words(name):
+    s = re.sub(r"[^a-z0-9]+", " ", (name or "").lower())
+    return " ".join(w for w in s.split() if w not in _FILLER)
+
+
+def _similar(a, b):
+    return difflib.SequenceMatcher(None, a.replace(" ", ""), b.replace(" ", "")).ratio()
+
+
+def known_disease_for(name):
+    """The class the app already detects that a typed name refers to, or None."""
+    words = _words(name)
+    if not words:
+        return None
+    for slug, aliases in KNOWN_NAMES.items():
+        for alias in aliases:
+            a = _words(alias)
+            if words == a:
+                return slug
+            if len(words.replace(" ", "")) >= 6 and _similar(words, a) >= SIMILAR_NAME:
+                return slug
+    # "Phyllosticta capitalensis" names the fungus behind Phyllosticta Leaf
+    # Spot, and a "healthy leaf" is still a healthy leaf.
+    first = words.split()[0]
+    if _similar(first, "phyllosticta") >= SIMILAR_NAME:
+        return "phyllosticta_leaf_spot"
+    if first == "healthy":
+        return "healthy"
+    return None
+
+
+def _name_problem(name):
+    """Why a typed disease name cannot be used, or None when it can."""
+    if not (name or "").strip():
+        return None                      # _clean_labels reports a missing name
+    words = _words(name)
+    if not words or words in TOO_GENERAL:
+        return ("'{}' is too general to count toward a new disease. Give the "
+                "condition its own name, for example Anthracnose.".format(name.strip()))
+    known = known_disease_for(name)
+    if known == "healthy":
+        return "Contribute is for diseases. Check a plant already handles healthy leaves."
+    if known:
+        return ("The app already detects {}. Use Check a plant for it: Contribute is "
+                "for conditions the app does not know yet.".format(_display(known)))
+    return None
+
+
+def check_name(name):
+    """What Contribute shows under the name field while the grower types."""
+    name = (name or "").strip()
+    problem = _name_problem(name)
+    known = known_disease_for(name) if problem else None
+    out = {"name": name, "ok": problem is None, "message": problem,
+           "known": known, "known_display_name": _display(known) if known else None,
+           "already_collecting": False, "similar": []}
+    if problem or not name:
+        return out
+    with _lock:
+        rows = _load()
+    slug = ds._slug(name)
+    names = {r["final_disease"] if r["status"] in COUNTED else r["disease"] for r in rows} - {""}
+    out["already_collecting"] = slug in names
+    # Offered, never applied: "Anthracnos" and "Anthracnose" would otherwise be
+    # counted as two diseases, but only the grower knows which one they mean.
+    close = sorted(((_similar(slug, n), n) for n in names if n != slug), reverse=True)
+    out["similar"] = [{"disease": n, "display_name": _display(n)}
+                      for score, n in close if score >= SUGGEST_NAME][:3]
+    return out
+
+
+def assess_photo(image_bytes):
+    """
+    What the live diagnosis model makes of a photograph: is it like the orchid
+    photos it was trained on, and what does it think the photo shows?
+
+    Runs Check a plant's own cascade (src/disease_predict.py), unchanged, and
+    reads only its first two stages. Returns None when the model cannot run on
+    this server -- no TensorFlow, or no model files: the photo is then still
+    checked for quality and still reviewed by an expert, so a server without the
+    model degrades instead of refusing every contribution.
+    """
+    try:
+        if not ds.model_status()["disease_ready"]:
+            return None
+        result = ds._cascade().predict(image_bytes, models_dir=ds.MODELS,
+                                       threshold=ds.DEFAULT_THRESHOLD,
+                                       include_treatment=False)
+    except Exception as exc:                                     # noqa: BLE001
+        log.warning("contributed photo not checked by the model: %s", exc)
+        return None
+    is_orchid = result.get("valid_orchid_image") is not False
+    confidence = result.get("confidence")
+    return {
+        "is_orchid": is_orchid,
+        "distance": result.get("validation_distance"),
+        "distance_limit": result.get("validation_threshold"),
+        # The cascade itself withholds a class for a photo that is not an orchid.
+        "guess": result.get("raw_prediction") if is_orchid else None,
+        "confidence": None if confidence is None else round(float(confidence), 4),
+    }
+
+
+def _verdict(assessment, part):
+    """
+    What happens to a photo sent as `part`, with the sentence the grower sees:
+
+      refuse       a leaf photo unlike every orchid leaf the model knows
+      confirm      the model is very sure it shows something the app already
+                   detects, so the grower must say it is a different disease
+      note         a stem or flower photo unlike the leaf-only training photos:
+                   accepted, and marked for the expert
+      ok
+      not_checked  the model could not run on this server
+    """
+    leaf = (part or "leaf") == "leaf"
+    if assessment is None:
+        return "not_checked", None
+    if not assessment["is_orchid"]:
+        if leaf:
+            return "refuse", NOT_ORCHID
+        return "note", ("Unlike the orchid leaf photos the model knows. That is expected "
+                        "for a {}, and the expert will check it.".format(part))
+    guess, confidence = assessment["guess"], assessment["confidence"]
+    if (leaf and guess in KNOWN_NAMES and confidence is not None
+            and confidence >= LOOKS_KNOWN_CONFIDENCE):
+        if guess == "healthy":
+            return "confirm", ("This leaf looks healthy to the app ({:.0f}% sure). If it "
+                               "has a problem, send it anyway and describe it in the "
+                               "notes.".format(confidence * 100))
+        return "confirm", ("This looks like {} ({:.0f}% sure), which the app already "
+                           "detects. Use Check a plant for it, or send it if you are sure "
+                           "it is a different disease.".format(_display(guess),
+                                                               confidence * 100))
+    return "ok", None
+
+
+def check_photo(image_bytes, disease="", plant_part=""):
+    """
+    Everything Contribute can tell the grower the moment a photo is chosen,
+    before the rest of the form is filled in. submit() applies the same rules
+    again, so skipping this check gets a photo nowhere.
+
+    The verdict is given for every plant part, so the app can follow the
+    grower's choice of part without sending the photo a second time.
+    """
+    try:
+        img = pc.cap_size(pc.open_image(image_bytes))
+    except ImportError as exc:                                   # pragma: no cover
+        raise ds.ModelUnavailable("Pillow is required to read images: {}".format(exc))
+    except Exception as exc:                                     # noqa: BLE001
+        raise ds.InvalidImage("Could not read that image: {}".format(exc))
+    problems = pc.problems(pc.measure(img))
+    # A photo too dark or blurred to judge is refused whatever the model thinks.
+    assessment = None if problems else assess_photo(image_bytes)
+    digest = pc.sha256(image_bytes)
+    with _lock:
+        rows = _load()
+
+    guess = None
+    if assessment and assessment["guess"] in KNOWN_NAMES and assessment["confidence"] is not None:
+        guess = {"disease": assessment["guess"], "display_name": _display(assessment["guess"]),
+                 "confidence": assessment["confidence"]}
+    by_part = {}
+    for part in sorted(ds.VALID_PARTS):
+        verdict, message = _verdict(assessment, part)
+        by_part[part] = {"verdict": verdict, "message": message}
+    return {
+        "quality_ok": not problems,
+        "problems": [{"code": code, "message": message} for code, message in problems],
+        "already_sent": any(r["sha256"] == digest for r in rows),
+        "checked_by_model": assessment is not None,
+        "is_orchid": None if assessment is None else assessment["is_orchid"],
+        "model_guess": guess,
+        "by_part": by_part,
+        "name": check_name(disease) if (disease or "").strip() else None,
+    }
+
+
+def _model_check_text(row):
+    """One sentence for the expert about what the model made of the photo."""
+    check = row.get("model_check") or ""
+    guess = row.get("model_guess") or ""
+    confidence = _number(row.get("model_confidence"))
+    pct = "" if confidence is None else " ({:.0f}%)".format(confidence * 100)
+    if check == "sent_anyway":
+        return ("The model thinks this is {}{}; the grower says it is a different "
+                "disease.".format(_display(guess), pct))
+    if check == "note":
+        return "Unlike the orchid leaf photos the model knows (sent as a {}).".format(
+            row["plant_part"])
+    if check == "not_checked":
+        return "Not checked by the model: it was not running when this was sent."
+    if check == "ok":
+        if guess:
+            return "An orchid photo the model does not recognise well (best guess {}{}).".format(
+                _display(guess), pct)
+        return "An orchid photo the model does not recognise well."
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # the two actions
 # ---------------------------------------------------------------------------
 
@@ -495,15 +774,22 @@ def _clean_labels(disease, plant_part, severity):
 
 
 def submit(image_bytes, *, disease, plant_part, severity, contributor,
-           notes="", original_filename="", claimed_confirmed_by=""):
+           notes="", original_filename="", claimed_confirmed_by="", confirmed_new=False):
     """
     Check and store one photograph. It joins the queue as 'pending' and counts
     for nothing until an expert approves it.
+
+    `confirmed_new` is the grower saying a photo the model takes for a disease
+    the app already knows is something different; without it such a photo is
+    refused with LooksKnown, so the app can ask.
 
     Stored as an ORIGINAL and never augmented here: augmenting before the
     train / test split would put variants of one leaf on both sides of it.
     """
     slug, part, grade = _clean_labels(disease, plant_part, severity)
+    problem = _name_problem(disease)
+    if problem:
+        raise KnownDisease(problem)
     try:
         img = pc.cap_size(pc.open_image(image_bytes))
     except ImportError as exc:                                   # pragma: no cover
@@ -516,6 +802,14 @@ def submit(image_bytes, *, disease, plant_part, severity, contributor,
     if problems:
         raise PhotoRefused(problems)
     digest, fingerprint = pc.sha256(image_bytes), pc.dhash(img)
+
+    # Outside the lock: the model takes a moment, and the files need not wait.
+    assessment = assess_photo(image_bytes)
+    verdict, message = _verdict(assessment, part)
+    if verdict == "refuse":
+        raise PhotoRefused([("not_orchid", message)])
+    if verdict == "confirm" and not confirmed_new:
+        raise LooksKnown(message, assessment["guess"], assessment["confidence"])
 
     with _lock:
         rows = _load()
@@ -548,6 +842,12 @@ def submit(image_bytes, *, disease, plant_part, severity, contributor,
             "width": measured["width"], "height": measured["height"],
             "brightness": measured["brightness"], "sharpness": measured["sharpness"],
             "reviewed_by": "", "reviewed_at": "", "review_reason": "", "review_note": "",
+            "model_check": "sent_anyway" if verdict == "confirm" else verdict,
+            "model_guess": (assessment or {}).get("guess") or "",
+            "model_confidence": "" if not assessment or assessment["confidence"] is None
+            else assessment["confidence"],
+            "orchid_distance": "" if not assessment or assessment["distance"] is None
+            else assessment["distance"],
         }
         rows.append(row)
         _save(rows)
@@ -562,6 +862,7 @@ def submit(image_bytes, *, disease, plant_part, severity, contributor,
         "status": PENDING_STATUS,
         "status_text": _status_text(row),
         "possible_copy": bool(copies),
+        "model_check": row["model_check"],
         "progress": progress,
         "minimum_required": MIN_PHOTOS,
         "minimum_growers": MIN_GROWERS,

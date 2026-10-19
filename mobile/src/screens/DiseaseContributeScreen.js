@@ -29,9 +29,15 @@
  *
  * 5. Catches every failure. A network problem, a rejected form or an unreadable
  *    file all surface as a readable message rather than a crash.
+ *
+ * 6. Checks the photo the moment it is chosen, and the name as it is typed,
+ *    so a grower learns before filling in the form that a leaf photo is not
+ *    an orchid, that the model takes it for a disease the app already
+ *    detects, or that the name is one the app already knows. The server runs
+ *    the same checks again on sending, so a skipped check gains nothing.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -42,7 +48,9 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
-import { contributeImage, getPendingCounts, ApiError } from '../services/diseaseApi';
+import {
+  contributeImage, getPendingCounts, checkContributionPhoto, checkContributionName, ApiError,
+} from '../services/diseaseApi';
 
 const PARTS = [
   { key: 'leaf', label: 'Leaf', icon: 'leaf-outline' },
@@ -56,6 +64,47 @@ const SEVERITIES = [
   { key: 'severe', label: 'Severe', note: 'over 40%', color: COLORS.danger },
 ];
 
+const CHECK_LOOK = {
+  ok: { icon: 'checkmark-circle', color: COLORS.success, dim: COLORS.successDim },
+  refuse: { icon: 'close-circle', color: COLORS.danger, dim: COLORS.dangerDim },
+  confirm: { icon: 'help-circle', color: COLORS.warning, dim: COLORS.warningDim },
+  note: { icon: 'information-circle', color: COLORS.info, dim: COLORS.infoDim },
+  quiet: { icon: 'ellipsis-horizontal-circle', color: COLORS.textTertiary, dim: COLORS.bgCardAlt },
+};
+
+/**
+ * What the photo check found, as one line the grower can act on. Worked out
+ * for the plant part chosen so far (leaf until one is chosen), from the
+ * server's per-part verdicts, so changing the part needs no new request.
+ */
+function photoStatusFor(check, part, serverPrompt) {
+  if (check.state === 'checking') return { kind: 'quiet', title: 'Checking the photo…', busy: true };
+  if (check.state === 'failed') {
+    return { kind: 'quiet', title: "Couldn't check the photo now", message: 'It will be checked when you send it.' };
+  }
+  if (serverPrompt) return { kind: 'confirm', title: 'Looks like a known condition', message: serverPrompt, confirm: true };
+  if (check.state !== 'done') return null;
+
+  const d = check.data;
+  const v = d.by_part?.[part || 'leaf'] || {};
+  if (!d.quality_ok) {
+    return { kind: 'refuse', title: "This photo can't be used", message: d.problems.map((p) => p.message).join(' ') };
+  }
+  if (d.already_sent) return { kind: 'refuse', title: 'Already sent', message: 'This exact photo has already been sent.' };
+  if (v.verdict === 'refuse') return { kind: 'refuse', title: 'Not an orchid leaf', message: v.message };
+  if (v.verdict === 'confirm') {
+    const guess = d.model_guess;
+    const title = guess?.disease === 'healthy' ? 'Looks like a healthy leaf'
+      : guess ? `Looks like ${guess.display_name}` : 'Looks like a known condition';
+    return { kind: 'confirm', title, message: v.message, confirm: true };
+  }
+  if (v.verdict === 'note') return { kind: 'note', title: 'The expert will check this one', message: v.message };
+  if (v.verdict === 'not_checked') {
+    return { kind: 'quiet', title: 'Photo quality is fine', message: 'An expert will check what it shows.' };
+  }
+  return { kind: 'ok', title: 'Photo looks fine' };
+}
+
 const DiseaseContributeScreen = ({ navigation }) => {
   const [asset, setAsset] = useState(null);
   const [disease, setDisease] = useState('');
@@ -68,6 +117,43 @@ const DiseaseContributeScreen = ({ navigation }) => {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [counts, setCounts] = useState(null);
+
+  // The checks that run before anything is sent.
+  const [photoCheck, setPhotoCheck] = useState({ state: 'idle' });
+  const [nameCheck, setNameCheck] = useState(null);
+  const [sendAnyway, setSendAnyway] = useState(false);
+  const [serverPrompt, setServerPrompt] = useState(null);   // the server asked "is it different?"
+  const latestUri = useRef(null);
+
+  const runPhotoCheck = async (a) => {
+    latestUri.current = a.uri;
+    setPhotoCheck({ state: 'checking' });
+    setSendAnyway(false);
+    setServerPrompt(null);
+    try {
+      const data = await checkContributionPhoto(a);
+      if (latestUri.current === a.uri) setPhotoCheck({ state: 'done', data });
+    } catch (err) {
+      // A check that cannot run must not block the form: sending checks again.
+      if (latestUri.current === a.uri) setPhotoCheck({ state: 'failed', message: err?.message });
+    }
+  };
+
+  // The name is checked a moment after the grower stops typing.
+  useEffect(() => {
+    const name = disease.trim();
+    if (name.length < 2) {
+      setNameCheck(null);
+      return undefined;
+    }
+    let active = true;
+    const timer = setTimeout(() => {
+      checkContributionName(name)
+        .then((r) => { if (active) setNameCheck(r); })
+        .catch(() => { if (active) setNameCheck(null); });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  }, [disease]);
 
   // Refreshed on focus so a contribution made elsewhere is reflected too. The
   // counters are optional: a failure here must not block the form.
@@ -121,6 +207,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
       setAsset(a);
       setError(null);
       setResult(null);
+      runPhotoCheck(a);
     } catch (err) {
       setError({
         message: 'Could not open the camera.',
@@ -146,15 +233,25 @@ const DiseaseContributeScreen = ({ navigation }) => {
         setAsset(a);
         setError(null);
         setResult(null);
+        runPhotoCheck(a);
       }
     } catch (err) {
       setError({ message: 'Could not open your photo library.', hint: err?.message });
     }
   };
 
+  const photoStatus = asset ? photoStatusFor(photoCheck, plantPart, serverPrompt) : null;
+  const photoBlocked = photoStatus?.kind === 'refuse';
+  const needsAnswer = !!photoStatus?.confirm && !sendAnyway;
+  const nameBlocked = nameCheck?.ok === false;
+
   const missing = [];
   if (!asset) missing.push('a photograph');
+  if (photoCheck.state === 'checking') missing.push('the photo check');
+  if (photoBlocked) missing.push('a usable photo');
+  if (needsAnswer) missing.push('your answer about the photo');
   if (!disease.trim()) missing.push('the disease name');
+  if (nameBlocked) missing.push('a disease the app does not already detect');
   if (!plantPart) missing.push('the plant part');
   if (!severity) missing.push('the severity');
   const canSubmit = missing.length === 0 && !submitting;
@@ -170,12 +267,20 @@ const DiseaseContributeScreen = ({ navigation }) => {
         severity,
         confirmedBy: confirmedBy.trim(),
         notes: notes.trim(),
+        confirmedNew: sendAnyway,
       });
       setResult(r);
     } catch (err) {
-      setError(err instanceof ApiError
-        ? { message: err.message, hint: err.hint }
-        : { message: 'Could not submit the photograph.', hint: err?.message });
+      if (err?.kind === 'looks_known') {
+        // The server's own model check: ask the same question the instant
+        // check would have asked, rather than showing an error.
+        setServerPrompt(err.message);
+        setSendAnyway(false);
+      } else {
+        setError(err instanceof ApiError
+          ? { message: err.message, hint: err.hint }
+          : { message: 'Could not submit the photograph.', hint: err?.message });
+      }
     } finally {
       // finally, so the spinner always stops even if something above threw.
       setSubmitting(false);
@@ -186,6 +291,9 @@ const DiseaseContributeScreen = ({ navigation }) => {
     setAsset(null); setDisease(''); setPlantPart(null); setSeverity(null);
     setConfirmedBy(''); setNotes('');
     setResult(null); setError(null);
+    setPhotoCheck({ state: 'idle' }); setNameCheck(null);
+    setSendAnyway(false); setServerPrompt(null);
+    latestUri.current = null;
   };
 
   /* ------------------------------------------------------------------ */
@@ -288,6 +396,39 @@ const DiseaseContributeScreen = ({ navigation }) => {
         {asset ? (
           <View style={[styles.card, SHADOW.sm]}>
             <Image source={{ uri: asset.uri }} style={styles.preview} resizeMode="cover" />
+            {photoStatus && (
+              <View style={[styles.checkBox, { backgroundColor: CHECK_LOOK[photoStatus.kind].dim }]}>
+                <View style={styles.checkHead}>
+                  {photoStatus.busy ? (
+                    <ActivityIndicator size="small" color={CHECK_LOOK.quiet.color} />
+                  ) : (
+                    <Ionicons name={CHECK_LOOK[photoStatus.kind].icon} size={18}
+                      color={CHECK_LOOK[photoStatus.kind].color} />
+                  )}
+                  <Text style={[styles.checkTitle, { color: CHECK_LOOK[photoStatus.kind].color }]}>
+                    {photoStatus.title}
+                  </Text>
+                </View>
+                {photoStatus.message ? <Text style={styles.checkText}>{photoStatus.message}</Text> : null}
+                {photoStatus.confirm && (
+                  <>
+                    <TouchableOpacity style={styles.checkLink}
+                      onPress={() => navigation.navigate('DiseaseDetection')}>
+                      <Ionicons name="search-outline" size={15} color={COLORS.primary} />
+                      <Text style={styles.checkLinkText}>Open Check a plant</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.anywayRow}
+                      onPress={() => setSendAnyway((v) => !v)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: sendAnyway }}>
+                      <Ionicons name={sendAnyway ? 'checkbox' : 'square-outline'} size={20}
+                        color={sendAnyway ? COLORS.primary : COLORS.textSecondary} />
+                      <Text style={styles.anywayText}>I'm sure it's something else. Send it anyway.</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            )}
             <TouchableOpacity
               style={styles.changeBtn}
               onPress={() => {
@@ -349,6 +490,26 @@ const DiseaseContributeScreen = ({ navigation }) => {
             autoCapitalize="words"
           />
           <Text style={styles.fieldHint}>The name as given by an expert, if you have one.</Text>
+          {nameCheck?.ok === false && nameCheck.message ? (
+            <View style={styles.nameWarn}>
+              <Ionicons name="alert-circle" size={15} color={COLORS.danger} />
+              <Text style={styles.nameWarnText}>{nameCheck.message}</Text>
+            </View>
+          ) : null}
+          {nameCheck?.ok && nameCheck.already_collecting ? (
+            <Text style={styles.nameOk}>Already being collected. Your photo adds to it.</Text>
+          ) : null}
+          {nameCheck?.ok && nameCheck.similar?.length > 0 ? (
+            <View style={styles.similarRow}>
+              <Text style={styles.similarLabel}>Did you mean</Text>
+              {nameCheck.similar.map((s) => (
+                <TouchableOpacity key={s.disease} style={styles.similarChip}
+                  onPress={() => setDisease(s.display_name)}>
+                  <Text style={styles.similarChipText}>{s.display_name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
         </View>
 
         <Text style={styles.sectionLabel}>WHICH PART?</Text>
@@ -529,6 +690,29 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.md,
   },
   changeBtnText: { fontSize: FONT.sm, fontWeight: '700', color: COLORS.primary },
+
+  checkBox: { borderRadius: RADIUS.md, padding: SPACE.md, marginTop: SPACE.md, gap: SPACE.xs },
+  checkHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  checkTitle: { flex: 1, fontSize: FONT.sm, fontWeight: '700' },
+  checkText: { fontSize: FONT.sm, color: COLORS.textSecondary, lineHeight: 18 },
+  checkLink: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.sm },
+  checkLinkText: { fontSize: FONT.sm, fontWeight: '700', color: COLORS.primary },
+  anywayRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, marginTop: SPACE.sm },
+  anywayText: { flex: 1, fontSize: FONT.sm, color: COLORS.text },
+
+  nameWarn: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: SPACE.sm },
+  nameWarnText: { flex: 1, fontSize: FONT.xs, color: COLORS.danger, fontWeight: '600', lineHeight: 16 },
+  nameOk: { fontSize: FONT.xs, color: COLORS.success, fontWeight: '600', marginTop: SPACE.sm },
+  similarRow: {
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center',
+    gap: SPACE.xs, marginTop: SPACE.sm,
+  },
+  similarLabel: { fontSize: FONT.xs, color: COLORS.textTertiary },
+  similarChip: {
+    paddingHorizontal: SPACE.sm, paddingVertical: 4,
+    borderRadius: RADIUS.full, backgroundColor: COLORS.primaryDim,
+  },
+  similarChipText: { fontSize: FONT.xs, color: COLORS.primary, fontWeight: '700' },
 
   input: {
     backgroundColor: COLORS.bgInput, borderRadius: RADIUS.md,
