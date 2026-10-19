@@ -91,20 +91,79 @@ def _bucket_of(ts_ms: float) -> int:
     return int(float(ts_ms) // (BUCKET_MIN * 60000.0))
 
 
+def _unbelievable(series: List[Tuple[float, float, float]]) -> Tuple[set, set]:
+    """Indexes of readings that are plausible numbers but not believable air.
+
+    Failed and impossible values are already gone (readings.value). What is left
+    can still be a sensor misbehaving inside the normal range, and the health
+    checker raises an alarm for exactly two such patterns - but until 18 Oct 2026
+    those readings went into the placement analysis all the same, so a stuck or
+    loose sensor could decide where the sensors go. The SAME thresholds as the
+    alarms are used (device_health), so what the phone calls a fault is what the
+    analysis leaves out:
+
+      stuck    identical temperature AND humidity, to the 0.1 a node reports,
+               for FROZEN_MS over at least FROZEN_MIN_READINGS readings, below
+               FROZEN_RH_CEILING (saturated air really can sit still)
+      jumping  a reading that leaps more than JUMP_T / JUMP_RH from BOTH of its
+               neighbours within JUMP_GAP_MS (a spike - air does not do that
+               and come back), and every reading in any clock hour holding more
+               than JUMPS_PER_HOUR such leaps (a connector making and breaking)
+
+    `series` is (ts_ms, temperature, humidity) in time order.
+    """
+    from app.services import device_health as dh       # same numbers as the alarms
+    n = len(series)
+    stuck, jumping = set(), set()
+
+    i = 0
+    while i < n:
+        j = i
+        key = (round(series[i][1], 1), round(series[i][2], 1))
+        while j + 1 < n and (round(series[j + 1][1], 1), round(series[j + 1][2], 1)) == key:
+            j += 1
+        if (j - i + 1 >= dh.FROZEN_MIN_READINGS and series[j][0] - series[i][0] >= dh.FROZEN_MS
+                and key[1] < dh.FROZEN_RH_CEILING):
+            stuck.update(range(i, j + 1))
+        i = j + 1
+
+    def leap(a, b):
+        return (abs(series[a][0] - series[b][0]) <= dh.JUMP_GAP_MS
+                and (abs(series[a][1] - series[b][1]) > dh.JUMP_T
+                     or abs(series[a][2] - series[b][2]) > dh.JUMP_RH))
+
+    per_hour: Dict[int, int] = {}
+    for k in range(1, n):
+        if leap(k - 1, k):
+            hour = int(series[k][0] // 3_600_000)
+            per_hour[hour] = per_hour.get(hour, 0) + 1
+    for k in range(1, n - 1):
+        if leap(k - 1, k) and leap(k, k + 1):
+            jumping.add(k)
+    bad_hours = {hr for hr, c in per_hour.items() if c > dh.JUMPS_PER_HOUR}
+    if bad_hours:
+        jumping.update(k for k in range(n) if int(series[k][0] // 3_600_000) in bad_hours)
+    return stuck, jumping - stuck
+
+
 def collect(histories: Dict[str, dict]) -> Tuple[dict, dict]:
     """(per-section stats, per-section buckets) from the raw history records.
 
     buckets[sid][b] = {"temperature": [..], "humidity": [..]} - every MEASURED
     value that fell in that 10-minute bucket. Means are taken later, so the
     within-bucket spread (a noise estimate) survives.
+
+    Readings the health checker would call stuck or jumping are counted in
+    stats[sid]["unbelievable"] and left out of the buckets (_unbelievable).
     """
     stats, buckets = {}, {}
     for sid, hist in histories.items():
         s = {"records": 0, "first": None, "last": None,
              "rejected": {f: {"missing": 0, "failed": 0, "implausible": 0}
                           for f in BASE_FIELDS + ("light",)},
-             "valid": {f: 0 for f in BASE_FIELDS + ("light",)}}
-        b_out: Dict[int, dict] = {}
+             "valid": {f: 0 for f in BASE_FIELDS + ("light",)},
+             "unbelievable": {"stuck": 0, "jumping": 0}}
+        series: List[Tuple[float, float, float]] = []
         for rec in (hist or {}).values():
             if not isinstance(rec, dict):
                 continue
@@ -127,6 +186,14 @@ def collect(histories: Dict[str, dict]) -> Tuple[dict, dict]:
             # A DHT22 reports both or neither; one without the other is a
             # half-failed read, and VPD from it would be wrong.
             if t is None or h is None:
+                continue
+            series.append((ts, t, h))
+        series.sort(key=lambda r: r[0])
+        stuck, jumping = _unbelievable(series)
+        s["unbelievable"] = {"stuck": len(stuck), "jumping": len(jumping)}
+        b_out: Dict[int, dict] = {}
+        for k, (ts, t, h) in enumerate(series):
+            if k in stuck or k in jumping:
                 continue
             slot = b_out.setdefault(_bucket_of(ts), {"temperature": [], "humidity": []})
             slot["temperature"].append(t)

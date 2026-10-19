@@ -98,7 +98,8 @@ const ROLE = {
   },
 };
 
-const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = null }) => {
+const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = null,
+                            onParentsChange = null }) => {
   const [podParent, setPodParent] = useState('');
   const [pollenParent, setPollenParent] = useState('');
   const [result, setResult] = useState(null);
@@ -109,7 +110,20 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
   const [conditionOnly, setConditionOnly] = useState(null);
   const [loading, setLoading] = useState(false);
   const [knownParents, setKnownParents] = useState([]);
+  /* The grower's own plants, from the crossing logbook, kept apart from the
+     register list. A plant they registered themselves should be offerable
+     here - otherwise a name they have already entered once has to be typed
+     again from memory - but it is not a register name and the list says so,
+     because the app has only ever been told that plant exists. */
+  const [myPlants, setMyPlants] = useState([]);
   const [activeField, setActiveField] = useState(null);
+  /* The evidence - reasoning, precedents, expected offspring - starts folded.
+     Open, the card ran to three screens of register detail under a one-line
+     verdict, and the grower it is written for had to scroll past all of it to
+     reach the one part they can act on. Folded, the card is the verdict, any
+     warning, and the next step; the evidence is one tap away for whoever
+     wants to check the reasoning. */
+  const [showEvidence, setShowEvidence] = useState(false);
   const [useAssessResult, setUseAssessResult] = useState(true);
   const scrollRef = useRef(null);
 
@@ -161,9 +175,33 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
   const haveNames = Boolean(podParent.trim() && pollenParent.trim());
   const haveAnyReading = Boolean(podReading || pollenReading);
 
+  /* Report both parents upward so the logbook composer can start from what
+     was already photographed here.
+     Without this a grower who assessed two plants on this tab opened the Log
+     tab and was asked to photograph both again - the pod parent arrived from
+     the Assess tab, the pollen parent arrived from nowhere.
+
+     Two things are kept out of the dependency list on purpose, and both would
+     otherwise spin this forever. `onParentsChange` is recreated on every
+     render of the parent. And `podReading` is a fresh object on every render
+     of THIS component, so depending on it would fire the effect, set state in
+     the parent, re-render, build another podReading, and fire again - the
+     deps below are the state it is derived from, which are stable. */
+  useEffect(() => {
+    onParentsChange?.({
+      pod: { uri: podImage, result: podReading },
+      pollen: { uri: pollenShot.image, result: pollenShot.result },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [podImage, podShot.result, level1Result, useAssessResult,
+      pollenShot.image, pollenShot.result]);
+
   useEffect(() => {
     getKnownParents()
-      .then((data) => setKnownParents(data.parents || []))
+      .then((data) => {
+        setKnownParents(data.parents || []);
+        setMyPlants(data.mine || []);
+      })
       .catch(() => setKnownParents([]));   // Suggestions are optional
   }, []);
 
@@ -270,9 +308,14 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
    * has never heard of. */
   const suggestionsFor = (value) => {
     const q = value.trim().toLowerCase();
-    if (!q) return knownParents.slice(0, 6);
-    return knownParents
-      .filter((n) => n.toLowerCase().includes(q) && n.toLowerCase() !== q)
+    const tag = (list, source) => list.map((name) => ({ name, source }));
+    // The grower's own plants first: a name they entered themselves is the one
+    // they are most likely reaching for, and it is the only list that can
+    // contain an unregistered seedling.
+    const all = [...tag(myPlants, 'mine'), ...tag(knownParents, 'register')];
+    if (!q) return all.slice(0, 6);
+    return all
+      .filter((s) => s.name.toLowerCase().includes(q) && s.name.toLowerCase() !== q)
       .slice(0, 6);
   };
 
@@ -287,6 +330,10 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
 
     if (knownParents.some((n) => n.toLowerCase() === v.toLowerCase())) {
       return { kind: 'known', icon: 'checkmark-circle', text: 'In the register' };
+    }
+
+    if (myPlants.some((n) => n.toLowerCase() === v.toLowerCase())) {
+      return { kind: 'genus', icon: 'leaf-outline', text: 'One of your plants' };
     }
 
     const first = v.split(/[\s.]+/)[0].toLowerCase();
@@ -490,7 +537,15 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
    * One parent, whole: its photograph, what the photograph said, and the name
    * from its tag. Both roles are drawn by this, so they cannot diverge.
    */
-  const renderParentCard = (role) => {
+  /* `part` splits this card in two.
+     Photograph and name answer different questions - one reads the plant's
+     CONDITION, the other names its VARIETY - and nothing connects them: the
+     model has never been trained to tell one Vanda hybrid from another. Shown
+     in one card they looked like two halves of a single check, which is what
+     made "both parents Suitable" sitting above "low compatibility" read as a
+     contradiction. It is not one; they are separate answers. So they are now
+     laid out as separate steps, each usable on its own. */
+  const renderParentCard = (role, part = 'both') => {
     const meta = ROLE[role];
     const shot = shotFor(role);
     const reading = role === 'pod' ? podReading : pollenReading;
@@ -513,6 +568,7 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
         </View>
 
         {/* ---- condition, from a photograph ---- */}
+        {part !== 'name' && (
         <View style={styles.photoRow}>
           {image ? (
             <Image source={{ uri: image }} style={styles.photo} />
@@ -541,11 +597,7 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
                   <Text style={[styles.verdict, { color: verdictColor(reading.suitability) }]}>
                     {reading.suitability}
                   </Text>
-                  {reading.confidence ? (
-                    <Text style={styles.confidence}>
-                      {(reading.confidence * 100).toFixed(0)}% confident
-                    </Text>
-                  ) : null}
+
                 </View>
                 <Text style={styles.verdictNote}>
                   {reading.origin === 'assess'
@@ -601,9 +653,13 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
           </View>
         </View>
 
-        <View style={styles.divider} />
+        )}
+
+        {part === 'both' && <View style={styles.divider} />}
 
         {/* ---- identity, from the tag ---- */}
+        {part !== 'photo' && (
+        <>
         <Text style={styles.blockLabel}>Name on the tag</Text>
         <TextInput
           style={styles.input}
@@ -620,17 +676,24 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
           <View style={styles.suggestBox}>
             <Text style={styles.suggestHead}>
               {value.trim()
-                ? 'In the register'
-                : `${knownParents.length} names in the register — or browse them all on the Varieties tab`}
+                ? 'Matches'
+                : `${myPlants.length} of your plants, ${knownParents.length} in the register — browse them all on the Varieties tab`}
             </Text>
-            {suggestions.map((name) => (
+            {suggestions.map((sug) => (
               <TouchableOpacity
-                key={name}
+                key={`${sug.source}:${sug.name}`}
                 style={styles.suggestItem}
-                onPress={() => { setValue(name); setActiveField(null); }}
+                onPress={() => { setValue(sug.name); setActiveField(null); }}
               >
-                <Ionicons name="search-outline" size={12} color={COLORS.textTertiary} />
-                <Text style={styles.suggestText}>{name}</Text>
+                <Ionicons
+                  name={sug.source === 'mine' ? 'leaf-outline' : 'library-outline'}
+                  size={12}
+                  color={sug.source === 'mine' ? COLORS.primary : COLORS.textTertiary}
+                />
+                <Text style={styles.suggestText}>{sug.name}</Text>
+                <Text style={styles.suggestSource}>
+                  {sug.source === 'mine' ? 'your plant' : 'register'}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -659,9 +722,11 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
             has never been trained to tell one Vanda hybrid from another. */}
         <Text style={styles.roleNote}>
           {value.trim()
-            ? 'The photo reads condition, not identity.'
-            : 'Tag lost? The condition reading still works without a name.'}
+            ? 'Checked against the register by genus, not by variety.'
+            : 'No tag? Skip this step - the condition check does not need a name.'}
         </Text>
+        </>
+        )}
       </View>
     );
   };
@@ -682,18 +747,21 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
     >
       <Text style={styles.sectionTitle}>Check a Cross</Text>
       <Text style={styles.intro}>
-        Two plants, two photos, two names. Pod parent first — reversing them
-        is a different cross.
+        Two checks — do either, or both.
       </Text>
 
-      {renderParentCard('pod')}
+      {/* ---------- STEP 1: the plants ---------- */}
+      <View style={styles.stepHead}>
+        <Text style={styles.stepNum}>STEP 1</Text>
+        <Text style={styles.stepTitle}>The plants</Text>
+      </View>
+      <Text style={styles.stepIntro}>
+        Photograph each one to read its condition.
+      </Text>
 
-      <TouchableOpacity style={styles.swapBtn} onPress={handleSwap}>
-        <Ionicons name="swap-vertical" size={15} color={COLORS.primary} />
-        <Text style={styles.swapText}>Swap roles</Text>
-      </TouchableOpacity>
+      {renderParentCard('pod', 'photo')}
 
-      {renderParentCard('pollen')}
+      {renderParentCard('pollen', 'photo')}
 
       {/* The pair, as a pair. */}
       {readiness && (
@@ -711,6 +779,41 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
           </View>
         </View>
       )}
+
+      {/* ---------- STEP 2: the varieties ---------- */}
+      <View style={styles.stepHead}>
+        <Text style={styles.stepNum}>STEP 2</Text>
+        <Text style={styles.stepTitle}>The varieties</Text>
+      </View>
+      <Text style={styles.stepIntro}>
+        Type what is written on each tag. This searches the register for
+        whether these two <Text style={{ fontWeight: '700' }}>genera</Text> have
+        been crossed before — Vanda with Vanda, Vanda with Aerides, and so on.
+        It does not judge the individual varieties, and it does not look at the
+        photographs.
+      </Text>
+
+      {renderParentCard('pod', 'name')}
+      {renderParentCard('pollen', 'name')}
+
+      {/* The swap lives here rather than beside the photographs.
+          A plant's CONDITION is the same whichever role it takes - the model
+          reads the plant, not the job - so beside the photos the button looked
+          like it did nothing, which is what the grower reported. What the role
+          actually changes is the pairing: order is part of the cross (A x B is
+          not B x A), and a Moderate plant is questioned as a pod parent while
+          being perfectly acceptable as a pollen donor. Both of those are
+          decisions about the PAIR, so the control belongs with the pair. */}
+      <TouchableOpacity style={styles.swapBtn} onPress={handleSwap}>
+        <Ionicons name="swap-vertical" size={15} color={COLORS.primary} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.swapText}>Swap roles</Text>
+          <Text style={styles.swapNote}>
+            Order is part of the cross. The pod parent carries the capsule for
+            about nine months, so the stronger plant belongs in that role.
+          </Text>
+        </View>
+      </TouchableOpacity>
 
       {/* Enabled as soon as there is anything to report.
           It used to require both names, so a grower who had photographed two
@@ -808,6 +911,34 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
 
           <Text style={styles.headline}>{result.headline}</Text>
 
+          {/* The grower's OWN attempts at this pairing, above the register.
+              For someone deciding whether to commit a flowering plant for
+              nine months, three of their own attempts outrank a stranger's
+              single registration from 1963 - and unlike the register, their
+              record contains the failures. It is also the only block here
+              that survives an unrecognised name: the register cannot look up
+              "Yellow Vanda", but the logbook knows what happened when this
+              grower crossed it. */}
+          {result.your_history?.attempts > 0 && (
+            <View style={styles.historyBox}>
+              <View style={styles.historyHead}>
+                <Ionicons name="book-outline" size={14} color={COLORS.primary} />
+                <Text style={styles.historyTitle}>Your own record</Text>
+                {result.your_history.rate != null && (
+                  <Text style={styles.historyRate}>
+                    {Math.round(result.your_history.rate * 100)}% set a pod
+                  </Text>
+                )}
+              </View>
+              <Text style={styles.historyText}>{result.your_history.statement}</Text>
+              {result.your_history.furthest ? (
+                <Text style={styles.historyFurthest}>
+                  Furthest reached: {result.your_history.furthest}
+                </Text>
+              ) : null}
+            </View>
+          )}
+
           {/* Every piece of evidence behind the verdict, and where it came
               from.
               Two separate things feed this result and they are gathered in
@@ -881,7 +1012,29 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
             </View>
           ) : null}
 
-          {result.reasoning?.length > 0 && (
+          {(result.reasoning?.length > 0 || result.precedents?.length > 0) && (
+            <TouchableOpacity
+              style={styles.evidenceToggle}
+              onPress={() => setShowEvidence((v) => !v)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={showEvidence ? 'chevron-down' : 'chevron-forward'}
+                size={15}
+                color={COLORS.primary}
+              />
+              <Text style={styles.evidenceToggleText}>
+                {showEvidence ? 'Hide the evidence' : 'Where this comes from'}
+              </Text>
+              {result.precedents?.length > 0 && !showEvidence && (
+                <Text style={styles.evidenceCount}>
+                  {result.precedents.length} registered
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {showEvidence && result.reasoning?.length > 0 && (
             <View style={styles.block}>
               {result.reasoning.map((r, i) => (
                 <Text key={i} style={styles.reasonText}>• {r}</Text>
@@ -889,7 +1042,7 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
             </View>
           )}
 
-          {result.precedents?.length > 0 && (
+          {showEvidence && result.precedents?.length > 0 && (
             <View style={styles.block}>
               <Text style={styles.blockTitle}>Registered precedents</Text>
               {result.precedents.map((p, i) => (
@@ -901,7 +1054,7 @@ const CompatibilityTab = ({ level1Result = null, level1Image = null, prefill = n
             </View>
           )}
 
-          {result.expected_offspring?.known && (
+          {showEvidence && result.expected_offspring?.known && (
             <View style={styles.block}>
               <Text style={styles.blockTitle}>Expected offspring</Text>
               {result.expected_offspring.flower_size && (
@@ -990,7 +1143,23 @@ const styles = StyleSheet.create({
   verdictRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   verdict: { fontSize: FONT.xl, fontWeight: '800' },
-  confidence: { color: COLORS.textTertiary, fontSize: FONT.sm, marginLeft: 3 },
+  historyBox: {
+    backgroundColor: COLORS.primaryDim, borderRadius: RADIUS.sm,
+    padding: SPACE.md, marginTop: SPACE.md,
+    borderLeftWidth: 3, borderLeftColor: COLORS.primary,
+  },
+  historyHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  historyTitle: { flex: 1, color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
+  historyRate: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800' },
+  historyText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
+  historyFurthest: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 4 },
+  suggestSource: { color: COLORS.textTertiary, fontSize: FONT.sm },
+  evidenceToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    paddingVertical: SPACE.md,
+  },
+  evidenceToggleText: { flex: 1, color: COLORS.primary, fontSize: FONT.sm, fontWeight: '700' },
+  evidenceCount: { color: COLORS.textTertiary, fontSize: FONT.sm },
   verdictNote: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
 
   btnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginTop: SPACE.sm },
@@ -1037,6 +1206,11 @@ const styles = StyleSheet.create({
   },
   suggestText: { color: COLORS.textSecondary, fontSize: FONT.md },
 
+  swapNote: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 1 },
+  stepHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, marginTop: SPACE.lg, marginBottom: 2 },
+  stepNum: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '800', letterSpacing: 0.6 },
+  stepTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
+  stepIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19, marginBottom: SPACE.md },
   swapBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 6, paddingVertical: SPACE.md,

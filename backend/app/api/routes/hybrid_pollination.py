@@ -296,10 +296,26 @@ async def list_known_parents():
 
     A name absent from this list can still be assessed — it simply falls back
     to genus-level evidence rather than an exact registered precedent.
+
+    `mine` carries the grower's OWN plant names from the crossing logbook, kept
+    in a separate list rather than merged. The two mean different things: a
+    register name identifies a variety the RHS has recorded, while a logbook
+    name is whatever is written on that grower's tag. Merging them would let
+    the app imply it recognised a plant it has only ever been told about.
     """
+    try:
+        from app.services.cross_log_service import cross_log_service
+        mine = sorted({(p.get("name") or "").strip()
+                       for p in cross_log_service.plants()
+                       if (p.get("name") or "").strip()})
+    except Exception as e:
+        print(f"[WARN] logbook names unavailable: {e}")
+        mine = []
+
     return {
         "status": "success",
         "parents": compatibility_service.known_parents(),
+        "mine": mine,
         "info": compatibility_service.info(),
     }
 
@@ -454,3 +470,50 @@ async def log_delete_cross(cross_id: str):
         return {"status": "success", "removed": removed["crossId"]}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No cross {cross_id}")
+
+
+# ══════════════════════════════════════════════════════════════════
+#  VARIETIES
+#
+#  Two lists, kept apart because they answer different questions: what
+#  this grower has, and what the knowledge base has evidence for. The
+#  tab used to return only the second, which is the register's contents
+#  rather than the grower's - fifty-three names of plants they had never
+#  grown, and none of their own.
+# ══════════════════════════════════════════════════════════════════
+
+from app.services.varieties_service import varieties_service
+
+
+@router.get("/varieties")
+async def list_varieties():
+    """
+    The grower's plants and the register's names, with a confidence tier on
+    every name.
+
+    A name typed by a grower is not the same kind of fact as a name in the
+    register, so each entry says which it is. A mistyped name appears as
+    `named` rather than sitting unmarked beside a registered one.
+    """
+    return {"status": "success", **varieties_service.summary()}
+
+
+@router.get("/varieties/photo/{source}/{name}")
+async def variety_photo(source: str, name: str):
+    """
+    Serve a plant photograph.
+
+    Two stores, because they are filled in two different ways: `collection`
+    ships with the repository and holds the plants this project was built on,
+    while `log` holds what the grower has photographed since.
+    """
+    if source == "collection":
+        path = varieties_service.photo_path(name)
+    elif source == "log":
+        path = cross_log_service.photo_path(name)
+    else:
+        raise HTTPException(status_code=404, detail="Unknown photo store")
+
+    if not path:
+        raise HTTPException(status_code=404, detail="No such photo")
+    return FileResponse(path)

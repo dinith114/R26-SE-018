@@ -290,8 +290,17 @@ export const fillTray = (h, s, fillSeconds = 15) =>
  * Includes whether the NODE confirmed it — a command the server accepted and a
  * pour the hardware ran are different claims, and the history says which it is.
  */
+/* Each humidity-drop forecast against what humidity then did (18 Oct 2026):
+   hit / false alarm / missed / correct quiet, plus precision and recall. */
+export const getDropPredictions = (h, s, days = 7) =>
+  req(`/houses/${h}/sections/${s}/drop-predictions?days=${days}`);
+
 export const getSectionEvents = (h, s, limit = 40) =>
   req(`/houses/${h}/sections/${s}/events?limit=${limit}`);
+
+/** Every pour on the farm that is waiting, running or just finished - the live
+ *  status strip (components/ActivityBar, hooks/useActivity). */
+export const getActivity = () => req('/activity');
 
 export const stopSection = (h, s) =>
   req(`/houses/${h}/sections/${s}/stop`, { method: 'POST' });

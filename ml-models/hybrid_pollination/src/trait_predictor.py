@@ -194,21 +194,28 @@ class TraitPredictor:
 
     @staticmethod
     def _explain(trait: str, value: str, confidence: float, bundle: dict) -> str:
-        label = trait.replace("_", " ")
-        acc = bundle.get("accuracy", 0.0)
+        """Written for the grower holding the phone, not for an evaluator.
 
-        msg = f"Predicted {label}: {value}."
+        This used to read "Model accuracy on unseen plants was 56% (baseline
+        50%)". Every figure in it was true and none of it helped: a grower
+        standing over a plant cannot act on a baseline, and two percentages in
+        one sentence invite the question of which one describes THIS reading.
+        Neither does. The measured figures belong in the evaluation chapter,
+        and `confidence` is still on the trait itself for any caller that
+        wants it.
+        """
+        label = trait.replace("_", " ")
+        msg = f"Read from the photo: {label} looks {value}."
 
         if value in UNDER_SUPPORTED.get(trait, set()):
-            n = bundle.get("plants_per_class", {}).get(value, 0)
-            msg += (f" Note: only {n} plants in the training data were labelled "
-                    f"'{value}', so this class is not reliably learned.")
-
-        msg += (f" Model accuracy on unseen plants was {acc:.0%} "
-                f"(baseline {bundle.get('baseline', 0):.0%}).")
+            msg += (" This is an uncommon reading and the system has seen few "
+                    "plants like it, so treat it as a prompt to look rather "
+                    "than an answer.")
 
         if confidence < 0.4:
-            msg += " Confidence is low - please confirm."
+            msg += " The photo is not clear enough to be sure - worth checking the plant."
+        elif confidence < 0.7:
+            msg += " Worth a glance at the plant to confirm."
 
         return msg
 

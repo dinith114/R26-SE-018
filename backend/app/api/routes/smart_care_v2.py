@@ -1917,6 +1917,37 @@ def _drop_risk(house_id: str, section_id: str, latest: dict, now: datetime) -> O
         return None
 
 
+# At most one kept prediction per section per this many ms. The tray pass runs
+# every 15 minutes and the app can ask in between; keying by the 15-minute slot
+# keeps the record to one per pass instead of one per screen refresh.
+DROP_LOG_EVERY_MS = 15 * 60_000
+
+
+def _log_drop_prediction(house_id: str, section_id: str, now: datetime, risk: float,
+                         threshold: float, horizon_h, humidity, low_band: float) -> None:
+    """Keep what the humidity-drop model said, so it can be checked later (18 Oct 2026).
+
+    Only the latest decision used to survive, inside the section's `tray`, so
+    nobody could look back and ask "it said a drop was coming at 09:15 - did one
+    come?". drop_predictions() answers that from these records and the readings.
+
+    Its own branch, outside the section subtree, for the same reason as events:
+    /farm/houses.json is downloaded every minute, and anything inside a section
+    is paid for on every one of those downloads. A lost record never blocks the
+    tray, so failures are swallowed.
+    """
+    try:
+        at = int(now.timestamp() * 1000)
+        key = str(at - at % DROP_LOG_EVERY_MS)
+        _fb_put(f"/farm/trayPredictions/{house_id}/{section_id}/{key}.json", {
+            "at": at, "atLocal": to_farm_time(at).strftime("%Y-%m-%d %H:%M"),
+            "risk": round(float(risk), 3), "threshold": float(threshold),
+            "horizonHours": float(horizon_h), "humidity": humidity,
+            "lowBand": float(low_band), "saysDrop": bool(risk >= threshold)})
+    except Exception:
+        pass
+
+
 def _tray_decision(house_id: str, section_id: str, section: dict,
                    now: Optional[datetime] = None) -> dict:
     latest = _clean((section or {}).get("latest") or {})
@@ -2006,6 +2037,9 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     if secs == 0 and TRAY_DAY_START <= hour <= TRAY_DAY_END and rh < hi:
         risk = _drop_risk(house_id, section_id, latest, now)
         thr = float((_tray or {}).get("drop_threshold") or 0.70)
+        if risk is not None:
+            _log_drop_prediction(house_id, section_id, now, risk, thr,
+                                 (_tray or {}).get("drop_horizon_hours", 3), rh, lo)
         if risk is not None and risk >= thr:
             secs = amount
             status = "prefill"
@@ -2064,10 +2098,13 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
             cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                    "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
             _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
+            # `reason` says WHY it filled: "prefill" is the drop model acting
+            # ahead of time, "fill"/"topup" the humidity already being low.
             _log_event(house_id, section_id, section,
                        action="tray", durationSec=secs, withFertilizer=False,
                        by="auto", commandId=node_cmd.get("id"),
-                       confirmed=False)
+                       confirmed=False, reason=status,
+                       risk=(prefill or {}).get("risk"))
             commanded = True
             msg += " Auto mode: filling now."
         else:
@@ -2306,6 +2343,71 @@ def _stamp_event_outcome(house_id: str, section_id: str, command_id: str, ack: d
 EVENT_KEEP = 60
 
 
+# ── live activity: what is pouring, waiting or just finished (18 Oct 2026) ────
+#
+# A run used to be visible only on the screen that started it. The Run screen and
+# the section card both followed their pour in their own memory, so leaving the
+# screen lost it, coming back showed nothing, and an automatic pour - started by
+# the engine, watched by nobody - never showed anywhere until it was history.
+#
+# One small record per pour, /farm/activity/{commandId}, written beside the
+# event, joined at read time with what the controller itself publishes: its
+# running marker (pouring now, on its own clock), its queue (waiting), and its
+# ack ledger (finished, and how). Kept apart from /farm/houses on purpose: the
+# engine downloads that document every minute.
+ACTIVITY_KEEP_MS = 30 * 60_000      # a record older than this is deleted on the next pour
+ACTIVITY_DONE_SHOW_SEC = 180        # a finished pour stays on the screens this long
+ACTIVITY_GRACE_SEC = 90             # beyond its length, before an unanswered pour is "not confirmed"
+ACTIVITY_MAX_WAIT_SEC = 15 * 60     # the controller throws away a pour older than this (master_queue.ino)
+
+
+def _note_activity(house_id: str, section_id: str, command_id: str, fields: dict) -> None:
+    """Record one pour for the live status. A whole-house run logs one event per
+    section under ONE command id, so later calls only add their section."""
+    try:
+        master = _master_for_house(house_id)
+        if not master:
+            return
+        base = f"/farm/activity/{command_id}"
+        if _fb_get(f"{base}/id.json"):
+            _fb_put(f"{base}/sections/{section_id}.json", True)
+            return
+        _fb_put(f"{base}.json", {
+            "id": command_id, "houseId": house_id, "lead": section_id,
+            "sections": {section_id: True}, "master": master,
+            "action": fields.get("action"), "durationSec": int(fields.get("durationSec") or 0),
+            "by": fields.get("by") or "user", "issuedAtMs": int(_server_now_ms())})
+        # Pruned here, on a write, so reading the status never deletes anything.
+        old = _fb_get("/farm/activity.json") or {}
+        cutoff = _server_now_ms() - ACTIVITY_KEEP_MS
+        for k, v in old.items():
+            if not isinstance(v, dict) or float(v.get("issuedAtMs") or 0) < cutoff:
+                _fb_delete(f"/farm/activity/{k}.json")
+    except Exception:
+        pass        # the pour itself is issued and logged; this is only the live view
+
+
+_ACTIVITY_NAMES: Dict[tuple, tuple] = {}      # (tenant, house) -> (expires, house name, {sid: name})
+
+
+def _activity_names(house_id: str, section_ids: List[str]) -> Tuple[str, Dict[str, str]]:
+    """House and section names, cached ten minutes: the status is polled every few
+    seconds while a pour runs, and names do not change that fast."""
+    key = (current_tenant(), house_id)
+    now = time.time()
+    hit = _ACTIVITY_NAMES.get(key)
+    if not hit or hit[0] < now or any(s not in hit[2] for s in section_ids):
+        names = dict(hit[2]) if hit and hit[0] >= now else {}
+        hname = (hit[1] if hit and hit[0] >= now else None) or \
+            (_fb_get(f"/farm/houses/{house_id}/meta/name.json") or house_id)
+        for sid in section_ids:
+            if sid not in names:
+                names[sid] = _fb_get(f"/farm/houses/{house_id}/sections/{sid}/meta/name.json") or sid
+        hit = (now + 600, hname, names)
+        _ACTIVITY_NAMES[key] = hit
+    return hit[1], hit[2]
+
+
 def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optional[str]:
     """Record something that MOVED WATER, so it can be shown as history.
 
@@ -2351,6 +2453,10 @@ def _log_event(house_id: str, section_id: str, section: dict, **fields) -> Optio
                          "issuedAtMs": int(_server_now_ms())})
         except Exception:
             pass      # the run is logged; a confirmation that never comes is only cosmetic
+
+    # LIVE STATUS for every screen (18 Oct 2026) - see farm_activity().
+    if cid and fields.get("outcome") is None and fields.get("action") in ("water", "tray"):
+        _note_activity(house_id, section_id, cid, fields)
 
     # KEPT FOREVER (15 Oct 2026). The oldest beyond EVENT_KEEP used to be deleted
     # here, which with tray fills left only two or three weeks of history. An
@@ -2440,6 +2546,11 @@ class SectionIn(BaseModel):
     plantCount: int = 0
     growthStage: str = "Active"
     lightExposure: float = Field(0.8, ge=0.0, le=1.0)
+    # Where it sits, metres from the house's corner. Optional for old callers,
+    # but a section without it never appears on the house map - which is how a
+    # "Section 5" went missing on 18 Oct 2026. The app's new-spot flow sends it.
+    x: Optional[float] = Field(None, ge=0.0, le=500.0)
+    y: Optional[float] = Field(None, ge=0.0, le=500.0)
 
 
 class HouseIn(BaseModel):
@@ -2547,11 +2658,24 @@ async def add_section(house_id: str, s: SectionIn, ctx: AuthContext = Depends(re
         sid = f"S{n}"
     if sid in existing:
         raise HTTPException(409, f"Section '{sid}' already exists in {house_id}")
+    if (s.x is None) != (s.y is None):
+        raise HTTPException(400, "Give both x and y, or neither.")
+    if s.x is not None:
+        # Inside the house when its size is known: a spot outside the walls would
+        # anchor kriging to air that is not in the house.
+        try:
+            w, ln = float(house.get("width")), float(house.get("length"))
+        except (TypeError, ValueError):
+            w = ln = None
+        if w and ln and (s.x > w or s.y > ln):
+            raise HTTPException(400, f"That spot is outside the house ({w} m x {ln} m).")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/meta.json", {
-        "name": s.name, "label": s.label, "plantCount": s.plantCount,
-        "growthStage": s.growthStage, "lightExposure": s.lightExposure,
-        "deviceId": f"{house_id}-{sid}", "createdAt": now})
+    meta = {"name": s.name, "label": s.label, "plantCount": s.plantCount,
+            "growthStage": s.growthStage, "lightExposure": s.lightExposure,
+            "deviceId": f"{house_id}-{sid}", "createdAt": now}
+    if s.x is not None:
+        meta["x"], meta["y"] = round(float(s.x), 2), round(float(s.y), 2)
+    _fb_put(f"/farm/houses/{house_id}/sections/{sid}/meta.json", meta)
     _fb_put(f"/farm/houses/{house_id}/sections/{sid}/control.json",
             {"mode": "auto", "trayEnabled": True})
     house["sectionCount"] = len(existing) + 1   # existing was read before the write
@@ -3021,6 +3145,76 @@ def water_house_once(house_id: str, cmd: HouseWaterCmd,
                         f"section{'' if n == 1 else 's'}.")}
 
 
+@router.get("/houses/{house_id}/sections/{section_id}/drop-predictions")
+def drop_predictions(house_id: str, section_id: str, days: int = 7,
+                     ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Each humidity-drop prediction, checked against what humidity then did (18 Oct 2026).
+
+    The model says "humidity will fall below the band within N hours" or not.
+    For every kept prediction (_log_drop_prediction) this looks at the section's
+    own readings over the next N hours:
+
+      hit             said drop, and humidity did go below the band
+      false alarm     said drop, and it never did
+      missed          said no drop, and it did
+      correct quiet   said no drop, and it never did
+
+    A window in which the tray was filled is set aside ("tray filled"): the fill
+    changes what humidity does, so neither verdict would be honest - which is
+    exactly the case of a prefill the model triggered. A window still running is
+    "pending", and one with fewer than three readings "no data".
+    """
+    days = max(1, min(int(days), 31))
+    end = int(_server_now_ms())
+    start = end - days * 86_400_000
+    raw = _fb_get(f'/farm/trayPredictions/{house_id}/{section_id}.json'
+                  f'?orderBy="$key"&startAt="{start}"&endAt="{end}"') or {}
+    preds = sorted((p for p in (raw or {}).values()
+                    if isinstance(p, dict) and isinstance(p.get("at"), (int, float))
+                    and start <= p["at"] <= end), key=lambda p: p["at"])
+    counts = {"hit": 0, "false alarm": 0, "missed": 0, "correct quiet": 0,
+              "tray filled": 0, "pending": 0, "no data": 0}
+    rows = []
+    if preds:
+        longest = max(float(p.get("horizonHours") or 3) for p in preds)
+        last_end = int(preds[-1]["at"] + longest * 3_600_000)
+        rh = sorted((t, v) for t, _k, r in _readings_between(house_id, section_id,
+                                                             int(preds[0]["at"]), last_end)
+                    if (v := _measured(r, "humidity")) is not None)
+        fills = [t for t, e in _events_between(house_id, section_id, int(preds[0]["at"]) - 60_000,
+                                               last_end) if e.get("action") == "tray"]
+        for p in preds:
+            a = int(p["at"])
+            b = int(a + float(p.get("horizonHours") or 3) * 3_600_000)
+            if b > end:
+                outcome = "pending"
+            elif any(a - 60_000 <= t <= b for t in fills):
+                outcome = "tray filled"
+            else:
+                window = [v for t, v in rh if a < t <= b]
+                if len(window) < 3:
+                    outcome = "no data"
+                else:
+                    dropped = min(window) < float(p.get("lowBand") or 60)
+                    says = bool(p.get("saysDrop"))
+                    outcome = ("hit" if says and dropped else "false alarm" if says
+                               else "missed" if dropped else "correct quiet")
+            counts[outcome] += 1
+            rows.append({"at": a, "atLocal": p.get("atLocal"), "risk": p.get("risk"),
+                         "saysDrop": bool(p.get("saysDrop")), "humidity": p.get("humidity"),
+                         "outcome": outcome})
+    said = counts["hit"] + counts["false alarm"]
+    real = counts["hit"] + counts["missed"]
+    return {"status": "success", "houseId": house_id, "sectionId": section_id, "days": days,
+            "summary": {**counts,
+                        "judged": said + counts["missed"] + counts["correct quiet"],
+                        # None, not 0, when there is nothing to divide by: "no alarms
+                        # yet" is not "every alarm was wrong".
+                        "precision": round(counts["hit"] / said, 3) if said else None,
+                        "recall": round(counts["hit"] / real, 3) if real else None},
+            "predictions": rows}
+
+
 @router.get("/houses/{house_id}/sections/{section_id}/events")
 def section_events(house_id: str, section_id: str, limit: int = 40, ctx: AuthContext = Depends(require_auth)) -> dict:
     """Everything that moved water in this section, newest first.
@@ -3264,6 +3458,88 @@ def timeline_export_file(token: str, filename: str):
     safe = "".join(c for c in filename if c.isalnum() or c in "-_.") or "history.csv"
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{safe}"'})
+
+
+@router.get("/activity")
+def farm_activity(ctx: AuthContext = Depends(require_auth)) -> dict:
+    """Every pour on the farm that is waiting, running, or just finished.
+
+    What the screens poll for the live status strip, whoever started the pour -
+    the farmer on any screen, a whole-house run, or the engine by itself. Each
+    item's `state`:
+      sending      written to the controller's queue a moment ago
+      waiting      in the queue: the controller runs one pour at a time, and an
+                   offline controller holds it (for up to 15 min, then drops it)
+      running      the controller's own running marker names it; remainingSec is
+                   counted from the NODE's start time, never the phone's
+      done / stopped / refused   the controller's ack, kept on screen for 3 min
+      unconfirmed  no answer within its length + 90 s
+    """
+    now_s = _server_now_ms() / 1000.0
+    raw = _fb_get("/farm/activity.json") or {}
+    masters: Dict[str, dict] = {}
+    items = []
+    for cid, a in (raw.items() if isinstance(raw, dict) else []):
+        if not isinstance(a, dict):
+            continue
+        secs = int(a.get("durationSec") or 0)
+        issued_s = float(a.get("issuedAtMs") or 0) / 1000.0
+        age = now_s - issued_s
+        # Long over whatever happened: not worth a single read.
+        if age > ACTIVITY_MAX_WAIT_SEC + secs + ACTIVITY_GRACE_SEC + ACTIVITY_DONE_SHOW_SEC:
+            continue
+        mac = a.get("master")
+        if not mac:
+            continue
+        st = masters.get(mac)
+        if st is None:
+            run = _fb_get(f"/farm/masters/{mac}/running.json")
+            queue = _fb_get(f"/farm/masters/{mac}/queue.json?shallow=true")
+            st = masters[mac] = {"running": run if isinstance(run, dict) else {},
+                                 "queue": queue if isinstance(queue, dict) else {}}
+        sids = sorted((a.get("sections") or {}).keys(), key=_natural_key) or [a.get("lead")]
+        item = {"id": cid, "houseId": a.get("houseId"), "sectionIds": sids,
+                "lead": a.get("lead") or sids[0], "action": a.get("action") or "water",
+                "by": a.get("by") or "user", "durationSec": secs, "issuedAtSec": int(issued_s),
+                "remainingSec": None, "ranSec": None, "outcome": None}
+        run = st["running"]
+        if run.get("id") == cid:
+            dur = int(run.get("durationSec") or secs)
+            started = run.get("startedAt")
+            item.update(state="running", durationSec=dur,
+                        remainingSec=(max(0, int(round(dur - (now_s - float(started)))))
+                                      if started else None))
+        else:
+            # The ack is read before the queue: the controller writes the ack and
+            # only then deletes the queue entry, and in that moment the pour
+            # would otherwise read as "waiting" again after it has run.
+            ack = _fb_get(f"/farm/masters/{mac}/acks/{cid}.json") or {}
+            if ack.get("id") == cid:
+                outcome = ack.get("outcome")
+                ran = int(ack.get("ranSec") or 0)
+                ended = float(ack.get("at") or (issued_s + ran))
+                if now_s - ended > ACTIVITY_DONE_SHOW_SEC:
+                    continue
+                item.update(state=("done" if outcome in ("done", "ok") else
+                                   "stopped" if outcome == "stopped" else "refused"),
+                            outcome=outcome, ranSec=ran, endedAtSec=int(ended))
+            elif cid in st["queue"]:
+                item["state"] = "waiting"
+            elif age < secs + ACTIVITY_GRACE_SEC:
+                item["state"] = "sending"
+            elif age < secs + ACTIVITY_GRACE_SEC + ACTIVITY_DONE_SHOW_SEC:
+                item["state"] = "unconfirmed"
+            else:
+                continue
+        hname, snames = _activity_names(item["houseId"], sids)
+        item["houseName"] = hname
+        item["sectionNames"] = [snames.get(s, s) for s in sids]
+        items.append(item)
+
+    order = {"running": 0, "waiting": 1, "sending": 1}
+    items.sort(key=lambda i: (order.get(i["state"], 2), -i["issuedAtSec"]))
+    return {"status": "success", "serverNowSec": int(now_s), "items": items,
+            "active": any(i["state"] in ("running", "waiting", "sending") for i in items)}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/command-status")

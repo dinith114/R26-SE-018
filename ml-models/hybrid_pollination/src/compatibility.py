@@ -65,8 +65,10 @@ TIER_REGISTERED = "registered"        # This exact pairing is in the register
 TIER_GENUS_PROVEN = "genus_proven"    # This genus combination is registered
 TIER_UNDEMONSTRATED = "undemonstrated"  # No registered precedent found
 TIER_BLOCKED = "blocked"              # Plant health rules out the attempt
+TIER_UNKNOWN_NAME = "unknown_name"    # A name was not recognised - cannot judge
 
-TIER_ORDER = [TIER_BLOCKED, TIER_UNDEMONSTRATED, TIER_GENUS_PROVEN, TIER_REGISTERED]
+TIER_ORDER = [TIER_BLOCKED, TIER_UNKNOWN_NAME, TIER_UNDEMONSTRATED,
+              TIER_GENUS_PROVEN, TIER_REGISTERED]
 
 # The methodology specifies a two-class output (Compatible / Low Compatibility).
 # The four evidence tiers carry more information, so they are kept as the
@@ -77,6 +79,7 @@ TIER_TO_CLASS = {
     TIER_REGISTERED: "Compatible",
     TIER_GENUS_PROVEN: "Compatible",
     TIER_UNDEMONSTRATED: "Low Compatibility",
+    TIER_UNKNOWN_NAME: "Cannot Check",
     TIER_BLOCKED: "Not Advised",
 }
 
@@ -84,6 +87,7 @@ TIER_LABEL = {
     TIER_REGISTERED: "Registered precedent",
     TIER_GENUS_PROVEN: "Genus combination proven",
     TIER_UNDEMONSTRATED: "No registered precedent",
+    TIER_UNKNOWN_NAME: "Name not recognised",
     TIER_BLOCKED: "Not advised - plant condition",
 }
 
@@ -346,6 +350,36 @@ class CompatibilityEngine:
             )
             return result
 
+        # ── Name gate ─────────────────────────
+        # A genus the engine had to GUESS cannot support a verdict.
+        #
+        # Measured failure: "Banana" x "Table" returned "Compatible - Vanda x
+        # Vanda, the standard, most reliable cross" with five precedents. Both
+        # names were unrecognised, both were assumed to be Vanda because that
+        # is the collection's genus, and the assumption then flowed into a
+        # confident answer. `_warn_about_names` already recorded the guess in
+        # `warnings`, but a warning beside a green verdict is not a refusal.
+        #
+        # Everything downstream - the register lookup, the alliance rules, the
+        # precedents - is reasoning about GENERA. If the genus is a guess, the
+        # reasoning has nothing underneath it, so the honest answer is that the
+        # cross cannot be judged rather than that it is fine.
+        guessed = [lbl for lbl, info in (("pod", pod_name), ("pollen", pollen_name))
+                   if info["genus_source"] == "assumed"]
+        if guessed:
+            which = " and ".join("%s parent" % g for g in guessed)
+            result.tier = TIER_UNKNOWN_NAME
+            result.headline = (
+                "Cannot check this cross - the %s %s not recognised"
+                % (which, "names are" if len(guessed) > 1 else "name is")
+            )
+            result.suggestion = (
+                "Write the genus at the front of the name, for example "
+                "\"V. Fuch Sunset\" or \"Aerides leeana\". Without a genus the "
+                "system has nothing to look up, and it will not guess one."
+            )
+            return result
+
         # ── Evidence search ───────────────────
         exact = self.kb.find_exact(result.pod_parent, result.pollen_parent)
         reverse = self.kb.find_reversed(result.pod_parent, result.pollen_parent)
@@ -402,7 +436,14 @@ class CompatibilityEngine:
 
                 notho = self.kb.nothogenus_for(pod_genus, pollen_genus) or notho_cover
                 if pod_genus == pollen_genus:
-                    result.headline = f"{pod_genus} x {pod_genus} - the standard, most reliable cross"
+                    # Named as a GENUS check. The engine reads only the
+                    # genus from each name, so two different Vanda varieties
+                    # give an identical answer - and a headline naming the
+                    # varieties implied an assessment of them that never
+                    # happened.
+                    result.headline = (
+                        f"{pod_genus} x {pod_genus} - a standard genus pairing"
+                    )
                     result.reasoning.append(
                         "Same-genus crosses are routine practice. The Peradeniya "
                         "breeder reports Vanda x Vanda as the most successful type."

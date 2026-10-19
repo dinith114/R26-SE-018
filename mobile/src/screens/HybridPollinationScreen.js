@@ -8,6 +8,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import CompatibilityTab from '../components/CompatibilityTab';
 import CrossLogTab from '../components/CrossLogTab';
+import { getVarieties, varietyPhotoUrl } from '../services/crossLog';
 import AppDialog from '../components/AppDialog';
 import { assessSuitability, getGuidance, getKnownParents, getApiBaseUrl } from '../services/api';
 
@@ -19,18 +20,9 @@ const HybridPollinationScreen = ({ navigation }) => {
 
   // ── State ──────────────────────────────────
   const [selectedImage, setSelectedImage] = useState(null);
-  const [traits, setTraits] = useState({
-    leaf_condition: null,
-    plant_strength: null,
-    disease_visible: null,
-    flower_condition: null,
-  });
   const [result, setResult] = useState(null);
   // Set when the input gate refuses the photograph as not an orchid.
   const [rejection, setRejection] = useState(null);
-  // Corrections start folded: the photograph answers all four traits,
-  // so showing empty inputs first is what made the system look input-driven.
-  const [showCorrections, setShowCorrections] = useState(false);
   /* The leaf close-up is optional and folded away by default, for the same
      reason the corrections are: an open card the size of the main photo one
      reads as a second required step. */
@@ -50,14 +42,7 @@ const HybridPollinationScreen = ({ navigation }) => {
   const [guidanceData, setGuidanceData] = useState(null);
   const [activeTab, setActiveTab] = useState('assess'); // 'assess' | 'cross' | 'varieties'
 
-  // ── Trait Options ──────────────────────────
-  const traitOptions = {
-    leaf_condition: ['healthy', 'moderate', 'weak'],
-    plant_strength: ['strong', 'moderate', 'weak'],
-    disease_visible: ['no', 'yes'],
-    flower_condition: ['good', 'moderate', 'weak', 'unknown'],
-  };
-
+  // ── Trait Display Names ──────────────
   const traitLabels = {
     leaf_condition: 'Leaf Condition',
     plant_strength: 'Plant Strength',
@@ -90,12 +75,6 @@ const HybridPollinationScreen = ({ navigation }) => {
       setSelectedImage(pickerResult.assets[0].uri);
       setResult(null);
       setRejection(null);
-      setTraits({
-        leaf_condition: null,
-        plant_strength: null,
-        disease_visible: null,
-        flower_condition: null,
-      });
     }
   };
 
@@ -133,6 +112,26 @@ const HybridPollinationScreen = ({ navigation }) => {
     }
   };
 
+  /**
+   * Empty the Assess tab.
+   *
+   * Everything downstream reads from `selectedImage` and `result`, so
+   * clearing those two clears the Cross tab's pod parent and the logbook
+   * composer's prefill with them. That is the point: a photograph the grower
+   * has removed should not still be carried into a cross on another tab.
+   *
+   * The close-up goes too. It belongs to the plant that was just removed, and
+   * leaving it behind would attach one plant's leaf to the next plant's
+   * assessment.
+   */
+  const clearPlantImage = () => {
+    setSelectedImage(null);
+    setResult(null);
+    setRejection(null);
+    setCloseupImage(null);
+    setGuidanceData(null);
+  };
+
   const takePhoto = async () => {
     const permResult = await ImagePicker.requestCameraPermissionsAsync();
     if (!permResult.granted) {
@@ -149,12 +148,6 @@ const HybridPollinationScreen = ({ navigation }) => {
       setSelectedImage(pickerResult.assets[0].uri);
       setResult(null);
       setRejection(null);
-      setTraits({
-        leaf_condition: null,
-        plant_strength: null,
-        disease_visible: null,
-        flower_condition: null,
-      });
     }
   };
 
@@ -170,7 +163,7 @@ const HybridPollinationScreen = ({ navigation }) => {
     setRejection(null);
 
     try {
-      const response = await assessSuitability(selectedImage, traits, closeupImage);
+      const response = await assessSuitability(selectedImage, {}, closeupImage);
       setResult(response);
 
       // Auto-fetch guidance
@@ -240,8 +233,24 @@ const HybridPollinationScreen = ({ navigation }) => {
   // from the API rather than hard-coded, so this list and the type-ahead on the
   // Cross tab can never drift apart.
   const [parentNames, setParentNames] = useState([]);
+  /* The Varieties tab's two lists. Loaded together because they are one
+     answer to one question - what can this grower breed from - split only so
+     that what they own is not confused with what the register knows. */
+  const [varieties, setVarieties] = useState(null);
+  /* What the Cross tab currently has photographed, so the logbook composer
+     can start from it. Held here rather than in either tab because it has to
+     cross between them, and the screen is the only thing that sees both. */
+  const [crossParents, setCrossParents] = useState(null);
   const [parentSearch, setParentSearch] = useState('');
   const [crossPrefill, setCrossPrefill] = useState(null);
+
+  /* The Varieties tab's own data. Separate from getKnownParents, which still
+     feeds the type-ahead on the Cross tab: that one wants a flat list of
+     names the engine can find evidence for, this one wants the grower's
+     plants and the register kept apart. */
+  useEffect(() => {
+    getVarieties().then(setVarieties).catch(() => setVarieties(null));
+  }, []);
 
   useEffect(() => {
     getKnownParents()
@@ -273,10 +282,17 @@ const HybridPollinationScreen = ({ navigation }) => {
         {selectedImage ? (
           <Image source={{ uri: selectedImage }} style={styles.previewImage} />
         ) : (
-          <View style={styles.imagePlaceholder}>
+          /* The placeholder is the obvious thing to tap and it used to do
+             nothing, so a grower who tapped the camera icon got no camera. */
+          <TouchableOpacity
+            style={styles.imagePlaceholder}
+            onPress={takePhoto}
+            activeOpacity={0.7}
+          >
             <Ionicons name="camera-outline" size={36} color={COLORS.textTertiary} />
-            <Text style={styles.placeholderText}>Upload or capture a plant image</Text>
-          </View>
+            <Text style={styles.placeholderText}>Tap to photograph a plant</Text>
+            <Text style={styles.placeholderHint}>or choose one from the gallery below</Text>
+          </TouchableOpacity>
         )}
         <View style={styles.imageActions}>
           <TouchableOpacity style={styles.imageBtn} onPress={pickImage}>
@@ -287,6 +303,17 @@ const HybridPollinationScreen = ({ navigation }) => {
             <Ionicons name="camera-outline" size={16} color={COLORS.primary} />
             <Text style={styles.imageBtnText}>Camera</Text>
           </TouchableOpacity>
+          {/* Every other photo card in this component has a Clear; this one
+              did not, so the only way back to an empty Assess tab was to pick
+              another image or restart the app. */}
+          {selectedImage && (
+            <TouchableOpacity style={styles.imageBtn} onPress={clearPlantImage}>
+              <Ionicons name="close-outline" size={16} color={COLORS.textTertiary} />
+              <Text style={[styles.imageBtnText, { color: COLORS.textTertiary }]}>
+                Clear
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -296,7 +323,7 @@ const HybridPollinationScreen = ({ navigation }) => {
           span 1-3 px at that distance. Component 1's model is trained on
           leaves, so this is the image that actually reaches it. Optional
           because the rest of the assessment works without it. */}
-      {/* Folded away, like the corrections below it.
+      {/* Folded away, because it is optional.
           It has to stay - disease measured AUC 0.51 from a whole-plant frame,
           so without this image the disease half of the reading is not
           evidence. But it is optional, and an open photo card the size of the
@@ -357,60 +384,13 @@ const HybridPollinationScreen = ({ navigation }) => {
         </>
       )}
 
-      {/* Collapsed by default, and that is the point.
-          The review asked whether user input was necessary. It is not - all
-          four traits are read from the photograph. Keeping the fields visible
-          and open invited the grower to fill them in, which is what made the
-          system look input-driven. Kept but folded away: available to whoever
-          disagrees with a reading, invisible to everyone else. */}
-      <TouchableOpacity
-        style={styles.correctionsToggle}
-        onPress={() => setShowCorrections((v) => !v)}
-        activeOpacity={0.7}
-      >
-        <Ionicons
-          name={showCorrections ? 'chevron-down' : 'chevron-forward'}
-          size={15}
-          color={COLORS.textSecondary}
-        />
-        <Text style={styles.correctionsToggleText}>
-          Disagree with a reading? Correct it
-        </Text>
-        <Text style={styles.correctionsOptional}>optional</Text>
-      </TouchableOpacity>
-
-      {showCorrections && (
-      <View style={[styles.traitsCard, SHADOW.sm]}>
-        {Object.entries(traitOptions).map(([key, options]) => (
-          <View key={key} style={styles.traitRow}>
-            <View style={styles.traitLabelRow}>
-              <Ionicons name={traitIcons[key]} size={14} color={COLORS.textSecondary} />
-              <Text style={styles.traitLabel}>{traitLabels[key]}</Text>
-            </View>
-            <View style={styles.traitChips}>
-              {options.map((opt) => (
-                <TouchableOpacity
-                  key={opt}
-                  style={[
-                    styles.traitChip,
-                    traits[key] === opt && styles.traitChipActive
-                  ]}
-                  onPress={() => setTraits(prev => ({
-                    ...prev,
-                    [key]: prev[key] === opt ? null : opt
-                  }))}
-                >
-                  <Text style={[
-                    styles.traitChipText,
-                    traits[key] === opt && styles.traitChipTextActive
-                  ]}>{opt}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
-      </View>
-      )}
+      {/* The trait input card used to sit here.
+          Progress Presentation 1 asked the question that removed it: if you
+          upload an image to get a result, why does the system need user
+          input? It does not. All four traits are read from the photograph,
+          and a weak reading now holds the verdict at Not Suitable on its own,
+          so there is nothing the grower has to type for the assessment to
+          reach the right answer. */}
 
       {/* Assess Button */}
       <TouchableOpacity
@@ -443,15 +423,6 @@ const HybridPollinationScreen = ({ navigation }) => {
 
           <Text style={styles.resultRec}>{rejection.message}</Text>
 
-          {rejection.check && rejection.check.vegetation != null && (
-            <Text style={styles.rejectDetail}>
-              Plant tissue in frame: {(rejection.check.vegetation * 100).toFixed(1)}%
-              {'  ·  '}novelty {rejection.check.distance} (limit {rejection.check.threshold})
-              {rejection.check.orchid_probability != null
-                ? `  ·  orchid likelihood ${(rejection.check.orchid_probability * 100).toFixed(0)}%`
-                : ''}
-            </Text>
-          )}
 
           <Text style={styles.rejectHint}>
             Photograph one Vanda plant, filling most of the frame, in daylight.
@@ -468,27 +439,71 @@ const HybridPollinationScreen = ({ navigation }) => {
               <Text style={[styles.resultLabel, { color: getSuitabilityColor(result.suitability) }]}>
                 {result.suitability}
               </Text>
+              {/* Two different numbers used to appear here under names that
+                  looked like the same thing: "Confidence 49.2%" in the header
+                  and "Suitable 98%" on the bar below it. 98 is what the model
+                  scored; 49 is what is left after the cross-checks cut it. A
+                  reader seeing both could only conclude one was wrong, and
+                  reasonably read 49% as "under half, so not suitable". */}
+              {/* No percentage when the verdict was vetoed. `confidence` is
+                  then the classifier's score for the label that was
+                  OVERRIDDEN, so printing it beside the new headline would be
+                  the same mismatch in a new place. The veto is a rule, not a
+                  probability, and the box below says which rule. */}
               <Text style={styles.resultConf}>
-                Confidence: {(result.confidence * 100).toFixed(1)}%
+                {result.vetoed_by
+                  ? 'Held by image analysis'
+                  : result.confidence_reduced_because?.length > 0
+                  ? 'Read with less certainty — see below'
+                  : 'Read clearly from your photo'}
               </Text>
             </View>
           </View>
 
-          {/* Probability Bars */}
-          <View style={styles.probSection}>
-            {result.probabilities && Object.entries(result.probabilities).map(([cls, prob]) => (
-              <View key={cls} style={styles.probRow}>
-                <Text style={styles.probLabel}>{cls}</Text>
-                <View style={styles.probBarBg}>
-                  <View style={[styles.probBar, {
-                    width: `${prob * 100}%`,
-                    backgroundColor: getSuitabilityColor(cls)
-                  }]} />
-                </View>
-                <Text style={styles.probVal}>{(prob * 100).toFixed(0)}%</Text>
+          {/* When image analysis overrode the classifier, say so plainly and
+              name the reason. The screen previously showed "weak" traits
+              beside a Suitable headline and left the grower to reconcile
+              them. */}
+          {result.vetoed_by ? (
+            <View style={styles.vetoBox}>
+              <Ionicons name="hand-left-outline" size={15} color={COLORS.danger} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.vetoTitle}>Held at Not Suitable</Text>
+                <Text style={styles.vetoText}>{result.vetoed_by}</Text>
               </View>
-            ))}
-          </View>
+            </View>
+          ) : result.confidence_reduced_because?.length > 0 ? (
+            <View style={styles.dampBox}>
+              <Ionicons name="alert-circle-outline" size={14} color={COLORS.warning} />
+              {/* Two percentages and the phrase "unlike the training set"
+                  used to sit here. The warning is worth keeping - this
+                  verdict IS less reliable and the grower should know - but
+                  the mechanism behind it is not theirs to carry, and a pair
+                  of numbers in one sentence only raises the question of which
+                  one describes the plant. Neither does. `model_score` and
+                  `confidence_reduced_because` are still in the API response
+                  for the evaluation chapter. */}
+              <Text style={styles.dampText}>
+                This photo is harder than usual to read. Take the verdict as a
+                guide and look at the plant yourself before acting on it.
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Probability Bars */}
+          {/* The three class-probability bars were here.
+              Removed, for the reason the grower gave: after a veto the bar
+              that filled furthest was still "Suitable", under a headline
+              reading Not Suitable. That is the contradiction this whole
+              change set out to remove, reappearing one row lower.
+
+              Fading the overruled bar was the first attempt and it was not
+              enough. The bars are the classifier's raw scores, and no reading
+              of them tells a grower anything they can act on - the plant is
+              either worth pollinating or it is not. The numbers are not lost:
+              `probabilities` and `model_score` are still in the API response
+              for the evaluation chapter, and the hold notice above states the
+              model's own score in words whenever a verdict was overridden. */}
 
           {/* Recommendation */}
           <Text style={styles.resultRec}>{result.recommendation}</Text>
@@ -513,7 +528,7 @@ const HybridPollinationScreen = ({ navigation }) => {
             {Object.values(result.trait_resolution.traits || {})
               .some((t) => t.source === 'user')
               ? 'Your values are marked. Tap any row for detail.'
-              : 'You typed nothing — all four came from the photo. Tap a row for detail.'}
+              : 'You typed nothing — every reading came from the photo. Tap a row for detail.'}
           </Text>
 
           {/* Two lines per trait, not five.
@@ -523,7 +538,18 @@ const HybridPollinationScreen = ({ navigation }) => {
               grower standing over the plant needs: they need to know whether
               to trust the reading. The number means something to an examiner,
               so it is kept, one tap away, rather than thrown out. */}
-          {Object.entries(result.trait_resolution.traits || {}).map(([key, t]) => {
+          {Object.entries(result.trait_resolution.traits || {})
+            /* flower_condition is not shown.
+               The bloom detector's recall on a whole-plant frame is 1% at the
+               shipped threshold (MIN_FLOWER_FRACTION, flower_analysis.py), so
+               on the photographs growers actually take it answers "none"
+               almost every time - including for a plant in full bloom. A row
+               that is wrong that often is worse than no row: it reads as the
+               system failing to see what the grower can plainly see. The
+               value is still measured and still goes to the model as a
+               feature; it is only withheld from the screen. */
+            .filter(([key]) => key !== 'flower_condition')
+            .map(([key, t]) => {
             const measured = t.source === 'measured';
             const known = t.value && t.value !== 'unknown';
             const tone = t.source === 'user'
@@ -547,14 +573,16 @@ const HybridPollinationScreen = ({ navigation }) => {
                   title: traitLabels[key] || key,
                   message: t.explanation || summary,
                   sections: [
-                    measured && {
-                      label: 'How sure the model is',
-                      text: `${(c * 100).toFixed(0)}% confident in this reading.`,
+                    measured && c < 0.7 && {
+                      label: 'How clear was it',
+                      text: c >= 0.4
+                        ? 'Readable, but not beyond doubt.'
+                        : 'Hard to read from this photo.',
                     },
                     t.needs_user_input && {
                       label: 'Worth confirming',
-                      text: 'Open "Disagree with a reading? Correct it" above the '
-                          + 'button to set this yourself.',
+                      text: 'This reading is too weak to rely on. Look at the '
+                          + 'plant itself before acting on the verdict.',
                     },
                   ].filter(Boolean),
                 })}
@@ -575,12 +603,11 @@ const HybridPollinationScreen = ({ navigation }) => {
             );
           })}
 
-          {result.trait_resolution.asked_for?.length > 0 && (
-            <Text style={styles.traitReadAsk}>
-              Still unknown: {result.trait_resolution.asked_for
-                .map((k) => traitLabels[k] || k).join(', ')}
-            </Text>
-          )}
+          {/* "Still unknown: Leaf Condition, Plant Strength" used to print
+              here. It restated what each row above already says in its own
+              second line, and listed traits that HAD been read - `asked_for`
+              means the reading was weak enough to be worth confirming, not
+              that nothing was found. Two different meanings under one word. */}
         </View>
       )}
 
@@ -607,75 +634,178 @@ const HybridPollinationScreen = ({ navigation }) => {
     </>
   );
 
-  const renderVarietiesTab = () => (
-    <>
-      <View style={styles.sectionHead}>
-        <View style={styles.sectionRule} />
-        <Ionicons name="flower-outline" size={16} color={COLORS.primary} />
-        <Text style={styles.sectionTitle}>Parent Varieties</Text>
-      </View>
-      <Text style={styles.varietyIntro}>
-        Every parent the compatibility engine has evidence for: {parentNames.length} names
-        taken from the registered crosses in the RHS orchid register plus the species
-        documented for this project. Tap one to use it in a cross.
-      </Text>
+  /**
+   * Two lists, kept apart because they answer different questions.
+   *
+   * MY PLANTS is what the grower actually has, with photographs. It is seeded
+   * with the collection this project was built on and grows every time a plant
+   * is registered through the logbook, so a grower who logs a cross does not
+   * have to enter those plants again to see them here.
+   *
+   * IN THE REGISTER is what the knowledge base has evidence for, names only.
+   * It is also an honest statement of coverage - a grower can see exactly how
+   * much the register knows before relying on it, which is the same reason the
+   * input gate refuses rather than guesses.
+   *
+   * Every name carries a tier, because a name typed by a grower is not the
+   * same kind of fact as a name in the register. A mistyped name shows up as
+   * "tag name" where it misleads nobody.
+   */
+  const TIER = {
+    register: { icon: 'checkmark-circle', colour: COLORS.success,
+                text: 'In the register' },
+    named:    { icon: 'pricetag-outline', colour: COLORS.textTertiary,
+                text: 'Tag name \u00b7 not in the register' },
+    unnamed:  { icon: 'help-circle-outline', colour: COLORS.warning,
+                text: 'No name yet \u00b7 identified later' },
+  };
 
-      <View style={[styles.searchBox, SHADOW.sm]}>
-        <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search names"
-          placeholderTextColor={COLORS.textTertiary}
-          value={parentSearch}
-          onChangeText={setParentSearch}
-          autoCapitalize="none"
-        />
-        {parentSearch.length > 0 && (
-          <TouchableOpacity onPress={() => setParentSearch('')}>
-            <Ionicons name="close-circle" size={16} color={COLORS.textTertiary} />
-          </TouchableOpacity>
+  const matchesSearch = (name) =>
+    name.toLowerCase().includes(parentSearch.trim().toLowerCase());
+
+  const renderUseRow = (name) => (
+    <View style={styles.useRow}>
+      <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pod')}>
+        <Text style={styles.useBtnText}>Use as pod parent</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pollen')}>
+        <Text style={styles.useBtnText}>Use as pollen parent</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderVarietiesTab = () => {
+    const mine = (varieties?.mine || []).filter((p) => matchesSearch(p.name));
+    const reg = (varieties?.register || []).filter((p) => matchesSearch(p.name));
+    const counts = varieties?.counts || {};
+
+    return (
+      <>
+        <View style={styles.sectionHead}>
+          <View style={styles.sectionRule} />
+          <Ionicons name="flower-outline" size={16} color={COLORS.primary} />
+          <Text style={styles.sectionTitle}>Varieties</Text>
+        </View>
+
+        <View style={[styles.searchBox, SHADOW.sm]}>
+          <Ionicons name="search-outline" size={14} color={COLORS.textTertiary} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search your plants and the register"
+            placeholderTextColor={COLORS.textTertiary}
+            value={parentSearch}
+            onChangeText={setParentSearch}
+            autoCapitalize="none"
+          />
+          {parentSearch.length > 0 && (
+            <TouchableOpacity onPress={() => setParentSearch('')}>
+              <Ionicons name="close-circle" size={16} color={COLORS.textTertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {!varieties && (
+          <Text style={styles.varietyEmpty}>
+            Could not load the varieties. Check that the backend is running.
+          </Text>
         )}
-      </View>
 
-      {parentNames.length === 0 && (
-        <Text style={styles.varietyEmpty}>
-          Could not load the name list. Check that the backend is running.
+        {/* ── the grower's own plants ────────────────────── */}
+        <Text style={styles.groupHead}>
+          MY PLANTS{counts.mine ? `  \u00b7  ${counts.mine}` : ''}
         </Text>
-      )}
+        <Text style={styles.groupNote}>
+          Plants in this collection. A tag name is what is written on the
+          label, not a claim that the plant is the registered variety of that
+          name.
+        </Text>
 
-      {visibleParents.map((name) => {
-        const note = SPECIES_NOTES[name];
-        return (
-          <View key={name} style={[styles.varietyCardFull, SHADOW.sm]}>
-            <View style={[styles.varietyLine, { backgroundColor: note?.color || COLORS.border }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.varietyName}>{name}</Text>
-              {note ? (
-                <>
-                  <Text style={styles.varietyTrait}>{note.trait}</Text>
-                  <View style={styles.originRow}>
-                    <Ionicons name="location-outline" size={10} color={COLORS.textTertiary} />
-                    <Text style={styles.varietyOrigin}>{note.origin}</Text>
-                  </View>
-                </>
+        {mine.length === 0 && varieties ? (
+          <Text style={styles.varietyEmpty}>
+            {parentSearch
+              ? 'No plant of yours matches that.'
+              : 'None yet. Log a cross and both parents are registered here.'}
+          </Text>
+        ) : null}
+
+        {mine.map((p) => {
+          const tier = TIER[p.tier] || TIER.named;
+          const uri = varietyPhotoUrl(p.photo);
+          const parents = p.seed_parent && p.pollen_parent
+            ? `${p.seed_parent} \u00d7 ${p.pollen_parent}` : '';
+          return (
+            <View key={p.name + p.photo} style={[styles.plantCard, SHADOW.sm]}>
+              {uri ? (
+                <Image source={{ uri }} style={styles.plantPhoto} />
               ) : (
-                <Text style={styles.varietyTrait}>In the register</Text>
+                <View style={[styles.plantPhoto, styles.plantPhotoEmpty]}>
+                  <Ionicons name="leaf-outline" size={20} color={COLORS.textTertiary} />
+                </View>
               )}
-
-              <View style={styles.useRow}>
-                <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pod')}>
-                  <Text style={styles.useBtnText}>Use as pod parent</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.useBtn} onPress={() => useParentAs(name, 'pollen')}>
-                  <Text style={styles.useBtnText}>Use as pollen parent</Text>
-                </TouchableOpacity>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.varietyName}>{p.name}</Text>
+                <View style={styles.tierRow}>
+                  <Ionicons name={tier.icon} size={12} color={tier.colour} />
+                  <Text style={[styles.tierText, { color: tier.colour }]}>
+                    {tier.text}
+                  </Text>
+                </View>
+                {parents ? (
+                  <Text style={styles.varietyTrait}>from {parents}</Text>
+                ) : null}
+                {p.colour ? (
+                  <Text style={styles.varietyTrait}>
+                    {p.colour}{p.pattern ? `, ${p.pattern}` : ''}
+                  </Text>
+                ) : null}
+                {renderUseRow(p.name)}
               </View>
             </View>
-          </View>
-        );
-      })}
-    </>
-  );
+          );
+        })}
+
+        {/* ── what the knowledge base knows ──────────────── */}
+        <Text style={[styles.groupHead, { marginTop: SPACE.xl }]}>
+          IN THE REGISTER{counts.register ? `  \u00b7  ${counts.register}` : ''}
+        </Text>
+        <Text style={styles.groupNote}>
+          Every name the compatibility engine has evidence for, drawn from
+          {counts.registered_crosses ? ` ${counts.registered_crosses}` : ''} registered
+          crosses. This is the whole knowledge base, not a selection of it, and
+          a cross between names it does not hold can only be answered at genus
+          level.
+        </Text>
+
+        {reg.map((p) => {
+          const note = SPECIES_NOTES[p.name];
+          return (
+            <View key={p.name} style={[styles.varietyCardFull, SHADOW.sm]}>
+              <View style={[styles.varietyLine,
+                { backgroundColor: note?.color || COLORS.border }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.varietyName}>{p.name}</Text>
+                {note ? (
+                  <>
+                    <Text style={styles.varietyTrait}>{note.trait}</Text>
+                    <View style={styles.originRow}>
+                      <Ionicons name="location-outline" size={10} color={COLORS.textTertiary} />
+                      <Text style={styles.varietyOrigin}>{note.origin}</Text>
+                    </View>
+                  </>
+                ) : null}
+                <Text style={styles.varietyTrait}>
+                  {p.crosses
+                    ? `cited by ${p.crosses} registered cross${p.crosses > 1 ? 'es' : ''}`
+                    : 'named in the register'}
+                </Text>
+                {renderUseRow(p.name)}
+              </View>
+            </View>
+          );
+        })}
+      </>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -720,6 +850,7 @@ const HybridPollinationScreen = ({ navigation }) => {
               level1Result={result}
               level1Image={selectedImage}
               prefill={crossPrefill}
+              onParentsChange={setCrossParents}
             />
           </View>
 
@@ -740,7 +871,11 @@ const HybridPollinationScreen = ({ navigation }) => {
               happened. The register holds successes only; this is where
               the failures go, which is the half nothing else collects. */}
           {activeTab === 'log' && (
-            <CrossLogTab level1Result={result} level1Image={selectedImage} />
+            <CrossLogTab
+              level1Result={result}
+              level1Image={selectedImage}
+              crossParents={crossParents}
+            />
           )}
         </Animated.View>
         <View style={{ height: 100 }} />
@@ -773,21 +908,15 @@ const styles = StyleSheet.create({
   imageCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, overflow: 'hidden', marginBottom: SPACE.md },
   previewImage: { width: '100%', height: 200, resizeMode: 'cover' },
   imagePlaceholder: { height: 160, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.bgCardAlt },
+  placeholderHint: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2,
+  },
   placeholderText: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.sm },
   imageActions: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: COLORS.borderLight },
   imageBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md, gap: 6 },
   imageBtnText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '600' },
 
   // Traits
-  traitsCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.lg },
-  traitRow: { marginBottom: SPACE.md },
-  traitLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACE.xs },
-  traitLabel: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
-  traitChips: { flexDirection: 'row', gap: SPACE.xs, flexWrap: 'wrap' },
-  traitChip: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: RADIUS.full, backgroundColor: COLORS.bgCardAlt, borderWidth: 1, borderColor: COLORS.border },
-  traitChipActive: { backgroundColor: COLORS.primaryDim, borderColor: COLORS.primary },
-  traitChipText: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600', textTransform: 'capitalize' },
-  traitChipTextActive: { color: COLORS.primary },
 
   // Assess Button
   assessBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.sm, paddingVertical: SPACE.lg, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.sm, marginBottom: SPACE.xl },
@@ -809,7 +938,6 @@ const styles = StyleSheet.create({
   traitReadValue: { fontSize: FONT.sm, fontWeight: '800' },
   traitReadSource: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 3, fontVariant: ['tabular-nums'] },
   traitReadWhy: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 16, marginTop: 4 },
-  traitReadAsk: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 17, fontStyle: 'italic' },
   varietyIntro: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: SPACE.md },
   varietyEmpty: { color: COLORS.textTertiary, fontSize: FONT.sm, fontStyle: 'italic', marginBottom: SPACE.md },
   searchBox: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, marginBottom: SPACE.md },
@@ -818,18 +946,25 @@ const styles = StyleSheet.create({
   useBtn: { backgroundColor: COLORS.bgCardAlt, borderRadius: RADIUS.sm, paddingHorizontal: SPACE.md, paddingVertical: 6 },
   useBtnText: { color: COLORS.primary, fontSize: FONT.sm, fontWeight: '600' },
   rejectCard: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.md, borderLeftWidth: 4, borderLeftColor: COLORS.danger },
-  rejectDetail: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
   rejectHint: { color: COLORS.textSecondary, fontSize: FONT.sm, marginTop: SPACE.sm, fontStyle: 'italic' },
   resultHeader: { flexDirection: 'row', alignItems: 'center', gap: SPACE.md, marginBottom: SPACE.lg },
   resultHeaderText: { flex: 1 },
   resultLabel: { fontSize: FONT.xl, fontWeight: '800' },
   resultConf: { color: COLORS.textSecondary, fontSize: FONT.sm },
-  probSection: { marginBottom: SPACE.lg },
-  probRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACE.sm },
-  probLabel: { width: 90, color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
-  probBarBg: { flex: 1, height: 6, backgroundColor: COLORS.bgCardAlt, borderRadius: 3, marginHorizontal: SPACE.sm, overflow: 'hidden' },
-  probBar: { height: '100%', borderRadius: 3 },
-  probVal: { width: 36, color: COLORS.text, fontSize: FONT.sm, fontWeight: '700', textAlign: 'right' },
+  dampBox: {
+    flexDirection: 'row', gap: 6, alignItems: 'flex-start',
+    backgroundColor: COLORS.warningDim, borderRadius: RADIUS.sm,
+    padding: SPACE.md, marginBottom: SPACE.md,
+  },
+  dampText: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
+  vetoBox: {
+    flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start',
+    backgroundColor: COLORS.dangerDim, borderRadius: RADIUS.sm,
+    padding: SPACE.md, marginBottom: SPACE.md,
+    borderLeftWidth: 3, borderLeftColor: COLORS.danger,
+  },
+  vetoTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800', marginBottom: 2 },
+  vetoText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 19 },
   resultRec: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 20 },
 
   // Guidance
@@ -842,6 +977,30 @@ const styles = StyleSheet.create({
   tipText: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 18, marginBottom: 2 },
 
   // Varieties
+  groupHead: {
+    color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '800',
+    letterSpacing: 0.8, marginTop: SPACE.lg, marginBottom: 4,
+  },
+  groupNote: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, lineHeight: 18,
+    marginBottom: SPACE.md,
+  },
+  plantCard: {
+    flexDirection: 'row', gap: SPACE.md, alignItems: 'flex-start',
+    backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md,
+    padding: SPACE.md, marginBottom: SPACE.md,
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  plantPhoto: {
+    width: 84, height: 84, borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.bgCardAlt,
+  },
+  plantPhotoEmpty: {
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: COLORS.borderLight, borderStyle: 'dashed',
+  },
+  tierRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2, marginBottom: 2 },
+  tierText: { fontSize: FONT.sm, fontWeight: '600', flex: 1 },
   varietyCardFull: { backgroundColor: COLORS.bgCard, borderRadius: RADIUS.sm, padding: SPACE.lg, marginBottom: SPACE.sm, flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
   varietyLine: { width: 4, height: 40, borderRadius: 2 },
   varietyName: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginBottom: 2 },
