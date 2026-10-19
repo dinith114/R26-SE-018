@@ -134,7 +134,7 @@ const DiseaseHubScreen = ({ navigation }) => {
           dim={COLORS.primaryDim}
           title="Check a plant"
           subtitle="Upload a photo for diagnosis"
-          body="Identifies Black Leaf Spot, Phyllosticta Leaf Spot or a healthy plant, grades the severity, and gives a treatment recommendation."
+          body="Find the disease, how bad it is, and what to do."
           onPress={() => navigation.navigate('DiseaseDetection')}
         />
 
@@ -144,7 +144,7 @@ const DiseaseHubScreen = ({ navigation }) => {
           dim={COLORS.infoDim}
           title="History"
           subtitle={historySubtitle}
-          body="Every plant you have checked on this device, with its diagnosis, severity and treatment."
+          body="Your past checks on this phone."
           onPress={() => navigation.navigate('DiseaseHistory')}
         />
 
@@ -154,7 +154,7 @@ const DiseaseHubScreen = ({ navigation }) => {
           dim={COLORS.fertilizerDim}
           title="Contribute an image"
           subtitle="Help extend the system"
-          body="Submit a photograph of a condition the system cannot identify — including stems and flowers. An orchid expert reviews each one before it counts toward adding the condition."
+          body="Send a photo of a problem the app can't name yet."
           onPress={() => navigation.navigate('DiseaseContribute')}
         />
 
@@ -164,7 +164,7 @@ const DiseaseHubScreen = ({ navigation }) => {
           dim={COLORS.successDim}
           title="My photos"
           subtitle={mineSubtitle}
-          body="See whether an orchid expert approved, corrected or did not accept each photo you sent, and why."
+          body="See what the expert decided about each photo."
           onPress={() => navigation.navigate('DiseaseSubmissions')}
         />
 
@@ -175,7 +175,7 @@ const DiseaseHubScreen = ({ navigation }) => {
             dim={COLORS.warningDim}
             title="Expert review"
             subtitle={waitingReview ? `${waitingReview} waiting for review` : 'Nothing waiting'}
-            body="Approve, correct or reject contributed photos. Only approved photos count toward adding a new condition."
+            body="Approve, correct or reject photos sent by growers."
             badge={waitingReview ? String(waitingReview) : null}
             onPress={() => navigation.navigate('DiseaseReview')}
           />
@@ -184,9 +184,8 @@ const DiseaseHubScreen = ({ navigation }) => {
         <View style={styles.noteBox}>
           <Ionicons name="information-circle-outline" size={16} color={COLORS.textTertiary} />
           <Text style={styles.noteText}>
-            The system currently recognises two leaf diseases and healthy plants.
-            Anything else is reported as an unidentified condition, with a
-            recommendation to consult an expert.
+            {'The app knows two leaf diseases and healthy leaves. Anything else ' +
+              'is shown as "Not sure", with advice to ask an expert.'}
           </Text>
         </View>
       </ScrollView>

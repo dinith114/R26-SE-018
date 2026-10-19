@@ -29,6 +29,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Linking,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,6 +54,18 @@ const SEVERITY_STYLE = {
   severe: { color: COLORS.danger, dim: COLORS.dangerDim, label: 'Severe', note: 'over 40% of leaf area' },
 };
 
+/** "Very sure (92%)". A bare percentage means little to a grower. Only shown
+    for answers at or above the threshold, so there is no lower band. */
+const sureText = (confidence = 0) =>
+  `${confidence >= 0.9 ? 'Very sure' : 'Fairly sure'} (${Math.round(confidence * 100)}%)`;
+
+/** A refused permission can only be given back in the phone's settings, so offer the way there. */
+const askForSettings = (title, message) =>
+  Alert.alert(title, message, [
+    { text: 'Not now', style: 'cancel' },
+    { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => {}); } },
+  ]);
+
 const DiseaseDetectionScreen = ({ navigation }) => {
   const [imageUri, setImageUri] = useState(null);
   // The whole picker asset is kept, not just the uri: it carries the real
@@ -62,6 +75,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -76,11 +90,8 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(
-          'Permission needed',
-          'Allow photo access so the app can read the picture you choose. ' +
-            'You can enable it in your phone settings.'
-        );
+        askForSettings('Photo access needed',
+          'Allow photo access so the app can read the picture you choose.');
         return;
       }
 
@@ -103,10 +114,10 @@ const DiseaseDetectionScreen = ({ navigation }) => {
       setImageAsset(asset);
       setResult(null);
       setError(null);
-    } catch (err) {
+    } catch (_) {
       setError({
-        message: 'Could not open your photo library.',
-        hint: err?.message || 'Try again, or restart the app.',
+        message: 'Could not open your photos.',
+        hint: 'Please try again. If it keeps happening, restart the app.',
       });
     }
   };
@@ -128,10 +139,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(
-          'Camera permission needed',
-          'Allow camera access to photograph a plant. You can enable it in your phone settings.'
-        );
+        askForSettings('Camera access needed', 'Allow camera access to photograph a plant.');
         return;
       }
 
@@ -152,10 +160,10 @@ const DiseaseDetectionScreen = ({ navigation }) => {
       setImageAsset(a);
       setResult(null);
       setError(null);
-    } catch (err) {
+    } catch (_) {
       setError({
         message: 'Could not open the camera.',
-        hint: err?.message || 'Try choosing a photo from your gallery instead.',
+        hint: 'Try choosing a photo from your gallery instead.',
       });
     }
   };
@@ -170,6 +178,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setShowDetails(false);
 
     try {
       const data = await detectDisease(imageAsset || imageUri);
@@ -191,8 +200,8 @@ const DiseaseDetectionScreen = ({ navigation }) => {
         setError({ message: err.message, hint: err.hint, kind: err.kind });
       } else {
         setError({
-          message: 'Something went wrong while analysing the photo.',
-          hint: err?.message || 'Please try again.',
+          message: 'Something went wrong while checking the photo.',
+          hint: 'Please try again.',
         });
       }
     } finally {
@@ -206,6 +215,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     setImageAsset(null);
     setResult(null);
     setError(null);
+    setShowDetails(false);
   };
 
   /* ------------------------------------------------------------------ */
@@ -247,6 +257,23 @@ const DiseaseDetectionScreen = ({ navigation }) => {
     );
   };
 
+  /* One line that opens the rest - the pattern Hybrid Pollination uses for
+     its optional close-up. The answer and what to do come first; the detail
+     is there for whoever wants it. */
+  const DetailsToggle = ({ what }) => (
+    <TouchableOpacity
+      style={styles.detailsToggle}
+      onPress={() => setShowDetails((v) => !v)}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: showDetails }}
+    >
+      <Ionicons name={showDetails ? 'chevron-down' : 'chevron-forward'} size={16} color={COLORS.primary} />
+      <Text style={styles.detailsToggleText}>{showDetails ? 'Hide details' : 'More details'}</Text>
+      <Text style={styles.detailsToggleWhat}>{what}</Text>
+    </TouchableOpacity>
+  );
+
   /* ------------------------------------------------------------------ */
   /* result rendering                                                    */
   /* ------------------------------------------------------------------ */
@@ -276,17 +303,15 @@ const DiseaseDetectionScreen = ({ navigation }) => {
               <Ionicons name="image-outline" size={26} color={COLORS.danger} />
             </View>
             <View style={styles.verdictText}>
-              <Text style={styles.verdictLabel}>NOT AN ORCHID</Text>
+              <Text style={styles.verdictLabel}>No diagnosis</Text>
               <Text style={[styles.verdictName, { color: COLORS.danger }]}>
-                Invalid image
+                This doesn't look like an orchid
               </Text>
             </View>
           </View>
 
           <Text style={styles.explain}>
-            Please upload a clear image of a Vanda orchid leaf or stem. No
-            diagnosis was attempted, because this photograph does not look like
-            an orchid.
+            Take a clear photo of an orchid leaf or stem.
           </Text>
 
           <Bullets
@@ -315,27 +340,14 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             <View style={styles.verdictText}>
               <Text style={styles.verdictLabel}>Not recognised</Text>
               <Text style={[styles.verdictName, { color: COLORS.warning }]}>
-                Unidentified condition
+                Not sure what this is
               </Text>
             </View>
           </View>
 
           <Text style={styles.explain}>
-            This plant does not look healthy, but the system is not confident enough to
-            name the condition.
+            The plant may have a problem, but the app can't tell which one.
           </Text>
-
-          <View style={styles.infoStrip}>
-            <Ionicons name="information-circle-outline" size={15} color={COLORS.info} />
-            <Text style={styles.infoStripText}>
-              The system was trained on Black Leaf Spot, Phyllosticta Leaf Spot and
-              healthy leaves only. Its best guess was{' '}
-              <Text style={styles.bold}>{prettyName(result.raw_prediction)}</Text> at{' '}
-              <Text style={styles.bold}>{(result.confidence * 100).toFixed(1)}%</Text>,
-              below the {(CONFIDENCE_THRESHOLD * 100).toFixed(0)}% threshold needed to
-              give a diagnosis.
-            </Text>
-          </View>
 
           <Bullets
             title="What to do"
@@ -344,12 +356,29 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             items={treatment.immediate_actions}
           />
 
-          <View style={styles.probSection}>
-            <Text style={styles.probHeading}>How confident the system was</Text>
-            {Object.entries(result.probabilities || {}).map(([k, v]) => (
-              <ProbabilityBar key={k} label={prettyName(k)} value={v} tint={COLORS.textTertiary} />
-            ))}
-          </View>
+          <DetailsToggle what="Why not sure" />
+          {showDetails && (
+            <>
+              <View style={styles.infoStrip}>
+                <Ionicons name="information-circle-outline" size={15} color={COLORS.info} />
+                <Text style={styles.infoStripText}>
+                  The app knows only Black Leaf Spot, Phyllosticta Leaf Spot and
+                  healthy leaves. Its best guess was{' '}
+                  <Text style={styles.bold}>{prettyName(result.raw_prediction)}</Text> at{' '}
+                  <Text style={styles.bold}>{(result.confidence * 100).toFixed(0)}%</Text>,
+                  but it needs at least {(CONFIDENCE_THRESHOLD * 100).toFixed(0)}% to give
+                  an answer.
+                </Text>
+              </View>
+
+              <View style={styles.probSection}>
+                <Text style={styles.probHeading}>How sure the app was</Text>
+                {Object.entries(result.probabilities || {}).map(([k, v]) => (
+                  <ProbabilityBar key={k} label={prettyName(k)} value={v} tint={COLORS.textTertiary} />
+                ))}
+              </View>
+            </>
+          )}
         </View>
       );
     }
@@ -365,15 +394,11 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             <View style={styles.verdictText}>
               <Text style={styles.verdictLabel}>No disease detected</Text>
               <Text style={[styles.verdictName, { color: COLORS.success }]}>Healthy</Text>
-            </View>
-            <View style={[styles.confPill, { backgroundColor: COLORS.successDim }]}>
-              <Text style={[styles.confPillText, { color: COLORS.success }]}>
-                {(result.confidence * 100).toFixed(0)}%
+              <Text style={[styles.sureLine, { color: COLORS.success }]}>
+                {sureText(result.confidence)}
               </Text>
             </View>
           </View>
-
-          <Text style={styles.explain}>{result.explanation}</Text>
 
           <Bullets
             title="Keep it that way"
@@ -382,17 +407,23 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             items={treatment.cultural_control}
           />
 
-          <View style={styles.probSection}>
-            <Text style={styles.probHeading}>Confidence breakdown</Text>
-            {Object.entries(result.probabilities || {}).map(([k, v]) => (
-              <ProbabilityBar
-                key={k}
-                label={prettyName(k)}
-                value={v}
-                tint={k === 'healthy' ? COLORS.success : COLORS.textTertiary}
-              />
-            ))}
-          </View>
+          <DetailsToggle what="How sure" />
+          {showDetails && (
+            <>
+              <Text style={styles.explain}>{result.explanation}</Text>
+              <View style={styles.probSection}>
+                <Text style={styles.probHeading}>How sure the app was</Text>
+                {Object.entries(result.probabilities || {}).map(([k, v]) => (
+                  <ProbabilityBar
+                    key={k}
+                    label={prettyName(k)}
+                    value={v}
+                    tint={k === 'healthy' ? COLORS.success : COLORS.textTertiary}
+                  />
+                ))}
+              </View>
+            </>
+          )}
         </View>
       );
     }
@@ -412,10 +443,8 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             <Text style={[styles.verdictName, { color: COLORS.danger }]}>
               {treatment.display_name || prettyName(result.disease)}
             </Text>
-          </View>
-          <View style={[styles.confPill, { backgroundColor: COLORS.dangerDim }]}>
-            <Text style={[styles.confPillText, { color: COLORS.danger }]}>
-              {(result.confidence * 100).toFixed(0)}%
+            <Text style={[styles.sureLine, { color: COLORS.danger }]}>
+              {sureText(result.confidence)}
             </Text>
           </View>
         </View>
@@ -437,66 +466,12 @@ const DiseaseDetectionScreen = ({ navigation }) => {
           </View>
         )}
 
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>Plant part</Text>
-            <Text style={styles.metaValue}>{prettyName(result.plant_part || 'leaf')}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>Pathogen</Text>
-            <Text style={styles.metaValue}>{treatment.pathogen_type || '—'}</Text>
-          </View>
-        </View>
-
         <Bullets
           title="Do now"
           icon="flash-outline"
           tint={COLORS.danger}
           items={treatment.immediate_actions}
         />
-        <Bullets
-          title="Growing conditions"
-          icon="leaf-outline"
-          tint={COLORS.success}
-          items={treatment.cultural_control}
-        />
-
-        {/* chemical treatment */}
-        <View style={styles.block}>
-          <View style={styles.blockHeader}>
-            <Ionicons name="flask-outline" size={16} color={COLORS.info} />
-            <Text style={styles.blockTitle}>
-              Chemical treatment {chem.recommended ? '' : '— not recommended'}
-            </Text>
-          </View>
-          {!!chem.rationale && <Text style={styles.rationale}>{chem.rationale}</Text>}
-          {(chem.options || []).map((opt, i) => (
-            <View key={i} style={styles.chemCard}>
-              <Text style={styles.chemName}>{opt.active_ingredient}</Text>
-              <Text style={styles.chemMeta}>
-                {opt.type} · FRAC {opt.frac_group}
-              </Text>
-              <View style={styles.doseBox}>
-                <Ionicons
-                  name={opt.show_dose ? 'checkmark-circle-outline' : 'warning-outline'}
-                  size={13}
-                  color={opt.show_dose ? COLORS.success : COLORS.warning}
-                />
-                <Text style={styles.doseText}>{opt.dose}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {!!treatment.monitoring && (
-          <View style={styles.block}>
-            <View style={styles.blockHeader}>
-              <Ionicons name="eye-outline" size={16} color={COLORS.info} />
-              <Text style={styles.blockTitle}>Monitoring</Text>
-            </View>
-            <Text style={styles.bodyText}>{treatment.monitoring}</Text>
-          </View>
-        )}
 
         {treatment.escalate_to_expert && (
           <View style={styles.expertBox}>
@@ -507,37 +482,99 @@ const DiseaseDetectionScreen = ({ navigation }) => {
           </View>
         )}
 
-        <Bullets
-          title="Safety"
-          icon="shield-checkmark-outline"
-          tint={COLORS.textSecondary}
-          items={treatment.safety}
-        />
+        <DetailsToggle what="Care, spraying, safety" />
+        {showDetails && (
+          <>
+            <View style={styles.metaRow}>
+              <View style={styles.metaItem}>
+                <Text style={styles.metaLabel}>Plant part</Text>
+                <Text style={styles.metaValue}>{prettyName(result.plant_part || 'leaf')}</Text>
+              </View>
+              <View style={styles.metaItem}>
+                <Text style={styles.metaLabel}>Pathogen</Text>
+                <Text style={styles.metaValue}>{treatment.pathogen_type || '—'}</Text>
+              </View>
+            </View>
 
-        <View style={styles.probSection}>
-          <Text style={styles.probHeading}>Confidence breakdown</Text>
-          {Object.entries(result.probabilities || {}).map(([k, v]) => (
-            <ProbabilityBar
-              key={k}
-              label={prettyName(k)}
-              value={v}
-              tint={k === result.disease ? COLORS.danger : COLORS.textTertiary}
+            <Bullets
+              title="Growing conditions"
+              icon="leaf-outline"
+              tint={COLORS.success}
+              items={treatment.cultural_control}
             />
-          ))}
-          {!!result.severity_probabilities && (
-            <>
-              <Text style={[styles.probHeading, { marginTop: SPACE.md }]}>Severity breakdown</Text>
-              {Object.entries(result.severity_probabilities).map(([k, v]) => (
+
+            {/* chemical treatment */}
+            <View style={styles.block}>
+              <View style={styles.blockHeader}>
+                <Ionicons name="flask-outline" size={16} color={COLORS.info} />
+                <Text style={styles.blockTitle}>
+                  Chemical treatment {chem.recommended ? '' : '— not recommended'}
+                </Text>
+              </View>
+              {!!chem.rationale && <Text style={styles.rationale}>{chem.rationale}</Text>}
+              {(chem.options || []).map((opt, i) => (
+                <View key={i} style={styles.chemCard}>
+                  <Text style={styles.chemName}>{opt.active_ingredient}</Text>
+                  <Text style={styles.chemMeta}>
+                    {opt.type} · FRAC {opt.frac_group}
+                  </Text>
+                  <View style={styles.doseBox}>
+                    <Ionicons
+                      name={opt.show_dose ? 'checkmark-circle-outline' : 'warning-outline'}
+                      size={13}
+                      color={opt.show_dose ? COLORS.success : COLORS.warning}
+                    />
+                    <Text style={styles.doseText}>{opt.dose}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {!!treatment.monitoring && (
+              <View style={styles.block}>
+                <View style={styles.blockHeader}>
+                  <Ionicons name="eye-outline" size={16} color={COLORS.info} />
+                  <Text style={styles.blockTitle}>Monitoring</Text>
+                </View>
+                <Text style={styles.bodyText}>{treatment.monitoring}</Text>
+              </View>
+            )}
+
+            <Bullets
+              title="Safety"
+              icon="shield-checkmark-outline"
+              tint={COLORS.textSecondary}
+              items={treatment.safety}
+            />
+
+            <View style={styles.probSection}>
+              <Text style={styles.probHeading}>How sure the app was</Text>
+              {Object.entries(result.probabilities || {}).map(([k, v]) => (
                 <ProbabilityBar
                   key={k}
-                  label={SEVERITY_STYLE[k]?.label || prettyName(k)}
+                  label={prettyName(k)}
                   value={v}
-                  tint={k === result.severity ? sev.color : COLORS.textTertiary}
+                  tint={k === result.disease ? COLORS.danger : COLORS.textTertiary}
                 />
               ))}
-            </>
-          )}
-        </View>
+              {!!result.severity_probabilities && (
+                <>
+                  <Text style={[styles.probHeading, { marginTop: SPACE.md }]}>
+                    How sure about the severity
+                  </Text>
+                  {Object.entries(result.severity_probabilities).map(([k, v]) => (
+                    <ProbabilityBar
+                      key={k}
+                      label={SEVERITY_STYLE[k]?.label || prettyName(k)}
+                      value={v}
+                      tint={k === result.severity ? sev.color : COLORS.textTertiary}
+                    />
+                  ))}
+                </>
+              )}
+            </View>
+          </>
+        )}
       </View>
     );
   };
@@ -648,8 +685,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
             <View style={[styles.noteCard, SHADOW.sm]}>
               <ActivityIndicator size="small" color={COLORS.primary} />
               <Text style={styles.noteText}>
-                Checking the leaf against the trained diseases. The first analysis after
-                starting the server takes a few seconds longer.
+                Checking your photo… This takes a few seconds.
               </Text>
             </View>
           )}
@@ -662,7 +698,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
                   <Ionicons name="cloud-offline-outline" size={24} color={COLORS.danger} />
                 </View>
                 <View style={styles.verdictText}>
-                  <Text style={styles.verdictLabel}>Could not analyse</Text>
+                  <Text style={styles.verdictLabel}>Couldn't check this photo</Text>
                   <Text style={[styles.verdictName, { color: COLORS.danger }]}>
                     {error.message}
                   </Text>
@@ -707,9 +743,7 @@ const DiseaseDetectionScreen = ({ navigation }) => {
                 </View>
               ))}
               <Text style={styles.scopeNote}>
-                Anything else is reported as an unidentified condition with a
-                recommendation to seek expert advice, rather than being forced into one of
-                these three.
+                {'Anything else is shown as "Not sure", with advice to ask an expert.'}
               </Text>
             </View>
           )}
@@ -843,8 +877,20 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   verdictName: { fontSize: FONT.lg, fontWeight: '800', marginTop: 2 },
-  confPill: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: RADIUS.full },
-  confPillText: { fontSize: FONT.sm, fontWeight: '800' },
+  sureLine: { fontSize: FONT.sm, fontWeight: '700', marginTop: 2 },
+
+  /* more details - same look as Hybrid Pollination's optional sections */
+  detailsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.sm,
+    paddingVertical: SPACE.md,
+    marginBottom: SPACE.sm,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.borderLight,
+  },
+  detailsToggleText: { flex: 1, color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
+  detailsToggleWhat: { color: COLORS.textTertiary, fontSize: FONT.sm },
 
   explain: { color: COLORS.textSecondary, fontSize: FONT.sm, lineHeight: 20, marginBottom: SPACE.md },
   bold: { fontWeight: '700', color: COLORS.text },

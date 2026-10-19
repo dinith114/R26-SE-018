@@ -40,7 +40,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
+  TextInput, ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -71,6 +71,13 @@ const CHECK_LOOK = {
   note: { icon: 'information-circle', color: COLORS.info, dim: COLORS.infoDim },
   quiet: { icon: 'ellipsis-horizontal-circle', color: COLORS.textTertiary, dim: COLORS.bgCardAlt },
 };
+
+/** A refused permission can only be given back in the phone's settings, so offer the way there. */
+const askForSettings = (title, message) =>
+  Alert.alert(title, message, [
+    { text: 'Not now', style: 'cancel' },
+    { text: 'Open settings', onPress: () => { Linking.openSettings().catch(() => {}); } },
+  ]);
 
 /**
  * What the photo check found, as one line the grower can act on. Worked out
@@ -184,10 +191,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(
-          'Camera permission needed',
-          'Allow camera access to photograph a plant. You can enable it in your phone settings.'
-        );
+        askForSettings('Camera access needed', 'Allow camera access to photograph a plant.');
         return;
       }
 
@@ -208,10 +212,10 @@ const DiseaseContributeScreen = ({ navigation }) => {
       setError(null);
       setResult(null);
       runPhotoCheck(a);
-    } catch (err) {
+    } catch (_) {
       setError({
         message: 'Could not open the camera.',
-        hint: err?.message || 'Try choosing a photo from your gallery instead.',
+        hint: 'Try choosing a photo from your gallery instead.',
       });
     }
   };
@@ -220,7 +224,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Permission needed',
+        askForSettings('Photo access needed',
           'Allow photo access so the app can read the picture you choose.');
         return;
       }
@@ -235,8 +239,11 @@ const DiseaseContributeScreen = ({ navigation }) => {
         setResult(null);
         runPhotoCheck(a);
       }
-    } catch (err) {
-      setError({ message: 'Could not open your photo library.', hint: err?.message });
+    } catch (_) {
+      setError({
+        message: 'Could not open your photos.',
+        hint: 'Please try again. If it keeps happening, restart the app.',
+      });
     }
   };
 
@@ -279,7 +286,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
       } else {
         setError(err instanceof ApiError
           ? { message: err.message, hint: err.hint }
-          : { message: 'Could not submit the photograph.', hint: err?.message });
+          : { message: 'Could not send the photo.', hint: 'Please try again.' });
       }
     } finally {
       // finally, so the spinner always stops even if something above threw.
@@ -317,8 +324,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
             </View>
             <Text style={styles.doneTitle}>Waiting for expert review</Text>
             <Text style={styles.doneSub}>
-              Saved as {result.image_id}. An orchid expert checks every photo
-              before it counts.
+              An orchid expert checks every photo before it counts.
             </Text>
 
             {result.possible_copy && (
@@ -348,14 +354,14 @@ const DiseaseContributeScreen = ({ navigation }) => {
               </Text>
               <Text style={styles.progressNote}>
                 {result.ready_for_training
-                  ? 'Enough approved photos have been collected. A researcher can now retrain the model; the new version replaces the current one only if the diseases it already knows do not get worse.'
+                  ? 'Enough photos are approved. Researchers can now test adding this condition to the app.'
                   : `Still needed: ${(p.blockers || []).join(' and ') || 'expert approval'}.`}
               </Text>
             </View>
 
             <Text style={styles.doneFoot}>
-              The system has not changed. Photos are only used for training once
-              {` ${minPhotos}`} have been approved, from at least {minGrowers} growers.
+              Nothing in the app changes yet. A new condition needs {minPhotos} approved
+              photos from at least {minGrowers} growers.
             </Text>
 
             <TouchableOpacity style={styles.primaryBtn} onPress={startAnother}>
@@ -386,9 +392,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
         <View style={styles.introCard}>
           <Ionicons name="information-circle-outline" size={18} color={COLORS.info} />
           <Text style={styles.introText}>
-            The system currently recognises two leaf diseases. If you have a
-            photograph of a condition it cannot identify — including stems and
-            flowers — submitting it here helps it be added in a future version.
+            Send a photo of an orchid problem the app can't name yet, on a leaf, stem or flower.
           </Text>
         </View>
 
@@ -527,10 +531,6 @@ const DiseaseContributeScreen = ({ navigation }) => {
             );
           })}
         </View>
-        <Text style={styles.underHint}>
-          You choose this — the system cannot detect the plant part, because it
-          has no stem or flower training images.
-        </Text>
 
         <Text style={styles.sectionLabel}>HOW MUCH IS AFFECTED?</Text>
         <View style={styles.chipRow}>
@@ -598,8 +598,7 @@ const DiseaseContributeScreen = ({ navigation }) => {
               <Text style={styles.fieldHint}>
                 A condition needs {counts.minimum_required} photos approved by an
                 orchid expert, from at least {counts.minimum_growers || 3} different
-                growers, before it can be added. Fewer would produce an unreliable
-                class that degrades the diseases already working.
+                growers, before it can be added.
               </Text>
             </View>
           </>
