@@ -1,9 +1,12 @@
 """The humidity tray after the probe was removed (10 Oct 2026).
 
 The grower sets how many seconds a tray fill pours (Pour lengths in the app);
-the models decide only WHEN. With no setting, a fill is one full tray. Nothing
-reads the tray's level any more, and the probe fields old firmware still sends
-must change nothing. The readings here are TEST DATA built for one case each.
+the models decide only WHEN. With no setting for the section, a fill pours the
+farm default from Settings (10 minutes unless changed, 19 Oct 2026), and any
+length the grower sets is used - the old cap at one 15 s bench tray is gone.
+Nothing reads the tray's level any more, and the probe fields old firmware
+still sends must change nothing. The readings here are TEST DATA built for one
+case each.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -58,12 +61,19 @@ def tray(monkeypatch):
     return decide
 
 
-def test_with_no_setting_a_fill_is_one_full_tray(tray):
+def test_with_no_setting_a_fill_pours_the_farm_default(tray):
     out = tray()
     assert out["status"] == "fill"
-    assert out["fillSeconds"] == sc.TRAY_MAX_SEC
-    assert out["amountSetBy"] == "full tray"
-    assert len(tray.sent) == 1 and tray.sent[0][3] == sc.TRAY_MAX_SEC
+    assert out["fillSeconds"] == sc.DEFAULT_POUR_SEC == 600
+    assert out["amountSetBy"] == "farm default"
+    assert len(tray.sent) == 1 and tray.sent[0][3] == sc.DEFAULT_POUR_SEC
+
+
+def test_the_farm_default_from_settings_is_used(tray, monkeypatch):
+    monkeypatch.setattr(sc, "_fb_get", lambda p: {"pourDefaults": {"waterSec": 300, "traySec": 45}}
+                        if p == "/farm/meta.json" else {})
+    out = tray()
+    assert out["fillSeconds"] == 45 and out["amountSetBy"] == "farm default"
 
 
 def test_the_growers_amount_is_what_every_fill_pours(tray):
@@ -72,9 +82,10 @@ def test_the_growers_amount_is_what_every_fill_pours(tray):
     assert tray.sent[0][3] == 5
 
 
-def test_a_setting_above_the_tray_is_capped_at_what_it_holds(tray):
+def test_any_length_the_grower_sets_is_used(tray):
+    # 19 Oct 2026: the grower's choice, not one 4.6 L bench tray's capacity.
     out = tray(durations={"tray": 999})
-    assert out["fillSeconds"] == sc.TRAY_MAX_SEC
+    assert out["fillSeconds"] == 999 and out["amountSetBy"] == "you"
 
 
 def test_the_model_still_decides_when(tray):
@@ -94,7 +105,7 @@ def test_an_anticipated_drop_pours_the_same_amount(tray):
 def test_old_firmware_probe_fields_change_nothing(tray):
     # A probe reading "full" used to block the fill; "empty" used to force one.
     full = tray(latest_extra={"sampleMoisture": 95.0, "soilRaw": 1100})
-    assert full["status"] == "fill" and full["fillSeconds"] == sc.TRAY_MAX_SEC
+    assert full["status"] == "fill" and full["fillSeconds"] == sc.DEFAULT_POUR_SEC
     tray.state["model_secs"] = 0
     empty = tray(humidity=72.0, latest_extra={"sampleMoisture": 0.0, "soilRaw": 2600})
     assert empty["status"] == "ok" and empty["fillSeconds"] == 0

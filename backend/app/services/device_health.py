@@ -74,15 +74,17 @@ JUMPS_PER_HOUR = 3
 SILENT_MS = 20 * 60_000
 
 # A pour a working master would have run or thrown away by now. The master runs
-# its queue ONE entry at a time, so an entry's own duration says nothing about
-# when it will start - two 120 s pours issued together finish 240 s apart. What
-# a live master does guarantee is that it acks every entry, as "stale" if need
-# be, once it is MASTER_MAX_AGE_SEC old (master_queue.ino). Only an entry older
-# than that plus one longest pour proves the master is not draining. The first
-# version used the entry's own duration and called a working master broken
-# whenever two pours were queued together. Found in review, 8 Oct 2026.
+# its queue ONE entry at a time, so an entry's own issue time says nothing about
+# when it will start - two pours issued together finish one after the other.
+# What a live master does guarantee is that it acks every entry, as "stale" if
+# need be, once it has waited MASTER_MAX_AGE_SEC with nothing ahead of it
+# (master_queue.ino). overdue_commands chains the queue to find when each entry
+# could start. The first version used the entry's own duration from its issue
+# time and called a working master broken whenever two pours were queued
+# together (found in review, 8 Oct 2026); the second assumed every pour ahead
+# was at most 120 s, which stopped being true when lengths became the grower's
+# (19 Oct 2026).
 MASTER_MAX_AGE_SEC = 900
-RELAY_MAX_SEC = 120
 COMMAND_GRACE_SEC = 90
 # Only commands from the last six hours, so a restart does not alarm about
 # something from yesterday that nobody can act on any more.
@@ -310,8 +312,17 @@ def overdue_commands(queue: Optional[dict], now_ms: float) -> Dict[str, dict]:
     grace period was never carried out. The first version of this check read
     the SECTION's command document - where pours no longer go - and so could
     never have seen one. Found in review.
+
+    WHEN an entry is due (19 Oct 2026). The master runs its queue one entry at
+    a time, oldest first, and a pour is now as long as the grower sets - up to
+    an hour on validation-2.9. So an entry cannot START until everything ahead
+    of it has run: its earliest start is the later of its own issue time and
+    the end of the entry before it. A live master has acked it by that start,
+    plus MASTER_MAX_AGE_SEC (it discards an entry that waited that long while
+    idle), plus its own length, plus grace. The old rule - issue time plus a
+    fixed 120 s - would call every pour queued behind a 10 minute one broken.
     """
-    out: Dict[str, dict] = {}
+    entries = []
     for cid, cmd in (queue or {}).items():
         if not isinstance(cmd, dict):
             continue
@@ -322,9 +333,21 @@ def overdue_commands(queue: Optional[dict], now_ms: float) -> Dict[str, dict]:
         sid = cmd.get("targetSection")
         if not sid:
             continue
-        due = issued + MASTER_MAX_AGE_SEC + RELAY_MAX_SEC + COMMAND_GRACE_SEC
-        age = now_ms / 1000.0 - issued
-        if now_ms / 1000.0 < due or age > COMMAND_LOOKBACK_SEC:
+        try:
+            dur = max(0.0, float(cmd.get("durationSec") or 0))
+        except (TypeError, ValueError):
+            dur = 0.0
+        entries.append((issued, str(cid), dur, sid, cmd))
+    entries.sort(key=lambda e: (e[0], e[1]))
+
+    out: Dict[str, dict] = {}
+    now = now_ms / 1000.0
+    prev_end = None
+    for issued, cid, dur, sid, cmd in entries:
+        start = issued if prev_end is None else max(issued, prev_end)
+        prev_end = start + dur
+        due = start + MASTER_MAX_AGE_SEC + dur + COMMAND_GRACE_SEC
+        if now < due or now - issued > COMMAND_LOOKBACK_SEC:
             continue
         prev = out.get(sid)
         if prev is None or issued * 1000.0 < prev["since"]:
@@ -334,7 +357,6 @@ def overdue_commands(queue: Optional[dict], now_ms: float) -> Dict[str, dict]:
                               else str(cmd.get("action") or "command")),
                         "commandId": cid}
     return out
-
 
 def _update(st: "_Section", faults: Dict[str, dict], now_ms: float, offset_min: int,
             where: str, hid: str, sid: str, started: List[dict]) -> None:

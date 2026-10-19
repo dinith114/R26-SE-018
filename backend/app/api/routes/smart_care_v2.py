@@ -32,6 +32,7 @@ state, which made the app take seconds to show anything. Keep them apart.
 
 import math
 import os
+import re
 # joblib, not pickle, for the v2 bundles: they are stored compressed so the
 # backend can be deployed without shipping 1.7 GB. joblib.load reads a plain
 # pickle too, so restoring an uncompressed backup still works.
@@ -111,9 +112,10 @@ def _load_v2():
         _tray = joblib.load(os.path.join(_MODEL_DIR, "tray_v2.pkl"))
     _fert  = joblib.load(os.path.join(_MODEL_DIR, "fertilizer_v2.pkl"))
     m = _water["metrics"]
+    # Only the watering-TIME model is used: lengths are the grower's since 19 Oct
+    # 2026, so the bundle's duration model is loaded but never called.
     print(f"[ML v2] Watering hour  MAE={m['hour']['mae_minutes']:.0f} min | "
-          f"duration MAE={m['duration']['mae_seconds']:.0f}s | "
-          f"duration R2={m['duration']['r2']:.3f}")
+          f"length set by the grower (default {DEFAULT_POUR_SEC // 60} min)")
     if _tray.get("drop_model") is not None:
         d = _tray["metrics"].get("drop_at_threshold") or {}
         print(f"[ML v2] Tray fill      MAE={_tray['metrics']['mae_seconds']:.2f}s | "
@@ -328,15 +330,20 @@ TRAY_FULL_FILL_SEC = TRAY_MAX_SEC
 def _tray_amount(section: dict) -> Tuple[int, str]:
     """How many seconds a tray fill pours in this section, and who chose it.
 
-    The grower's setting (Pour lengths in the app) when there is one; otherwise
-    one full tray. The models decide WHEN a tray is filled, never how much: the
-    amount is a property of the tray and the pump, which the grower knows.
-    Always capped at the tray's capacity - a setting cannot overflow it.
+    The section's own Pour length when the grower set one ("you"); otherwise
+    the farm default from Settings ("farm default"). The models decide WHEN a
+    tray is filled, never how much: the amount is a property of the tray and
+    the pump, which the grower knows.
+
+    No longer capped at TRAY_MAX_SEC (19 Oct 2026, the grower's decision: any
+    length). That figure is one measured 4.6 L bench tray at 300 ml/s; the
+    farm's own trays and plumbing are the grower's to set. TRAY_FULL_FILL_SEC
+    still decides how much of the cooldown a fill earns.
     """
     manual = _manual_durations(section).get("tray")
     if manual:
-        return max(1, min(TRAY_MAX_SEC, int(manual))), "you"
-    return TRAY_MAX_SEC, "full tray"
+        return max(1, int(manual)), "you"
+    return _pour_defaults()["traySec"], "farm default"
 
 
 def _effective_cooldown(last_secs) -> float:
@@ -762,13 +769,85 @@ TRAY_FEATURES = ["temperature", "humidity", "light", "vpd", "hour"]
 # duration guard below has to make an exception for it.
 NODE_ACTIONS = ("water", "tray", "stop", "wifi")
 
-# The firmware's own safety clamp: RELAY_MAX_SEC = 120 in
-# sensor_node_validate.ino. The backend used to accept up to 180 s, so a manual
-# request between 121 and 180 s made the app promise a pour the hardware would
-# silently cut short. Clamp to the same number the relay will actually honour,
-# so what the farmer is told is what happens. The model's own plans are already
-# bounded to 30-120 s, so this only affects a manual override.
-RELAY_MAX_SEC = 120
+# HOW LONG A POUR MAY RUN (changed 19 Oct 2026, the grower's decision).
+#
+# Watering and tray lengths are now set by the grower - a farm default in
+# Settings (10 minutes unless changed) and each section's own Pour lengths - and
+# there is no length model any more. The model's seconds could not know how
+# many litres a second each section's pipe delivers; the grower measures it.
+#
+# The relay's ceiling depends on the MASTER's firmware. Up to validation-2.8 it
+# stops every pour at 120 s on the board itself; validation-2.9 raises that to
+# an hour and stops discarding pours that waited behind a long one. So the cap
+# is read from the master that will run the pour (_pour_cap), and when it is
+# the old 120 s the farmer is told so instead of being promised a pour the
+# board would quietly cut short.
+LEGACY_RELAY_MAX_SEC = 120            # master firmware before validation-2.9
+RELAY_MAX_SEC = 3600                  # validation-2.9 onward: a typo guard, not a preference
+LONG_POUR_FIRMWARE = (2, 9)
+DEFAULT_POUR_SEC = 600                # 10 minutes, for watering and tray alike, until set
+
+
+def _fw_version(fw) -> Optional[Tuple[int, int]]:
+    m = re.search(r"validation-(\d+)\.(\d+)", str(fw or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def _pour_cap(house_id: str) -> Tuple[int, Optional[str]]:
+    """The longest pour this house's master will run, and why when it is short.
+
+    Read from the master's own device record (the `fw` it reports with every
+    reading), so a reflashed master lifts the cap with no change anywhere else.
+    A house with no master gets the full cap here; _issue_node_command refuses
+    it for that reason separately.
+    """
+    master = _master_for_house(house_id)
+    if not master:
+        return RELAY_MAX_SEC, None
+    fw = (_fb_get(f"/devices/{master}.json") or {}).get("fw")
+    v = _fw_version(fw)
+    if v is not None and v >= LONG_POUR_FIRMWARE:
+        return RELAY_MAX_SEC, None
+    return LEGACY_RELAY_MAX_SEC, (
+        f"The master controller runs firmware {fw or 'of an unknown version'}, which stops "
+        f"every pour at {LEGACY_RELAY_MAX_SEC // 60} minutes. Flash it with validation-2.9 "
+        f"to allow longer pours.")
+
+
+def _dur_words(secs) -> str:
+    """600 -> "10 min", 90 -> "1 min 30 s", 45 -> "45 s". Lengths run to minutes now."""
+    s = max(0, int(secs or 0))
+    m, r = divmod(s, 60)
+    if not m:
+        return f"{r} s"
+    return f"{m} min" if not r else f"{m} min {r} s"
+
+
+def _clean_secs(v) -> Optional[int]:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if 1 <= n <= RELAY_MAX_SEC else None
+
+
+def _pour_defaults() -> dict:
+    """The farm's default lengths, in seconds: {"waterSec", "traySec"}."""
+    d = ((_fb_get("/farm/meta.json") or {}).get("pourDefaults")) or {}
+    return {"waterSec": _clean_secs(d.get("waterSec")) or DEFAULT_POUR_SEC,
+            "traySec": _clean_secs(d.get("traySec")) or DEFAULT_POUR_SEC}
+
+
+def _water_length(section: dict, defaults: Optional[dict] = None) -> Tuple[int, str]:
+    """How long this section is watered, and whose setting that is.
+
+    The section's own Pour length when the grower set one ("section"), the farm
+    default otherwise ("farm"). No model: see the note above RELAY_MAX_SEC.
+    """
+    manual = _manual_durations(section).get("water")
+    if manual:
+        return int(manual), "section"
+    return (defaults or _pour_defaults())["waterSec"], "farm"
 
 
 # One master controller can hold one relay board, and eight is what the common
@@ -987,6 +1066,16 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
     # is running; "wifi" carries credentials instead.
     if secs <= 0 and action not in ("stop", "wifi"):
         return None
+    # ONE place where a pour is held to what the master can run, so every path -
+    # the plan, a manual pour, a tray fill, an alarm's button - tells the truth.
+    # The command carries what was asked and why it was shortened; callers
+    # record and announce cmd["durationSec"], never their own number.
+    cap_note = None
+    asked = secs
+    if action in ("water", "tray"):
+        cap, why = _pour_cap(house_id)
+        if secs > cap:
+            secs, cap_note = cap, why
 
     now = datetime.now(timezone.utc)
     cmd = {"id": uuid.uuid4().hex[:12],
@@ -1001,6 +1090,9 @@ def _issue_node_command(house_id: str, section_id: str, action: str,
            # milliseconds because `long` is 32-bit on the ESP32 and an epoch in
            # ms overflows it.
            "issuedAtSec": int(now.timestamp())}
+    if cap_note:
+        cmd["requestedSec"] = asked
+        cmd["capReason"] = cap_note
     cmd.update(extra)
 
     # Anything addressed to ONE BOARD rather than to a section's plumbing still
@@ -1610,29 +1702,21 @@ def _plan_section(house_id: str, section_id: str, section: dict,
     ]])
     Xs = _water["scaler"].transform(feats)
 
-    hour   = float(_water["model_hour"].predict(Xs)[0])
-    dur    = int(round(float(_water["model_duration"].predict(Xs)[0])))
-
+    # The model decides WHEN. How LONG is the grower's: the section's own Pour
+    # length, or the farm default (19 Oct 2026). The length model was removed -
+    # its seconds were learned from a rule with no pump in the loop and could
+    # not know how many litres a second each section's pipe delivers.
+    hour = float(_water["model_hour"].predict(Xs)[0])
     hour = max(6.0, min(9.0, hour))
-    dur  = max(30, min(120, dur))
-
-    # A length set by the grower wins over the model's, but not over the safety
-    # clamp: the relay stops at RELAY_MAX_SEC regardless, so promising more in
-    # the app than the hardware will honour would be a lie.
-    manual = _manual_durations(section)
-    model_dur = dur
-    if manual.get("water"):
-        dur = max(1, min(RELAY_MAX_SEC, int(manual["water"])))
+    dur, dur_by = _water_length(section)
 
     plan = {
         "date": now.strftime("%Y-%m-%d"),
         "waterHour": round(hour, 2),
         "waterTime": _hhmm(hour),
         "durationSec": dur,
-        # What the model asked for, kept beside what is actually used, so an
-        # override is visible rather than silently replacing the model.
-        "modelDurationSec": model_dur,
-        "durationSetBy": "manual" if manual.get("water") else "model",
+        # "section": this section's own Pour length; "farm": the default in Settings.
+        "durationSetBy": dur_by,
         # Volume, using THIS section's own flow rate. One pump feeding eight
         # solenoid valves does not deliver the same litres per second to the
         # section beside it and the section at the far end of the pipe, so a
@@ -1646,7 +1730,7 @@ def _plan_section(house_id: str, section_id: str, section: dict,
         # there is nothing about it to publish twelve hours in advance, and the
         # fields that used to carry one have been removed rather than left
         # permanently empty for screens to test against.
-        "reason": (f"One watering at {_hhmm(hour)} for {dur}s. The tray handles "
+        "reason": (f"One watering at {_hhmm(hour)} for {_dur_words(dur)}. The tray handles "
                    f"midday humidity (VPD {dawn_vpd}); if the afternoon turns "
                    f"extreme and the tray cannot cope, a second session is added "
                    f"then, on measured conditions."),
@@ -2014,10 +2098,10 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     elif rh >= lo:
         status = "topup"
         msg = (f"Humidity {rh}% is inside the band, but it is hot and bright, so the "
-               f"tray gets its {secs}s fill to keep it there.")
+               f"tray gets its {_dur_words(secs)} fill to keep it there.")
     else:
         status = "fill"
-        msg = f"Humidity {rh}% is below {lo:.0f}%, filling the tray for {secs}s to raise it."
+        msg = f"Humidity {rh}% is below {lo:.0f}%, filling the tray for {_dur_words(secs)} to raise it."
 
     # ── ANTICIPATORY TOP-UP ──────────────────────────────────────────────────
     # Nothing is needed right now, but the section's own trajectory says the
@@ -2046,7 +2130,7 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
             prefill = {"risk": round(risk, 3), "threshold": thr,
                        "horizon": (_tray or {}).get("drop_horizon_hours", 3)}
             msg = (f"Humidity is {rh}% and falling: it is likely to drop below "
-                   f"{lo:.0f}% within {prefill['horizon']} hours. Adding {secs}s now, "
+                   f"{lo:.0f}% within {prefill['horizon']} hours. Adding {_dur_words(secs)} now, "
                    f"while there is still heat to evaporate it.")
 
     # SAFETY NET, not a decision. The model already returns 0 above the band, so
@@ -2095,6 +2179,7 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
     if auto and status in ("fill", "topup", "prefill") and secs > 0:
         node_cmd = _issue_node_command(house_id, section_id, "tray", secs)
         if node_cmd:
+            secs = node_cmd.get("durationSec", secs)  # what the master will actually run
             cmd = {"requested": True, "fillSeconds": secs, "triggeredBy": "auto",
                    "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
             _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", cmd)
@@ -2137,7 +2222,9 @@ def _tray_decision(house_id: str, section_id: str, section: dict,
            "litres": round(secs * _ml_per_sec(section) / 1000.0, 2),
            "amountLitres": round(amount * _ml_per_sec(section) / 1000.0, 2),
            "trayCapacityL": round(TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000.0, 2),
-           "maxSeconds": TRAY_MAX_SEC,
+           # The longest a grower may set, not the tray's capacity: since 19 Oct
+           # 2026 the tray length is the grower's choice (see _tray_amount).
+           "maxSeconds": RELAY_MAX_SEC,
            "humidity": rh, "temperature": latest["temperature"],
            "vpd": v, "targetLow": lo, "targetHigh": hi,
            "cooldownHours": round(hold, 1),
@@ -2902,7 +2989,18 @@ async def overview(ctx: AuthContext = Depends(require_auth)):
                 "fertilizer": fert,
                 "control": s.get("control", {}),
             })
-        out.append({"houseId": hid, "meta": h.get("meta", {}), "sections": secs})
+        cap, cap_why = _pour_cap(hid)
+        out.append({"houseId": hid, "meta": h.get("meta", {}), "sections": secs,
+                    # The longest pour this house's master will run (2 min until
+                    # it is on validation-2.9), so the app can say so up front.
+                    "pourLimit": {"maxSec": cap, "reason": cap_why}})
+
+    # Always present, so the app never has to guess the defaults it pre-fills.
+    d = farm.get("pourDefaults") or {}
+    farm = {**farm, "pourDefaults": {
+        "waterSec": _clean_secs(d.get("waterSec")) or DEFAULT_POUR_SEC,
+        "traySec": _clean_secs(d.get("traySec")) or DEFAULT_POUR_SEC,
+        "set": bool(d)}}
 
     return {"status": "success", "farm": farm, "houses": out,
             "houseCount": len(out),
@@ -2953,7 +3051,12 @@ async def get_house(house_id: str, ctx: AuthContext = Depends(require_auth)):
         sec["node"] = node
         sec["latest"] = _display(sec.get("latest") or {})
 
-    return {"status": "success", "houseId": house_id, "house": h}
+    # For the section screen's Water Now / Fill Tray: the farm's default lengths
+    # and the longest pour this house's master will run.
+    cap, cap_why = _pour_cap(house_id)
+    return {"status": "success", "houseId": house_id, "house": h,
+            "pourLimit": {"maxSec": cap, "reason": cap_why},
+            "pourDefaults": _pour_defaults()}
 
 
 # ═══════════════════════ ML endpoints ═════════════════════════════════════════
@@ -3009,7 +3112,8 @@ async def tray_check_all(ctx: AuthContext = Depends(require_role(ROLE_ADMIN, ROL
 # ═══════════════════════ Control endpoints ════════════════════════════════════
 
 class WaterCmd(BaseModel):
-    durationSec: int = 45
+    # None: this section's own length, or the farm default (_water_length).
+    durationSec: Optional[int] = None
     withFertilizer: bool = False
     triggeredBy: str = "user"
 
@@ -3020,6 +3124,9 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
     s = _fb_get(f"/farm/houses/{house_id}/sections/{section_id}.json")
     if not s:
         raise HTTPException(404, "Section not found")
+    # The farmer picks a length each time (the app pre-fills the section's own
+    # length or the farm default); with none sent, those same defaults apply.
+    asked = cmd.durationSec if cmd.durationSec is not None else _water_length(s)[0]
     command = {"requested": True,
                # 1, not 10. A ten second floor lived here, in a different
                # endpoint from the one that validates a grower's saved lengths,
@@ -3027,7 +3134,7 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
                # confirm sheet promised 2 - and the countdown, which reads the
                # ack, showed the 10. Silently multiplying a pour by five is
                # worse than refusing it.
-               "durationSec": max(1, min(cmd.durationSec, RELAY_MAX_SEC)),
+               "durationSec": max(1, min(int(asked), RELAY_MAX_SEC)),
                "withFertilizer": cmd.withFertilizer,
                "triggeredBy": cmd.triggeredBy,
                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
@@ -3041,6 +3148,8 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
         # _command_refusal. The rule tray-fill has always followed.
         why = _command_refusal(house_id, section_id, "water") or "the command could not be sent"
         raise HTTPException(409, f"Nothing was poured: {why}. {SETUP_HINT}")
+    # What the master will actually run, which an old master firmware shortens.
+    command["durationSec"] = node_cmd.get("durationSec", command["durationSec"])
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/waterCommand.json", command)
     # Start the fertilizer clock. Without this the counter never moves, so every
     # subsequent watering claims to mix in plant food and the "due" alert can
@@ -3061,13 +3170,16 @@ async def water_section(house_id: str, section_id: str, cmd: WaterCmd, ctx: Auth
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),
-            "message": (f"Watering for {command['durationSec']}s. The node picks "
-                        "this up within about 15 seconds.")}
+            "capReason": node_cmd.get("capReason"),
+            "message": (f"Watering for {_dur_words(command['durationSec'])}. The node picks "
+                        "this up within about 15 seconds."
+                        + (f" {node_cmd['capReason']}" if node_cmd.get("capReason") else ""))}
 
 
 class HouseWaterCmd(BaseModel):
     sectionIds: List[str]
-    durationSec: int = 45
+    # None: the longest of the chosen sections' own lengths (or the farm default).
+    durationSec: Optional[int] = None
     triggeredBy: str = "user"
 
 
@@ -3110,7 +3222,9 @@ def water_house_once(house_id: str, cmd: HouseWaterCmd,
         raise HTTPException(409, "These sections have their own valves, so one run cannot "
                                  "water them all. Water them one at a time.")
 
-    secs = max(1, min(int(cmd.durationSec), RELAY_MAX_SEC))
+    asked = (cmd.durationSec if cmd.durationSec is not None
+             else max(_water_length(sections[sid])[0] for sid in ids))
+    secs = max(1, min(int(asked), RELAY_MAX_SEC))
     lead = ids[0]
     # The command itself is an ordinary one for the first section: the master
     # opens the shared channel, which waters all of them. The list of covered
@@ -3120,6 +3234,7 @@ def water_house_once(house_id: str, cmd: HouseWaterCmd,
     if not node_cmd:
         why = _command_refusal(house_id, lead, "water") or "the command could not be sent"
         raise HTTPException(409, f"Nothing was poured: {why}. {SETUP_HINT}")
+    secs = node_cmd.get("durationSec", secs)  # what the master will actually run
 
     command = {"requested": True, "durationSec": secs, "withFertilizer": False,
                "triggeredBy": cmd.triggeredBy, "covers": ids,
@@ -3141,8 +3256,10 @@ def water_house_once(house_id: str, cmd: HouseWaterCmd,
     n = len(ids)
     return {"status": "success", "command": command, "nodeCommand": node_cmd,
             "leadSection": lead, "covers": ids,
-            "message": (f"One {secs}s run of the watering pump covers {n} "
-                        f"section{'' if n == 1 else 's'}.")}
+            "capReason": node_cmd.get("capReason"),
+            "message": (f"One {_dur_words(secs)} run of the watering pump covers {n} "
+                        f"section{'' if n == 1 else 's'}."
+                        + (f" {node_cmd['capReason']}" if node_cmd.get("capReason") else ""))}
 
 
 @router.get("/houses/{house_id}/sections/{section_id}/drop-predictions")
@@ -3803,7 +3920,8 @@ def set_node_wifi(house_id: str, section_id: str, body: WifiCmd, ctx: AuthContex
 
 
 class TrayCmd(BaseModel):
-    fillSeconds: int = 15
+    # None: this section's own tray length, or the farm default (_tray_amount).
+    fillSeconds: Optional[int] = None
     triggeredBy: str = "user"
 
 
@@ -3814,12 +3932,13 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthConte
     if not s:
         raise HTTPException(404, "Section not found")
     now = datetime.now(timezone.utc)
+    # Any length the farmer chooses (19 Oct 2026, the grower's decision). The
+    # old 15 s TRAY_MAX_SEC cap was one bench tray's capacity; the farm's trays
+    # and plumbing are the grower's to judge. The master's own ceiling still
+    # applies, in _issue_node_command.
+    asked = cmd.fillSeconds if cmd.fillSeconds is not None else _tray_amount(s)[0]
     command = {"requested": True,
-               # TRAY_MAX_SEC, not 60. Sixty seconds is 18 litres at the
-               # measured 300 ml/s, into a tray that holds 4.61 - this endpoint
-               # was a way to overflow the tray that went around the cap every
-               # other path respects.
-               "fillSeconds": max(1, min(cmd.fillSeconds, TRAY_MAX_SEC)),
+               "fillSeconds": max(1, min(int(asked), RELAY_MAX_SEC)),
                "triggeredBy": cmd.triggeredBy,
                "timestamp": now.strftime("%Y-%m-%d %H:%M:%S UTC")}
 
@@ -3842,6 +3961,7 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthConte
             "the tray are different outputs, so this cannot be sent to the "
             "watering valve - that would put water on the roots when you asked "
             f"to raise humidity. {SETUP_HINT}")
+    command["fillSeconds"] = node_cmd.get("durationSec", command["fillSeconds"])  # an old master shortens it
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/control/trayCommand.json", command)
 
     # Stamp the fill so the cooldown guard knows the tray now has water.
@@ -3856,7 +3976,7 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthConte
                  "status": "cooldown", "fillSeconds": 0,
                  "hoursSinceFill": 0.0,
                  "hoursUntilNextFill": COOLDOWN_HOURS,
-                 "message": (f"Tray filled for {command['fillSeconds']}s just now. "
+                 "message": (f"Tray filled for {_dur_words(command['fillSeconds'])} just now. "
                              f"Next fill allowed in {COOLDOWN_HOURS:.0f} h.")})
     _fb_put(f"/farm/houses/{house_id}/sections/{section_id}/tray.json", tray)
 
@@ -3873,6 +3993,7 @@ async def tray_fill(house_id: str, section_id: str, cmd: TrayCmd, ctx: AuthConte
     return {"status": "success", "command": command,
             "nodeCommand": node_cmd,
             "lastAck": _last_ack(s),
+            "capReason": node_cmd.get("capReason"),
             "cooldownHours": COOLDOWN_HOURS}
 
 
@@ -4646,103 +4767,123 @@ async def set_section_position(house_id: str, section_id: str, body: PositionIn,
 
 
 class DurationsIn(BaseModel):
-    """Null means "back to automatic" - both fields are always sent."""
+    """Null means "use the farm default" - both fields are always sent."""
     waterDurationSec: Optional[int] = None
     trayFillSec: Optional[int] = None
 
 
-@router.put("/houses/{house_id}/sections/{section_id}/durations")
-async def set_section_durations(house_id: str, section_id: str, body: DurationsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
-    """Let a grower fix the pour lengths for one section.
+def _apply_lengths(house_id: str, section_id: str, defaults: Optional[dict] = None) -> None:
+    """Rewrite one section's STORED plan and tray with its current lengths.
 
-    Only the LENGTHS. The models keep deciding the time of day and whether any
-    water is needed; a grower who disagreed with the timing would be switching
-    the model off, which is what the autonomy flag is for.
-
-    Both values are validated against the same limits the models are held to, so
-    the app cannot promise a pour the relay will cut short or a tray fill the
-    tray cannot hold.
+    The plan is only made at dawn and the tray re-checked every 15 minutes, so a
+    saved length would otherwise sit unseen - the card reading the old figure
+    for the rest of the day looks exactly like a broken Save button. No model is
+    re-run: the length is the grower's (section) or the farm's default.
     """
-    path = f"/farm/houses/{house_id}/sections/{section_id}/control/durations.json"
-    out = {}
-    if body.waterDurationSec is not None:
-        v = int(body.waterDurationSec)
-        # 1 second, not 30. The 30 s floor was a guess at what the model's own
-        # range looked like, and there is no hardware reason for it: the relay
-        # switches in milliseconds and 2 s is 600 ml at the measured 300 ml/s,
-        # which is a real amount of water. RELAY_MAX_SEC is the only limit the
-        # board actually enforces, and it clamps there regardless of this check.
-        if not (1 <= v <= RELAY_MAX_SEC):
-            raise HTTPException(400, f"Watering length must be 1-{RELAY_MAX_SEC} seconds.")
-        out["water"] = v
-    if body.trayFillSec is not None:
-        v = int(body.trayFillSec)
-        if not (1 <= v <= TRAY_MAX_SEC):
-            raise HTTPException(
-                400, f"Tray fill must be 1-{TRAY_MAX_SEC} seconds - more than that "
-                     f"overflows a {TRAY_AREA_CM2 * TRAY_MAX_DEPTH_CM / 1000:.1f} L tray.")
-        out["tray"] = v
-
-    if out:
-        _fb_put(path, out)
-    else:
-        _fb_delete(path)                     # both cleared: back to automatic
-
-    # Apply it to the STORED plan and tray straight away.
-    #
-    # Storing the preference and stopping was not enough, and looked exactly
-    # like a broken Save button: the section screen reads plan.durationSetBy and
-    # tray.manualSeconds, and both are only written when their model next runs -
-    # the tray within fifteen minutes, but the PLAN not until tomorrow's dawn.
-    # So a grower set 95 s, the card carried on saying "104s (auto)" for the
-    # rest of the day, and nothing anywhere said the number had been kept.
-    #
-    # Neither model is re-run to do this. Both blocks already carry what the
-    # model itself asked for - modelDurationSec and modelSeconds - so the
-    # override can be re-applied to that, which is the same arithmetic the
-    # model path does and cannot disagree with it.
     base = f"/farm/houses/{house_id}/sections/{section_id}"
-    # This section's own flow rate, for the litres figures below. Read here
-    # rather than assuming PUMP_ML_PER_SEC: the endpoint rewrites what the app
-    # displays, and displaying the wrong volume is how a grower loses trust in
-    # every other number on the screen.
-    rate = _ml_per_sec({"meta": _fb_get(f"{base}/meta.json") or {}})
+    section = {"meta": _fb_get(f"{base}/meta.json") or {},
+               "control": {"durations": _fb_get(f"{base}/control/durations.json") or {}}}
+    defaults = defaults or _pour_defaults()
+    rate = _ml_per_sec(section)
 
     plan = _fb_get(f"{base}/plan.json") or {}
-    if plan.get("modelDurationSec") is not None:
-        model_dur = int(plan["modelDurationSec"])
-        dur = (max(1, min(RELAY_MAX_SEC, int(out["water"])))
-               if out.get("water") else model_dur)
+    if plan:
+        dur, by = _water_length(section, defaults)
         plan["durationSec"] = dur
-        plan["durationSetBy"] = "manual" if out.get("water") else "model"
+        plan["durationSetBy"] = by
+        plan.pop("modelDurationSec", None)
         plan["litres"] = round(dur * rate / 1000.0, 2)
         plan["mlPerSec"] = rate
         _fb_put(f"{base}/plan.json", plan)
 
     tray = _fb_get(f"{base}/tray.json") or {}
     if tray:
-        # The amount every fill pours is the grower's (or one full tray). A fill
-        # already pending takes the new amount; nothing pending stays nothing -
-        # a length is never an instruction to fill.
-        amount = max(1, min(TRAY_MAX_SEC, int(out["tray"]))) if out.get("tray") else TRAY_MAX_SEC
+        manual = _manual_durations(section).get("tray")
+        amount = int(manual) if manual else defaults["traySec"]
+        # A fill already pending takes the new amount; nothing pending stays
+        # nothing - a length is never an instruction to fill.
         if int(tray.get("fillSeconds") or 0) > 0:
             tray["fillSeconds"] = amount
             tray["litres"] = round(amount * rate / 1000.0, 2)
-        # Written even when no fill is due, because this is the grower's setting
-        # rather than a property of the current decision - it is what the card
-        # shows when the tray is perfectly happy.
-        tray["manualSeconds"] = out.get("tray")
+        tray["manualSeconds"] = manual
         tray["amountSeconds"] = amount
-        tray["amountSetBy"] = "you" if out.get("tray") else "full tray"
+        tray["amountSetBy"] = "you" if manual else "farm default"
         tray["amountLitres"] = round(amount * rate / 1000.0, 2)
+        tray["maxSeconds"] = RELAY_MAX_SEC
         tray.pop("decidedBy", None)
         _fb_put(f"{base}/tray.json", tray)
 
+
+@router.put("/houses/{house_id}/sections/{section_id}/durations")
+async def set_section_durations(house_id: str, section_id: str, body: DurationsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    """This section's own watering and tray lengths, overriding the farm default.
+
+    Only the LENGTHS. The models keep deciding the time of day and whether any
+    water is needed; a grower who disagreed with the timing would be switching
+    the model off, which is what the autonomy flag is for. A null clears the
+    section's own value, so the farm default (Settings) applies again.
+
+    Any length from 1 second to RELAY_MAX_SEC (an hour). A master on old
+    firmware still runs at most 2 minutes; _issue_node_command says so.
+    """
+    path = f"/farm/houses/{house_id}/sections/{section_id}/control/durations.json"
+    out = {}
+    for field, key, label in ((body.waterDurationSec, "water", "Watering length"),
+                              (body.trayFillSec, "tray", "Tray fill length")):
+        if field is None:
+            continue
+        v = int(field)
+        if not (1 <= v <= RELAY_MAX_SEC):
+            raise HTTPException(400, f"{label} must be 1 second to {RELAY_MAX_SEC // 60} minutes.")
+        out[key] = v
+
+    if out:
+        _fb_put(path, out)
+    else:
+        _fb_delete(path)                     # both cleared: the farm default applies
+    _apply_lengths(house_id, section_id)
+
+    cap, why = _pour_cap(house_id)
     return {"status": "success", "durations": out,
             "limits": {"waterMin": 1, "waterMax": RELAY_MAX_SEC,
-                       "trayMin": 1, "trayMax": TRAY_MAX_SEC},
-            "message": ("Back to automatic." if not out else
+                       "trayMin": 1, "trayMax": RELAY_MAX_SEC},
+            "pourLimit": {"maxSec": cap, "reason": why},
+            "message": ("Back to the farm default." if not out else
                         "Saved. The models still choose when to water; these set how long.")}
+
+
+class PourDefaultsIn(BaseModel):
+    waterSec: int
+    traySec: int
+
+
+@router.put("/farm/pour-defaults")
+async def set_pour_defaults(body: PourDefaultsIn, ctx: AuthContext = Depends(require_role(ROLE_ADMIN))):
+    """The farm's default watering and tray fill lengths (Settings).
+
+    Used by every section that has no length of its own, in automatic care and
+    as the starting value when the farmer waters or fills by hand. Every such
+    section's stored plan and tray are updated now, not at the next dawn.
+    """
+    w, t = int(body.waterSec), int(body.traySec)
+    for v, label in ((w, "Watering length"), (t, "Tray fill length")):
+        if not (1 <= v <= RELAY_MAX_SEC):
+            raise HTTPException(400, f"{label} must be 1 second to {RELAY_MAX_SEC // 60} minutes.")
+    meta = _fb_get("/farm/meta.json") or {}
+    meta["pourDefaults"] = {"waterSec": w, "traySec": t}
+    _fb_put("/farm/meta.json", meta)
+
+    defaults = {"waterSec": w, "traySec": t}
+    houses = _fb_get("/farm/houses.json?shallow=true") or {}
+    updated = 0
+    for hid in houses:
+        sections = _fb_get(f"/farm/houses/{hid}/sections.json?shallow=true") or {}
+        for sid in sections:
+            _apply_lengths(hid, sid, defaults)
+            updated += 1
+    return {"status": "success", "pourDefaults": defaults, "sectionsUpdated": updated,
+            "message": (f"Watering {_dur_words(w)}, tray fill {_dur_words(t)}, for every "
+                        f"section without its own length.")}
 
 
 @router.put("/houses/{house_id}/sections/{section_id}/name")
@@ -4999,12 +5140,12 @@ async def alerts(ctx: AuthContext = Depends(require_auth)):
                               "icon": "time-outline", "title": "Second watering now",
                               "message": f"{where}: {second_now['temperature']}°C at "
                                          f"{second_now['humidity']}% and the tray cannot cope — "
-                                         f"an extra {second_now['durationSec']}s is due.",
+                                         f"an extra {_dur_words(second_now['durationSec'])} is due.",
                               "houseId": hid, "sectionId": sid})
             elif plan.get("waterTime"):
                 items.append({"id": f"{hid}-{sid}-plan", "level": "info",
                               "icon": "calendar-outline", "title": "Today's watering",
-                              "message": f"{where}: {plan['waterTime']} for {plan['durationSec']}s.",
+                              "message": f"{where}: {plan['waterTime']} for {_dur_words(plan['durationSec'])}.",
                               "houseId": hid, "sectionId": sid})
 
     order = {"urgent": 0, "action": 1, "warning": 2, "info": 3}
@@ -5059,9 +5200,12 @@ async def model_info(ctx: AuthContext = Depends(require_auth)):
         "status": "success",
         "version": 2,
         "watering": {
-            "type": "RandomForestRegressor x2 + RandomForestClassifier",
+            "type": "RandomForestRegressor (watering time)",
             "features": _water.get("feature_columns") or WATER_FEATURES,
-            "metrics": _water["metrics"],
+            "metrics": {"hour": _water["metrics"].get("hour"),
+                        "samples": _water["metrics"].get("samples")},
+            "length": (f"Set by the grower: each section's Pour length, or the farm default "
+                       f"(Settings, {DEFAULT_POUR_SEC // 60} min unless changed). No model."),
             "rule": "Once per day. Second session only in extreme heat.",
         },
         "tray": {

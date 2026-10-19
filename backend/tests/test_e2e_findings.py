@@ -558,6 +558,8 @@ def test_a_plan_from_a_partial_yesterday_says_so(farm_clock, monkeypatch):
     monkeypatch.setattr(sc, "_recent_history", lambda h, s, now=None: raw)
     monkeypatch.setattr(sc, "_fb_put", lambda p, v: True)
     monkeypatch.setattr(sc, "_fert_decision", lambda s: {})
+    # the plan reads the farm's default length (19 Oct 2026); no account here
+    monkeypatch.setattr(sc, "_pour_defaults", lambda: {"waterSec": 600, "traySec": 600})
     section = {"latest": _rd(PLAN_NOW, 28.0, 85.0), "meta": {"name": "S8"}}
     plan = sc._plan_section("H1", "S8", section, now=PLAN_NOW)
     assert plan["inputs"]["yesterdayHours"] == 3

@@ -46,6 +46,7 @@ export const PERMS = {
   setMode:             ['admin'],
   setModeAll:          ['admin'],
   setNodeWifi:         ['admin'],
+  setPourDefaults:     ['admin'],
   setSectionDurations: ['admin'],
   setSectionOverride:  ['admin'],
   setSectionPosition:  ['admin'],
