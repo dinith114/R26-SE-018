@@ -687,7 +687,11 @@ ${f.detail}` });
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>Crossing Logbook</Text>
+      <View style={styles.sectionHead}>
+        <View style={styles.sectionRule} />
+        <Ionicons name="book-outline" size={16} color={COLORS.primary} />
+        <Text style={styles.sectionTitle}>Crossing Logbook</Text>
+      </View>
       <Text style={styles.intro}>
         The register lists only crosses that worked. Your own attempts go
         here — failures included.
@@ -704,23 +708,37 @@ ${f.detail}` });
       {stats && (
         <View style={[styles.statsCard, SHADOW.sm]}>
           <View style={styles.statsRow}>
-            {[['Logged', stats.total], ['In progress', stats.open], ['Lost track', stats.lost]]
-              .map(([label, value]) => (
-                <View key={label} style={styles.statCell}>
-                  <Text style={styles.statValue}>{value}</Text>
-                  <Text style={styles.statLabel}>{label}</Text>
-                </View>
+            {[['Logged', stats.total, COLORS.text],
+              ['In progress', stats.open, COLORS.primary],
+              ['Lost track', stats.lost, COLORS.textTertiary]]
+              .map(([label, value, tone], i) => (
+                <React.Fragment key={label}>
+                  {i > 0 && <View style={styles.statDivider} />}
+                  <View style={styles.statCell}>
+                    <Text style={[styles.statValue, { color: tone }]}>{value}</Text>
+                    <Text style={styles.statLabel}>{label}</Text>
+                  </View>
+                </React.Fragment>
               ))}
           </View>
 
+          <Text style={styles.gatesHead}>How far attempts have reached</Text>
+
           {stats.gates?.map((g) => (
             <View key={g.key} style={styles.gateRow}>
-              <Text style={styles.gateLabel}>{g.label}</Text>
-              <Text style={styles.gateValue}>
-                {g.rate !== null
-                  ? `${Math.round(g.rate * 100)}% (${g.passed} of ${g.n})`
-                  : g.statement}
-              </Text>
+              <View style={styles.gateTop}>
+                <Text style={styles.gateLabel}>{g.label}</Text>
+                <Text style={[styles.gateValue, g.n === 0 && styles.gateValueEmpty]}>
+                  {g.rate !== null
+                    ? `${Math.round(g.rate * 100)}%`
+                    : g.n > 0 ? `${g.passed} of ${g.n}` : 'none yet'}
+                </Text>
+              </View>
+              {g.n > 0 && (
+                <View style={styles.gateBarBg}>
+                  <View style={[styles.gateBar, { width: `${(g.passed / g.n) * 100}%` }]} />
+                </View>
+              )}
             </View>
           ))}
 
@@ -871,7 +889,12 @@ const styles = StyleSheet.create({
   centre: { alignItems: 'center', paddingVertical: SPACE.xxl, gap: SPACE.sm },
   muted: { color: COLORS.textSecondary, fontSize: FONT.md },
 
-  sectionTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700', marginTop: SPACE.md, marginBottom: SPACE.xs },
+  sectionHead: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    marginTop: SPACE.lg, marginBottom: SPACE.md,
+  },
+  sectionRule: { width: 3, height: 16, borderRadius: 2, backgroundColor: COLORS.primary },
+  sectionTitle: { color: COLORS.text, fontSize: FONT.md, fontWeight: '700' },
   intro: { color: COLORS.textSecondary, fontSize: FONT.md, lineHeight: 23, marginBottom: SPACE.md },
 
   errorBox: {
@@ -887,16 +910,30 @@ const styles = StyleSheet.create({
     padding: SPACE.lg, marginBottom: SPACE.md,
     borderWidth: 1, borderColor: COLORS.border,
   },
-  statsRow: { flexDirection: 'row', marginBottom: SPACE.md },
+  statsRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACE.lg },
   statCell: { flex: 1, alignItems: 'center' },
-  statValue: { color: COLORS.text, fontSize: FONT.xl, fontWeight: '800' },
+  statDivider: { width: 1, height: 28, backgroundColor: COLORS.borderLight },
+  statValue: { fontSize: FONT.xl, fontWeight: '800', fontVariant: ['tabular-nums'] },
   statLabel: { color: COLORS.textTertiary, fontSize: FONT.sm, marginTop: 2 },
-  gateRow: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 5, borderTopWidth: 1, borderTopColor: COLORS.borderLight,
+  gatesHead: {
+    color: COLORS.textTertiary, fontSize: FONT.sm, fontWeight: '700',
+    marginBottom: SPACE.sm,
   },
-  gateLabel: { color: COLORS.textSecondary, fontSize: FONT.sm },
-  gateValue: { color: COLORS.text, fontSize: FONT.sm, fontWeight: '700' },
+  gateRow: { marginBottom: SPACE.md },
+  gateTop: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline',
+    marginBottom: 4,
+  },
+  gateLabel: { color: COLORS.textSecondary, fontSize: FONT.sm, fontWeight: '600' },
+  gateValue: {
+    color: COLORS.text, fontSize: FONT.sm, fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  gateValueEmpty: { color: COLORS.textTertiary, fontWeight: '400', fontStyle: 'italic' },
+  gateBarBg: {
+    height: 4, borderRadius: 2, backgroundColor: COLORS.bgCardAlt, overflow: 'hidden',
+  },
+  gateBar: { height: '100%', borderRadius: 2, backgroundColor: COLORS.primary },
   statsNote: {
     color: COLORS.textTertiary, fontSize: FONT.xs, lineHeight: 17,
     marginTop: SPACE.sm, paddingTop: SPACE.sm,
