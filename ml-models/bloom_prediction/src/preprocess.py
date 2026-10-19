@@ -49,10 +49,17 @@ def load_bloom_dataset(data_dir: Path) -> pd.DataFrame:
 
     frames = []
     for xlsx_path in xlsx_files:
-        date_stem = Path(xlsx_path).stem
+        file_stem = Path(xlsx_path).stem
+        # A day can have several logs for the same photos, each with sensor
+        # readings from a different time (20260712.xlsx, 20260712_10.xlsx,
+        # 20260712_12.xlsx, ...). They all share the 20260712/ image folder.
+        date_stem = file_stem.split('_')[0]
         df = pd.read_excel(xlsx_path, sheet_name=0)
         df['image_path'] = df['Image'].apply(lambda name: str(data_dir / date_stem / str(name)))
         df['capture_date'] = date_stem
+        df['source_log'] = file_stem
+        if 'ID' not in df.columns:
+            df.insert(0, 'ID', [f'{file_stem}_{i}' for i in range(len(df))])
         frames.append(df)
 
     dataset = pd.concat(frames, ignore_index=True)
@@ -97,7 +104,7 @@ def save_split_manifest(train_df: pd.DataFrame, val_df: pd.DataFrame,
     """Write exactly which rows/images went to which split, so it's inspectable after training."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    cols = ['ID', 'Plant ID', 'image_path', 'capture_date', TARGET_COLUMN]
+    cols = ['ID', 'Plant ID', 'image_path', 'capture_date', 'source_log', TARGET_COLUMN]
     train_df[cols].to_csv(output_dir / 'train_split.csv', index=False)
     val_df[cols].to_csv(output_dir / 'val_split.csv', index=False)
     test_df[cols].to_csv(output_dir / 'test_split.csv', index=False)

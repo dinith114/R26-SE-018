@@ -32,7 +32,10 @@ except ImportError:
     tf = None
     _SequenceBase = object
 
-VARIANT_SUFFIX = re.compile(r'(_bdown|_bup|_cdown|_cup|_rot30|_rot45|_rot60|_sdown|_sup)$')
+# `+` because variants stack (a class-balancing pass adds `_bal_<op><amount>`,
+# e.g. `_10_bal_bdown0.85`, `_10_bal_rot-12`), and any rotation angle counts:
+# missing either lets copies of one photo land in both train and test.
+VARIANT_SUFFIX = re.compile(r'(?:_bal_[a-z]+-?[0-9.]*|_bdown|_bup|_cdown|_cup|_rot-?\d+|_sdown|_sup)+$')
 
 
 def _base_id(filename: str) -> str:

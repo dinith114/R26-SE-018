@@ -182,6 +182,11 @@ const ReviewDetail = ({ imageId, onDone }) => {
               {' '}· sharpness {item.quality.sharpness}
             </Text>
           ) : null}
+          {item.model_check?.text ? (
+            <Text style={styles.fact}>
+              <Text style={styles.factKey}>Model check  </Text>{item.model_check.text}
+            </Text>
+          ) : null}
           {item.reviewed_by ? (
             <Text style={styles.fact}>
               <Text style={styles.factKey}>Last decision  </Text>
@@ -516,6 +521,18 @@ const DiseaseReviewScreen = ({ navigation }) => {
                         {it.possible_copies?.length > 0 && (
                           <Flag icon="copy-outline" text="Possible copy"
                             color={COLORS.warning} dim={COLORS.warningDim} />
+                        )}
+                        {it.model_check?.status === 'sent_anyway' && (
+                          <Flag icon="alert-circle-outline" text="Model: looks like a known disease"
+                            color={COLORS.warning} dim={COLORS.warningDim} />
+                        )}
+                        {it.model_check?.status === 'note' && (
+                          <Flag icon="information-circle-outline" text="Unlike orchid leaf photos"
+                            color={COLORS.info} dim={COLORS.infoDim} />
+                        )}
+                        {it.model_check?.status === 'not_checked' && (
+                          <Flag icon="remove-circle-outline" text="Not checked by the model"
+                            color={COLORS.textSecondary} dim={COLORS.bgCardAlt} />
                         )}
                         {it.claimed_confirmed_by ? (
                           <Flag icon="ribbon-outline" text={`Says: ${it.claimed_confirmed_by}`}

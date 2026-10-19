@@ -17,17 +17,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { ref, onValue } from 'firebase/database';
 import * as ImagePicker from 'expo-image-picker';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { API_CONFIG } from '../config/api';
-import { database } from '../config/firebase';
 import ScreenHeader from '../components/ScreenHeader';
 import BloomPredictionService from '../services/bloomPredictionService';
 import UseStageForSection from '../components/UseStageForSection';
 
 const { width } = Dimensions.get('window');
 const API_BASE_URL = API_CONFIG.BASE_URL;
+
+// How far a sensor reading may sit from the chosen time and still be used
+const SENSOR_WINDOW_MIN = 10;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const pad2 = (n) => String(n).padStart(2, '0');
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const formatDay = (d) => `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+const formatTime = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 
 // Stage labels and configuration
 const STAGE_LABELS = {
@@ -160,10 +166,19 @@ const GrowthStageScreen = ({ navigation, route }) => {
     const [bloomPrediction, setBloomPrediction] = useState(null);
     const [bloomLoading, setBloomLoading] = useState(false);
     const [bloomError, setBloomError] = useState('');
-    // Latest IoT readings from Firebase. A field keeps following the live
-    // sensor value until the user edits it; "Use sensor values" resets that.
-    const [sensorData, setSensorData] = useState(null);
-    const [manualFields, setManualFields] = useState({ temperature: false, humidity: false, light: false });
+    // Growing conditions come either from a section's sensor at a chosen
+    // moment, or are typed in by hand.
+    const [conditionSource, setConditionSource] = useState('sensor');
+    const [sections, setSections] = useState([]);
+    const [sectionsLoading, setSectionsLoading] = useState(false);
+    const [selectedSection, setSelectedSection] = useState(null);
+    const [sectionMenuOpen, setSectionMenuOpen] = useState(false);
+    const [pickDay, setPickDay] = useState(() => startOfDay(new Date()));
+    const [pickHour, setPickHour] = useState(() => pad2(new Date().getHours()));
+    const [pickMinute, setPickMinute] = useState(() => pad2(new Date().getMinutes()));
+    const [sensorFetching, setSensorFetching] = useState(false);
+    const [sensorInfo, setSensorInfo] = useState('');
+    const [sensorError, setSensorError] = useState('');
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const progressAnim = useRef(new Animated.Value(0)).current;
 
@@ -183,38 +198,79 @@ const GrowthStageScreen = ({ navigation, route }) => {
         ]).start();
     }, []);
 
-    // Subscribe to live sensor readings (same node HomeScreen uses)
+    // Every section on the farm, for the dropdown
     useEffect(() => {
-        const unsub = onValue(ref(database, 'latest'), (snapshot) => {
-            const val = snapshot.val();
-            if (val) setSensorData(val);
-        });
-        return () => unsub();
+        let cancelled = false;
+        setSectionsLoading(true);
+        BloomPredictionService.getSections()
+            .then((list) => {
+                if (cancelled) return;
+                setSections(list);
+                if (list.length > 0) setSelectedSection((prev) => prev || list[0]);
+            })
+            .catch(() => !cancelled && setSensorError('Could not load sections. Enter values manually.'))
+            .finally(() => !cancelled && setSectionsLoading(false));
+        return () => { cancelled = true; };
     }, []);
 
-    // -999 is the firmware's "sensor error" marker
-    const sensorValue = (value, decimals) =>
-        typeof value === 'number' && value !== -999 ? value.toFixed(decimals) : null;
-    const sensorTemperature = sensorValue(sensorData?.temperature, 1);
-    const sensorHumidity = sensorValue(sensorData?.humidity, 1);
-    const sensorLight = sensorValue(sensorData?.light, 0);
-    const hasSensorValues = Boolean(sensorTemperature || sensorHumidity || sensorLight);
-    const anyManual = manualFields.temperature || manualFields.humidity || manualFields.light;
-
-    // Keep fields the user hasn't touched in sync with the latest sensor values
-    useEffect(() => {
-        if (!manualFields.temperature && sensorTemperature !== null) setTemperature(sensorTemperature);
-        if (!manualFields.humidity && sensorHumidity !== null) setHumidity(sensorHumidity);
-        if (!manualFields.light && sensorLight !== null) setLightIntensity(sensorLight);
-    }, [sensorTemperature, sensorHumidity, sensorLight, manualFields]);
-
-    const editField = (field, setter) => (text) => {
-        setManualFields((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
-        setter(text);
+    const resetPickToNow = () => {
+        const now = new Date();
+        setPickDay(startOfDay(now));
+        setPickHour(pad2(now.getHours()));
+        setPickMinute(pad2(now.getMinutes()));
     };
 
-    const useSensorValues = () => {
-        setManualFields({ temperature: false, humidity: false, light: false });
+    const shiftPickDay = (days) => {
+        const next = new Date(pickDay);
+        next.setDate(next.getDate() + days);
+        if (next <= startOfDay(new Date())) setPickDay(next);
+    };
+
+    // Fill the three fields from the selected section's reading nearest to the
+    // chosen date and time. Nodes report every few minutes, so ±10 min is allowed.
+    const confirmSensorReading = async () => {
+        const hour = parseInt(pickHour, 10);
+        const minute = parseInt(pickMinute, 10);
+        if (!selectedSection) {
+            setSensorError('Select a section first.');
+            return;
+        }
+        if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+            setSensorError('Enter a valid time (00:00 - 23:59).');
+            return;
+        }
+        const at = new Date(pickDay);
+        at.setHours(hour, minute, 0, 0);
+        if (at.getTime() > Date.now() + SENSOR_WINDOW_MIN * 60000) {
+            setSensorError('That time is in the future - no reading exists yet.');
+            return;
+        }
+
+        setSensorFetching(true);
+        setSensorError('');
+        setSensorInfo('');
+        try {
+            const r = await BloomPredictionService.getReadingAt(selectedSection.houseId,
+                selectedSection.sectionId, at.getTime(), SENSOR_WINDOW_MIN);
+            if (!r) {
+                setSensorError(`No reading from ${selectedSection.label} within ±${SENSOR_WINDOW_MIN} min of ${formatDay(at)} ${formatTime(at)}.`);
+                return;
+            }
+            setTemperature(r.temperature != null ? r.temperature.toFixed(1) : '');
+            setHumidity(r.humidity != null ? r.humidity.toFixed(1) : '');
+            setLightIntensity(r.light != null ? r.light.toFixed(0) : '');
+            const missing = ['temperature', 'humidity', 'light'].filter((k) => r[k] == null);
+            const offset = Math.round(Math.abs(r.offsetMin));
+            setSensorInfo(
+                `Reading at ${formatTime(new Date(r.timestamp))}` +
+                (offset > 0 ? ` (${offset} min ${r.offsetMin < 0 ? 'before' : 'after'})` : '') +
+                (missing.length ? ` - ${missing.join(', ')} sensor failed, enter manually` : '')
+            );
+        } catch (error) {
+            setSensorError(extractErrorMessage(error?.message || error));
+        } finally {
+            setSensorFetching(false);
+        }
     };
 
     // Stages data
@@ -706,62 +762,184 @@ Powered by AI-Powered Smart Orchid Care System 🌺`;
                     <View style={[styles.bloomCard, SHADOW.sm]}>
                         <Text style={styles.bloomHint}>
                             {selectedImage
-                                ? 'Growing conditions are filled from your sensors. Edit any value to override it.'
-                                : 'Upload an orchid photo above. Growing conditions are filled from your sensors and can be edited.'}
+                                ? 'Fill growing conditions from a sensor or enter them manually.'
+                                : 'Upload an orchid photo above, then fill growing conditions from a sensor or enter them manually.'}
                         </Text>
 
-                        <View style={styles.sensorStatusRow}>
-                            <View style={styles.sensorStatusLeft}>
-                                <Ionicons
-                                    name={hasSensorValues ? 'radio-outline' : 'cloud-offline-outline'}
-                                    size={14}
-                                    color={hasSensorValues ? COLORS.success : COLORS.textTertiary}
-                                />
-                                <Text style={[styles.sensorStatusText, hasSensorValues && { color: COLORS.success }]}>
-                                    {!hasSensorValues
-                                        ? 'No sensor data - enter values manually'
-                                        : anyManual ? 'Some values edited manually' : 'Live from sensors'}
-                                </Text>
-                            </View>
-                            {hasSensorValues && anyManual && (
-                                <TouchableOpacity onPress={useSensorValues} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                    <Text style={styles.sensorResetText}>Use sensor values</Text>
-                                </TouchableOpacity>
-                            )}
+                        {/* Source: sensor or manual */}
+                        <View style={styles.sourceToggle}>
+                            {[
+                                { key: 'sensor', label: 'From sensor', icon: 'radio-outline' },
+                                { key: 'manual', label: 'Enter manually', icon: 'create-outline' },
+                            ].map((opt) => {
+                                const active = conditionSource === opt.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={opt.key}
+                                        style={[styles.sourceOption, active && styles.sourceOptionActive]}
+                                        onPress={() => setConditionSource(opt.key)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Ionicons name={opt.icon} size={14} color={active ? '#FFF' : COLORS.textSecondary} />
+                                        <Text style={[styles.sourceOptionText, active && styles.sourceOptionTextActive]}>
+                                            {opt.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
                         </View>
+
+                        {conditionSource === 'sensor' && (
+                            <View style={styles.sensorPanel}>
+                                <Text style={styles.bloomInputLabel}>Section</Text>
+                                <TouchableOpacity
+                                    style={styles.dropdown}
+                                    onPress={() => setSectionMenuOpen((open) => !open)}
+                                    disabled={sectionsLoading || sections.length === 0}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={[styles.dropdownText, !selectedSection && { color: COLORS.textTertiary }]} numberOfLines={1}>
+                                        {sectionsLoading
+                                            ? 'Loading sections...'
+                                            : selectedSection?.label || (sections.length ? 'Select a section' : 'No sections found')}
+                                    </Text>
+                                    <Ionicons name={sectionMenuOpen ? 'chevron-up' : 'chevron-down'} size={16} color={COLORS.textSecondary} />
+                                </TouchableOpacity>
+                                {sectionMenuOpen && (
+                                    <View style={styles.dropdownMenu}>
+                                        <ScrollView nestedScrollEnabled style={{ maxHeight: 220 }}>
+                                            {sections.map((sec) => {
+                                                const active = selectedSection?.key === sec.key;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={sec.key}
+                                                        style={[styles.dropdownItem, active && styles.dropdownItemActive]}
+                                                        onPress={() => {
+                                                            setSelectedSection(sec);
+                                                            setSectionMenuOpen(false);
+                                                        }}
+                                                    >
+                                                        <Text style={[styles.dropdownItemText, active && { color: COLORS.primary }]}>
+                                                            {sec.label}
+                                                        </Text>
+                                                        {active && <Ionicons name="checkmark" size={16} color={COLORS.primary} />}
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </ScrollView>
+                                    </View>
+                                )}
+
+                                <View style={styles.dateTimeRow}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.bloomInputLabel}>Date</Text>
+                                        <View style={styles.dateStepper}>
+                                            <TouchableOpacity onPress={() => shiftPickDay(-1)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                                <Ionicons name="chevron-back" size={18} color={COLORS.primary} />
+                                            </TouchableOpacity>
+                                            <Text style={styles.dateText}>{formatDay(pickDay)}</Text>
+                                            <TouchableOpacity
+                                                onPress={() => shiftPickDay(1)}
+                                                disabled={pickDay >= startOfDay(new Date())}
+                                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            >
+                                                <Ionicons
+                                                    name="chevron-forward"
+                                                    size={18}
+                                                    color={pickDay >= startOfDay(new Date()) ? COLORS.textTertiary : COLORS.primary}
+                                                />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                    <View>
+                                        <Text style={styles.bloomInputLabel}>Time</Text>
+                                        <View style={styles.timeInputs}>
+                                            <TextInput
+                                                style={styles.timeInput}
+                                                keyboardType="number-pad"
+                                                maxLength={2}
+                                                value={pickHour}
+                                                onChangeText={setPickHour}
+                                                placeholder="HH"
+                                                placeholderTextColor={COLORS.textTertiary}
+                                            />
+                                            <Text style={styles.timeColon}>:</Text>
+                                            <TextInput
+                                                style={styles.timeInput}
+                                                keyboardType="number-pad"
+                                                maxLength={2}
+                                                value={pickMinute}
+                                                onChangeText={setPickMinute}
+                                                placeholder="MM"
+                                                placeholderTextColor={COLORS.textTertiary}
+                                            />
+                                        </View>
+                                    </View>
+                                </View>
+
+                                <View style={styles.sensorActions}>
+                                    <TouchableOpacity onPress={resetPickToNow} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                                        <Text style={styles.sensorResetText}>Use current time</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.confirmButton, (!selectedSection || sensorFetching) && styles.bloomButtonDisabled]}
+                                        onPress={confirmSensorReading}
+                                        disabled={!selectedSection || sensorFetching}
+                                        activeOpacity={0.8}
+                                    >
+                                        {sensorFetching ? (
+                                            <ActivityIndicator color="#FFF" size="small" />
+                                        ) : (
+                                            <>
+                                                <Ionicons name="checkmark-circle-outline" size={16} color="#FFF" />
+                                                <Text style={styles.confirmButtonText}>Confirm</Text>
+                                            </>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+
+                                {sensorInfo ? (
+                                    <View style={styles.sensorStatusLeft}>
+                                        <Ionicons name="radio-outline" size={14} color={COLORS.success} />
+                                        <Text style={[styles.sensorStatusText, { color: COLORS.success }]}>{sensorInfo}</Text>
+                                    </View>
+                                ) : null}
+                                {sensorError ? <Text style={styles.bloomErrorText}>{sensorError}</Text> : null}
+                            </View>
+                        )}
 
                         <View style={styles.bloomInputRow}>
                             <View style={styles.bloomInputGroup}>
                                 <Text style={styles.bloomInputLabel}>Temp (°C)</Text>
                                 <TextInput
-                                    style={[styles.bloomInput, manualFields.temperature && styles.bloomInputManual]}
+                                    style={styles.bloomInput}
                                     keyboardType="numeric"
                                     placeholder="27"
                                     placeholderTextColor={COLORS.textTertiary}
                                     value={temperature}
-                                    onChangeText={editField('temperature', setTemperature)}
+                                    onChangeText={setTemperature}
                                 />
                             </View>
                             <View style={styles.bloomInputGroup}>
                                 <Text style={styles.bloomInputLabel}>Humidity (%)</Text>
                                 <TextInput
-                                    style={[styles.bloomInput, manualFields.humidity && styles.bloomInputManual]}
+                                    style={styles.bloomInput}
                                     keyboardType="numeric"
                                     placeholder="77"
                                     placeholderTextColor={COLORS.textTertiary}
                                     value={humidity}
-                                    onChangeText={editField('humidity', setHumidity)}
+                                    onChangeText={setHumidity}
                                 />
                             </View>
                             <View style={styles.bloomInputGroup}>
                                 <Text style={styles.bloomInputLabel}>Light (lux)</Text>
                                 <TextInput
-                                    style={[styles.bloomInput, manualFields.light && styles.bloomInputManual]}
+                                    style={styles.bloomInput}
                                     keyboardType="numeric"
                                     placeholder="35728"
                                     placeholderTextColor={COLORS.textTertiary}
                                     value={lightIntensity}
-                                    onChangeText={editField('light', setLightIntensity)}
+                                    onChangeText={setLightIntensity}
                                 />
                             </View>
                         </View>
@@ -1294,14 +1472,143 @@ const styles = StyleSheet.create({
         color: COLORS.text,
         fontSize: FONT.sm,
     },
-    bloomInputManual: {
-        borderColor: COLORS.warning,
+    sourceToggle: {
+        flexDirection: 'row',
+        backgroundColor: COLORS.bg,
+        borderRadius: RADIUS.sm,
+        padding: 3,
+        marginBottom: SPACE.md,
     },
-    sensorStatusRow: {
+    sourceOption: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: SPACE.xs,
+        paddingVertical: SPACE.sm,
+        borderRadius: RADIUS.sm - 2,
+    },
+    sourceOptionActive: {
+        backgroundColor: COLORS.primary,
+    },
+    sourceOptionText: {
+        color: COLORS.textSecondary,
+        fontSize: FONT.xs,
+        fontWeight: '700',
+    },
+    sourceOptionTextActive: {
+        color: '#FFF',
+    },
+    sensorPanel: {
+        marginBottom: SPACE.md,
+        gap: SPACE.xs,
+    },
+    dropdown: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: SPACE.md,
+        backgroundColor: COLORS.bg,
+        borderRadius: RADIUS.sm - 2,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        paddingHorizontal: SPACE.md,
+        paddingVertical: SPACE.sm,
+    },
+    dropdownText: {
+        flex: 1,
+        color: COLORS.text,
+        fontSize: FONT.sm,
+        marginRight: SPACE.sm,
+    },
+    dropdownMenu: {
+        borderRadius: RADIUS.sm - 2,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.bgCard,
+        overflow: 'hidden',
+    },
+    dropdownItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: SPACE.md,
+        paddingVertical: SPACE.sm + 2,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.borderLight,
+    },
+    dropdownItemActive: {
+        backgroundColor: COLORS.bg,
+    },
+    dropdownItemText: {
+        color: COLORS.text,
+        fontSize: FONT.sm,
+        flex: 1,
+    },
+    dateTimeRow: {
+        flexDirection: 'row',
+        gap: SPACE.sm,
+        marginTop: SPACE.sm,
+    },
+    dateStepper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: COLORS.bg,
+        borderRadius: RADIUS.sm - 2,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        paddingHorizontal: SPACE.sm,
+        paddingVertical: SPACE.sm,
+    },
+    dateText: {
+        color: COLORS.text,
+        fontSize: FONT.sm,
+        fontWeight: '600',
+    },
+    timeInputs: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    // Fixed width: on web a TextInput keeps its intrinsic ~150px width and
+    // ignores flex, which pushed the minutes box off the card
+    timeInput: {
+        width: 48,
+        textAlign: 'center',
+        backgroundColor: COLORS.bg,
+        borderRadius: RADIUS.sm - 2,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        paddingVertical: SPACE.sm,
+        color: COLORS.text,
+        fontSize: FONT.sm,
+    },
+    timeColon: {
+        color: COLORS.text,
+        fontSize: FONT.md,
+        fontWeight: '700',
+        marginHorizontal: SPACE.xs,
+    },
+    sensorActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: SPACE.sm,
+    },
+    confirmButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: SPACE.xs,
+        backgroundColor: COLORS.primary,
+        paddingVertical: SPACE.sm,
+        paddingHorizontal: SPACE.lg,
+        borderRadius: RADIUS.sm,
+        minWidth: 110,
+        justifyContent: 'center',
+    },
+    confirmButtonText: {
+        color: '#FFF',
+        fontSize: FONT.sm,
+        fontWeight: '700',
     },
     sensorStatusLeft: {
         flexDirection: 'row',
