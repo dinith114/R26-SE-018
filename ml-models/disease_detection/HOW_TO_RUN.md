@@ -330,8 +330,19 @@ The rules live in `backend/app/services/disease_contributions.py`; the tests in
 
 **Making someone an expert** — on the server, not in the app:
 
-1. A farm admin creates their account in the app's Team screen (any role;
-   *viewer* is enough, and gives no power over the farm).
+1. Give them an account of their own, **not** one inside a grower's farm,
+   where they could see that farm and its admin could remove them. The vendor
+   creates one for the research institute with the script that creates farm
+   accounts (`docs/CUTOVER.md`, step 2):
+
+   ```bash
+   cd backend
+   ORCHID_API_KEY=<the vendor key> python -m scripts.provision_first_tenant \
+       --name "Orchid Disease Review - <institute>" --email <researcher's email>
+   ```
+
+   The account has no greenhouses, so ignore the firmware notes it prints.
+   Being its admin gives no right to review; only step 2 does.
 2. Put their sign-in email, or their account uid, in **either**
    - `ml-models/disease_detection/data/experts.txt`, one per line
      (`#` starts a comment), or

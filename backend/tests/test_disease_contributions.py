@@ -41,8 +41,10 @@ PEOPLE = {
     "grower-1": {"uid": "g1", "tenantId": "t1", "role": "viewer", "email": "g1@farm.lk"},
     "grower-2": {"uid": "g2", "tenantId": "t1", "role": "operator", "email": "g2@farm.lk"},
     "grower-3": {"uid": "g3", "tenantId": "t2", "role": "admin", "email": "g3@farm.lk"},
-    # Mixed case on purpose: the expert list must match emails case-insensitively.
-    "expert": {"uid": "ex", "tenantId": "t1", "role": "viewer", "email": "Researcher@Lab.lk"},
+    # The reviewer has the research institute's own account, not one inside a
+    # grower's farm. Mixed case on purpose: the expert list must match emails
+    # case-insensitively.
+    "expert": {"uid": "ex", "tenantId": "institute", "role": "admin", "email": "Researcher@Lab.lk"},
 }
 API = "/api/v1/disease"
 
