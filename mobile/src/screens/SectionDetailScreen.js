@@ -41,6 +41,8 @@ import UnitToggle from '../components/UnitToggle';
 import DigitalTwin from '../components/DigitalTwin';
 import { usePrefs } from '../config/prefs';
 import { editText, parseLength, convertText, formatLength } from '../services/lengthUnits';
+import DurationPicker from '../components/DurationPicker';
+import { DEFAULT_POUR_SEC, MAX_POUR_SEC, pourLabel, countdown } from '../services/pourLength';
 
 /* A settings row that opens a chooser. Reads as a value you can change rather
    than a wall of buttons: the three-way control used to be three segments and
@@ -145,7 +147,7 @@ export default function SectionDetailScreen({ route, navigation }) {
      (amountSeconds, from the server). The 15 s fallback is one tray, for a
      server that has not reported an amount yet. */
   const trayFillSecs = sec?.tray?.amountSeconds
-    ?? sec?.tray?.manualSeconds ?? sec?.tray?.maxSeconds ?? 15;
+    ?? sec?.tray?.manualSeconds ?? DEFAULT_POUR_SEC;
 
   const est    = sec?.estimated || null;
   const plan   = sec?.plan   || {};
@@ -212,6 +214,11 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [savingIv,  setSavingIv]  = useState(null);
   // One sheet at a time: 'water' | 'fill' | 'interval' | 'control' | 'unlink'
   const [sheet, setSheet] = useState(null);
+  // The length the farmer picks in Water Now / Fill Tray (19 Oct 2026), the
+  // farm's default lengths, and the longest pour this house's master will run.
+  const [pick, setPick] = useState(DEFAULT_POUR_SEC);
+  const [farmLengths, setFarmLengths] = useState(null);
+  const [pourLimit, setPourLimit] = useState(null);
   const [toast, setToast] = useState(null);      // { text, kind }
   const [pendingCtl, setPendingCtl] = useState(null);
   const [health, setHealth] = useState(null);
@@ -232,10 +239,13 @@ export default function SectionDetailScreen({ route, navigation }) {
       // Firebase egress for a line that looks identical. It reloads when the
       // screen opens and when the range changes, which is when it can actually
       // differ.
-      const [{ house }, dev] = await Promise.all([
+      const [hres, dev] = await Promise.all([
         getHouse(houseId),
         getSectionDevice(houseId, sectionId).catch(() => null),
       ]);
+      const house = hres?.house;
+      setFarmLengths(hres?.pourDefaults || null);
+      setPourLimit(hres?.pourLimit || null);
       const s = house?.sections?.[sectionId];
       setSec(s || null);
       // The master is a HOUSE-level setting shown on a section screen, so the
@@ -392,32 +402,13 @@ export default function SectionDetailScreen({ route, navigation }) {
 
   // Same trick the Add Section picker uses: blink the board's LED so the farmer
   // can tell which of four identical boxes they are about to unlink.
-  /* Save the grower's own pour lengths.
-
-     Blank means automatic, so an empty box is a deliberate value here rather
-     than a missing one - it is how you hand a section back to the model. The
-     backend re-checks both numbers against the relay cap and the tray's real
-     capacity, so this only catches the obvious mistakes early. */
+  /* Save this section's own pour lengths (seconds, from the pickers). The
+     server re-checks both against 1 second to 1 hour. */
   const saveDurations = async () => {
-    const parse = (v) => {
-      const t = String(v ?? '').trim();
-      if (!t) return null;
-      const n = parseInt(t, 10);
-      return Number.isNaN(n) ? null : n;
-    };
-    const w = parse(durEdit?.water);
-    const t = parse(durEdit?.tray);
-    // 1 second, not 30. Nothing in the hardware needed a 30 s floor - the relay
-    // switches in milliseconds, and 2 s is 600 ml at the measured 300 ml/s.
-    // 120 is real: RELAY_MAX_SEC, clamped on the board itself.
-    if (w != null && (w < 1 || w > 120)) {
-      setToast({ text: 'Watering must be 1 to 120 seconds. The board stops at 120.',
-                 kind: 'error' });
-      return;
-    }
-    if (t != null && (t < 1 || t > (tray?.maxSeconds ?? 15))) {
-      setToast({ text: `Tray fill must be 1 to ${tray?.maxSeconds ?? 15} seconds — `
-                      + `longer overflows the tray.`, kind: 'error' });
+    const w = Number(durEdit?.water);
+    const t = Number(durEdit?.tray);
+    if (!(w >= 1 && w <= MAX_POUR_SEC) || !(t >= 1 && t <= MAX_POUR_SEC)) {
+      setToast({ text: 'Each length must be between 1 second and 60 minutes.', kind: 'error' });
       return;
     }
     try {
@@ -425,8 +416,7 @@ export default function SectionDetailScreen({ route, navigation }) {
       await setSectionDurations(houseId, sectionId, w, t);
       setDurEdit(null);
       load();
-      setToast({ text: w == null && t == null ? 'Back to automatic' : 'Lengths saved',
-                 kind: 'success' });
+      setToast({ text: 'Lengths saved for this section', kind: 'success' });
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
@@ -434,32 +424,19 @@ export default function SectionDetailScreen({ route, navigation }) {
     }
   };
 
-  /* Hand the lengths back to the model, or take them over.
-     
-     Turning automatic OFF does not save anything yet - it opens the boxes
-     prefilled with what the model last chose, so the grower edits a real number
-     rather than an empty field and can see what they are overriding. Turning it
-     ON writes nulls immediately, because "give it back" is not a draft. */
-  /* Read straight off `sec`, NOT off the `plan` / `tray` shorthands.
-  
-     Those are declared three hundred lines below this point, and referencing
-     them here should be a temporal-dead-zone crash. It is not, because Babel
-     transpiles const to var for the release build, so both hoist as undefined
-     instead of throwing - and `undefined?.durationSetBy !== 'manual'` is true,
-     as is `undefined?.manualSeconds == null`. The whole expression quietly
-     collapsed to `!durEdit`, so the switch tracked "am I editing right now"
-     rather than "who owns these lengths". Saving clears durEdit, so the switch
-     sprang back to automatic the instant a value was stored - while the value
-     itself had saved correctly all along. */
-  const durAuto = !durEdit
-    && sec?.plan?.durationSetBy !== 'manual'
-    && sec?.tray?.manualSeconds == null;
+  /* Read straight off `sec`, NOT off the `plan` / `tray` shorthands, which are
+     declared further down (see the note on trayFillSecs). The plan says
+     "section" when this section has its own watering length. */
+  const ownLengths = sec?.plan?.durationSetBy === 'section' || sec?.tray?.manualSeconds != null;
+  const durAuto = !durEdit && !ownLengths;
 
+  /* Off opens the pickers, filled with today's lengths, without saving. On
+     clears this section's lengths at once: "use the default" is not a draft. */
   const setDurAuto = async (auto) => {
     if (!auto) {
       setDurEdit({
-        water: String(sec?.plan?.modelDurationSec ?? sec?.plan?.durationSec ?? ''),
-        tray:  sec?.tray?.manualSeconds != null ? String(sec.tray.manualSeconds) : '',
+        water: sec?.plan?.durationSec || farmLengths?.waterSec || DEFAULT_POUR_SEC,
+        tray:  trayFillSecs,
       });
       return;
     }
@@ -468,7 +445,7 @@ export default function SectionDetailScreen({ route, navigation }) {
       setDurSaving(true);
       await setSectionDurations(houseId, sectionId, null, null);
       load();
-      setToast({ text: 'Back to automatic', kind: 'success' });
+      setToast({ text: 'Using the farm default', kind: 'success' });
     } catch (e) {
       setToast({ text: e.message, kind: 'error' });
     } finally {
@@ -613,7 +590,7 @@ export default function SectionDetailScreen({ route, navigation }) {
      stays usable and the farmer can Stop rather than only watch. */
   const runAction = async (kind, seconds) => {
     const secs = seconds ?? (kind === 'water'
-      ? (sec?.plan?.durationSec || 45)
+      ? (sec?.plan?.durationSec || farmLengths?.waterSec || DEFAULT_POUR_SEC)
       : trayFillSecs);
     setSheet(null);
     setAgain(null);
@@ -905,13 +882,16 @@ export default function SectionDetailScreen({ route, navigation }) {
         visible={sheet === 'water'}
         icon="rainy-outline"
         title="Water this section?"
-        body={`The pump will run for ${sec?.plan?.durationSec || 45} seconds in `
-            + `${sec?.meta?.name || sectionId}.`}
+        body={`The pump will run for ${pourLabel(pick)} in ${sec?.meta?.name || sectionId}. `
+            + 'Choose a different length below if needed.'}
         caution="Vanda roots rot if they are watered too often. Only do this if the plants clearly need it."
         confirmLabel={addFert ? 'Water and feed' : 'Water now'}
         busy={busy === 'water'}
         onCancel={() => setSheet(null)}
-        onConfirm={() => runAction('water')}>
+        onConfirm={() => runAction('water', pick)}>
+
+        <DurationPicker value={pick} onChange={setPick}
+          mlPerSec={sec?.plan?.mlPerSec} limit={pourLimit} />
 
         {/* Plant food is a decision made HERE, with the evidence to make it.
             Fertiliser only ever goes in with water, so this is the only moment
@@ -966,13 +946,15 @@ export default function SectionDetailScreen({ route, navigation }) {
         visible={sheet === 'fill'}
         icon="add-circle-outline"
         title="Fill the humidity tray?"
-        body={`The valve will open for ${trayFillSecs} seconds. The water `
+        body={`The valve will open for ${pourLabel(pick)}. The water `
             + 'evaporates to raise humidity around the plants; it does not touch the roots.'}
         confirmLabel="Fill tray"
         busy={busy === 'fill'}
         onCancel={() => setSheet(null)}
-        onConfirm={() => runAction('fill')}
-      />
+        onConfirm={() => runAction('fill', pick)}>
+        <DurationPicker value={pick} onChange={setPick}
+          mlPerSec={sec?.plan?.mlPerSec} limit={pourLimit} />
+      </ConfirmSheet>
 
       {/* Shown when a pour ended on its OWN, never when it was stopped.
 
@@ -984,12 +966,12 @@ export default function SectionDetailScreen({ route, navigation }) {
         visible={!!again}
         icon={again?.kind === 'water' ? 'checkmark-circle-outline' : 'checkmark-circle-outline'}
         title={again?.kind === 'water' ? 'Watering finished' : 'Tray filled'}
-        body={`${sec?.meta?.name || sectionId} ran for ${again?.secs || 0} seconds and stopped `
+        body={`${sec?.meta?.name || sectionId} ran for ${pourLabel(again?.secs || 0)} and stopped `
             + 'by itself. Does it need a little more?'}
         caution={again?.kind === 'water'
           ? 'Vanda roots rot if they stay wet. Only add more if the roots still look silvery.'
           : undefined}
-        confirmLabel={`Run ${Math.max(5, Math.round((again?.secs || 10) / 2))}s more`}
+        confirmLabel={`Run ${pourLabel(Math.max(5, Math.round((again?.secs || 10) / 2)))} more`}
         cancelLabel="No, done"
         onCancel={() => setAgain(null)}
         onConfirm={() => {
@@ -1006,8 +988,8 @@ export default function SectionDetailScreen({ route, navigation }) {
         visible={sheet === 'stop'}
         icon="stop-circle-outline"
         title={run?.kind === 'water' ? 'Stop watering?' : 'Stop filling the tray?'}
-        body={`${sec?.meta?.name || sectionId} has about ${Math.max(0, run?.remaining || 0)} `
-            + 'seconds left. Stopping now leaves it part-way through, and the node '
+        body={`${sec?.meta?.name || sectionId} has about ${pourLabel(run?.remaining || 0)} `
+            + 'left. Stopping now leaves it part-way through, and the node '
             + 'takes a few seconds to react.'}
         confirmLabel="Stop now"
         destructive
@@ -1406,7 +1388,7 @@ export default function SectionDetailScreen({ route, navigation }) {
               ) : (
                 <>
                   <Text style={styles.runCount}>
-                    {Math.max(0, run.remaining)}<Text style={styles.runCountUnit}>s left</Text>
+                    {countdown(run.remaining)}<Text style={styles.runCountUnit}> left</Text>
                   </Text>
                   <View style={styles.runTrack}>
                     <View style={[styles.runFill, {
@@ -1460,8 +1442,11 @@ export default function SectionDetailScreen({ route, navigation }) {
             <View style={styles.btnGrid}>
               {[
                 ['water', 'Water Now',   'rainy-outline',      COLORS.primary,
-               () => { setAddFert(!!fert?.due); setSheet('water'); }, 'waterSection'],
-                ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,    () => setSheet('fill'),
+               () => { setAddFert(!!fert?.due);
+                       setPick(sec?.plan?.durationSec || farmLengths?.waterSec || DEFAULT_POUR_SEC);
+                       setSheet('water'); }, 'waterSection'],
+                ['fill',  'Fill Tray',   'add-circle-outline', COLORS.info,
+                 () => { setPick(trayFillSecs); setSheet('fill'); },
                  'fillTray'],
               /* A viewer sees the readings and the plan and none of the pumps.
                  Both of these are admin-or-operator on the server. */
@@ -2117,83 +2102,46 @@ export default function SectionDetailScreen({ route, navigation }) {
           {/* ── POUR LENGTHS ─────────────────────────────────────────────
               How long the pump runs, not when. The models keep deciding the
               time of day and when the tray needs filling; these set the length
-              once that decision is made. A blank watering box means the
-              model's length; a blank tray box means one full tray. */}
+              once that decision is made. Since 19 Oct 2026 there is no length
+              model: a section uses the farm default (Settings) unless it has
+              lengths of its own, measured by the grower for its own pipes. */}
           <SectionHead icon="timer-outline" title="Pour lengths"
             tint={COLORS.primary} tintDim={COLORS.primaryDim}
-            status={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
-                    ? 'yours' : 'automatic'}
-            statusTone={plan?.durationSetBy === 'manual' || tray?.manualSeconds != null
-                        ? COLORS.primary : COLORS.textTertiary} />
+            status={ownLengths ? 'this section' : 'farm default'}
+            statusTone={ownLengths ? COLORS.primary : COLORS.textTertiary} />
           <View style={[styles.card, SHADOW.sm]}>
-            {/* The switch, and nothing else, decides which half of this card is
-                live. Boxes that look editable while the model owns the value
-                were the previous design and invited exactly the confusion of
-                typing a number that then never took effect. */}
             <View style={styles.durAutoRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.durAutoTitle}>Let the system choose</Text>
+                <Text style={styles.durAutoTitle}>Use the farm default</Text>
                 <Text style={styles.durSub}>
-                  {durAuto ? 'The model sets the watering length; each tray fill is one full tray.'
-                           : 'You set the lengths. The models still pick the time.'}
+                  {durAuto
+                    ? `Watering ${pourLabel(farmLengths?.waterSec ?? DEFAULT_POUR_SEC)}, `
+                      + `tray fill ${pourLabel(farmLengths?.traySec ?? DEFAULT_POUR_SEC)}. `
+                      + 'Change these in Settings.'
+                    : 'This section has its own lengths. The models still pick the time.'}
                 </Text>
               </View>
               <Switch
                 value={durAuto}
                 onValueChange={setDurAuto}
-                disabled={durSaving}
+                disabled={durSaving || !can('setSectionDurations')}
                 trackColor={{ false: COLORS.border, true: COLORS.primaryLight }}
                 thumbColor={durAuto ? COLORS.primary : COLORS.textTertiary} />
             </View>
 
-            {/* What the model asked for, shown in BOTH states. Under manual it
-                is the reference the grower is deciding against, and hiding it
-                there would make the override a guess. */}
-            <View style={styles.durAiRow}>
-              <Ionicons name="sparkles-outline" size={14} color={COLORS.estimated} />
-              <Text style={styles.durAiTxt}>
-                AI suggestion — watering {plan?.modelDurationSec ?? plan?.durationSec ?? '--'}s
-                {tray?.modelWantsFill ? '  ·  tray fill needed now' : '  ·  tray not needed now'}
-              </Text>
-            </View>
-
             {durAuto ? (
               <Text style={styles.durHint}>
-                Watering {plan?.durationSec ?? '--'}s
-                {plan?.litres != null ? ` — about ${plan.litres} L per watering.` : '.'}
-                {' '}Turn the switch off to set your own.
+                Turn the switch off to give this section its own lengths, for example
+                when its pipe is longer and less water reaches it each second.
               </Text>
             ) : durEdit ? (
               <>
-                <View style={styles.durRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>Watering (1–120s)</Text>
-                    <TextInput style={styles.durInput} value={durEdit.water}
-                      onChangeText={(v) => setDurEdit({ ...durEdit, water: v })}
-                      keyboardType="number-pad" placeholder="auto"
-                      placeholderTextColor={COLORS.textTertiary}
-                      maxFontSizeMultiplier={1.15} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.durLabel}>
-                      Tray fill (1–{tray?.maxSeconds ?? 15}s)
-                    </Text>
-                    <TextInput style={styles.durInput} value={durEdit.tray}
-                      onChangeText={(v) => setDurEdit({ ...durEdit, tray: v })}
-                      keyboardType="number-pad" placeholder="auto"
-                      placeholderTextColor={COLORS.textTertiary}
-                      maxFontSizeMultiplier={1.15} />
-                  </View>
-                </View>
-                <Text style={styles.durHint}>
-                  {durEdit.water
-                    ? `About ${(Number(durEdit.water) * 0.3).toFixed(1)} L per watering `
-                      + `at the measured 300 ml/s. `
-                    : ''}
-                  The board stops any pour at 120s, and the tray holds
-                  {' '}{tray?.trayCapacityL ?? 4.6} L — longer than
-                  {' '}{tray?.maxSeconds ?? 15}s overflows it.
-                </Text>
+                <DurationPicker label="Watering" value={durEdit.water}
+                  onChange={(v) => setDurEdit({ ...durEdit, water: v })}
+                  mlPerSec={plan?.mlPerSec} limit={pourLimit} />
+                <DurationPicker label="Tray fill" value={durEdit.tray}
+                  onChange={(v) => setDurEdit({ ...durEdit, tray: v })}
+                  mlPerSec={plan?.mlPerSec} limit={pourLimit} />
                 <View style={styles.durBtns}>
                   <TouchableOpacity style={styles.durCancel} onPress={() => setDurEdit(null)}
                     disabled={durSaving} accessibilityRole="button">
@@ -2210,20 +2158,17 @@ export default function SectionDetailScreen({ route, navigation }) {
               <TouchableOpacity style={styles.durView} activeOpacity={0.7}
                 disabled={!can('setSectionDurations')}
                 onPress={can('setSectionDurations') ? () => setDurEdit({
-                  water: plan?.durationSetBy === 'manual' ? String(plan.durationSec) : '',
-                  tray:  tray?.manualSeconds != null ? String(tray.manualSeconds) : '',
+                  water: plan?.durationSec || farmLengths?.waterSec || DEFAULT_POUR_SEC,
+                  tray:  trayFillSecs,
                 }) : undefined}
                 accessibilityRole={can('setSectionDurations') ? 'button' : 'text'}
                 accessibilityLabel="Change how long watering and tray filling run">
                 <Ionicons name="timer-outline" size={22} color={COLORS.primary} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.durValue}>
-                    Watering {plan?.durationSetBy === 'manual'
-                      ? `${plan.durationSec}s` : `${plan?.durationSec ?? '--'}s`}
+                    Watering {pourLabel(plan?.durationSec || farmLengths?.waterSec || DEFAULT_POUR_SEC)}
                     {'   ·   '}
-                    Tray {tray?.manualSeconds != null
-                      ? `${tray.manualSeconds}s`
-                      : `${tray?.amountSeconds ?? tray?.maxSeconds ?? 15}s (full tray)`}
+                    Tray {pourLabel(trayFillSecs)}
                   </Text>
                   <Text style={styles.durSub}>
                     {plan?.litres != null

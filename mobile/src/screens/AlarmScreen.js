@@ -26,6 +26,8 @@ import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { LIVE_MS } from '../hooks/useLiveData';
 import ConfirmSheet from '../components/ConfirmSheet';
+import DurationPicker from '../components/DurationPicker';
+import { DEFAULT_POUR_SEC, pourLabel } from '../services/pourLength';
 import Toast from '../components/Toast';
 import {
   getAlarms, ackAlarm, getHouse, waterSection, fillTray,
@@ -98,6 +100,8 @@ export default function AlarmScreen({ route, navigation }) {
      Confirm acted on that one instead - or, for a check-device alarm, quietly
      did nothing while the farmer believed Section 1 was watered. Found in review. */
   const [sheet, setSheet]     = useState(null);
+  // The length picked on the Act sheet (19 Oct 2026); null = this section's own.
+  const [pick, setPick]       = useState(null);
   const [toast, setToast]     = useState(null);
 
   const load = useCallback(async () => {
@@ -166,16 +170,24 @@ export default function AlarmScreen({ route, navigation }) {
     } finally { setBusy(null); }
   };
 
+  // This section's own length (or the farm default the server already put in
+  // its plan and tray), which the farmer can change on the sheet.
+  const actDefault = sheet?.alarm?.action === 'water'
+    ? (section?.plan?.durationSec || DEFAULT_POUR_SEC)
+    : (section?.tray?.amountSeconds || DEFAULT_POUR_SEC);
+  const actSecs = pick ?? actDefault;
+
   const doAct = async (a) => {
+    const secs = actSecs;
     setSheet(null);
+    setPick(null);
     if (!MOVES_WATER.has(a.action)) return;          // see ACTION['check-device']
     setBusy('act');
     try {
       if (a.action === 'water') {
-        await waterSection(a.houseId, a.sectionId,
-          section?.plan?.durationSec || 45, !!section?.fertilizer?.due);
+        await waterSection(a.houseId, a.sectionId, secs, !!section?.fertilizer?.due);
       } else if (a.action === 'fill-tray') {
-        await fillTray(a.houseId, a.sectionId, section?.tray?.fillSeconds || section?.tray?.amountSeconds || 15);
+        await fillTray(a.houseId, a.sectionId, secs);
       }
       // Doing the thing is the strongest possible acknowledgement.
       await ackAlarm(a.id);
@@ -261,7 +273,7 @@ export default function AlarmScreen({ route, navigation }) {
 
         {section?.plan?.waterTime && section.plan.date === todayYMD() && (
           <Text style={s.note}>
-            Today's plan: water at {section.plan.waterTime} for {section.plan.durationSec} seconds.
+            Today's plan: water at {section.plan.waterTime} for {pourLabel(section.plan.durationSec)}.
           </Text>
         )}
 
@@ -338,12 +350,13 @@ export default function AlarmScreen({ route, navigation }) {
         icon={sheetCfg.icon}
         title={`${sheetCfg.button} in ${sheet?.alarm?.sectionId || ''}?`}
         body={sheet?.alarm?.action === 'water'
-          ? `The pump runs for ${section?.plan?.durationSec || 45} seconds.`
-          : `The valve opens for ${section?.tray?.fillSeconds || section?.tray?.amountSeconds || 15} seconds.`}
+          ? `The pump runs for ${pourLabel(actSecs)}.`
+          : `The valve opens for ${pourLabel(actSecs)}.`}
         confirmLabel={sheetCfg.button || 'Confirm'}
-        onCancel={() => setSheet(null)}
-        onConfirm={() => doAct(sheet.alarm)}
-      />
+        onCancel={() => { setSheet(null); setPick(null); }}
+        onConfirm={() => doAct(sheet.alarm)}>
+        <DurationPicker value={actSecs} onChange={setPick} mlPerSec={section?.plan?.mlPerSec} />
+      </ConfirmSheet>
     </View>
   );
 }

@@ -51,7 +51,17 @@ const int MASTER_MAX_SEC = RELAY_MAX_SEC;
 // A queued command that has sat unread is refused rather than obeyed. The
 // single-node path learned this the hard way: a 20-hour-old command ran at
 // boot and poured for ninety seconds unprompted.
+//
+// IDLE time, not time since it was issued (validation-2.9, 19 Oct 2026). With
+// pours up to an hour, a command queued behind a 10 minute pour was 15 minutes
+// old by the time its turn came and was thrown away - a "Water Now" across
+// three sections silently dropped the third. So a command's age is counted
+// from the later of when it was issued and when this board last finished a
+// pour: waiting for the pump is not going stale, sitting unread is. After a
+// reboot no pour has finished, so an old command is judged from its issue time
+// and refused exactly as before.
 const long MASTER_MAX_AGE_SEC = 900;
+static long masterLastPourEndSec = 0;     // epoch seconds; 0 = none since boot
 
 static unsigned long lastQueuePoll = 0;
 
@@ -185,9 +195,10 @@ void masterRunOne(const String& payload) {
     return;
   }
   if (issued > 0) {
-    long age = (long)(nowMs() / 1000ULL) - issued;
+    long since = issued > masterLastPourEndSec ? issued : masterLastPourEndSec;
+    long age = (long)(nowMs() / 1000ULL) - since;
     if (age > MASTER_MAX_AGE_SEC) {
-      Serial.printf("[MASTER] %s issued %lds ago - too old to obey\n",
+      Serial.printf("[MASTER] %s waited %lds with the pump free - too old to obey\n",
                     section.c_str(), age);
       masterAck(id, section, (int)channel, 0, "stale");
       return;
@@ -229,6 +240,7 @@ void masterRunOne(const String& payload) {
   bool stopped = false;
   const uint32_t totalMs = (uint32_t)secs * 1000UL;
   uint32_t lastCheck = start;
+  uint32_t lastBeat = start;
   while (millis() - start < totalMs) {
     delay(50);
     servePortal();
@@ -240,10 +252,18 @@ void masterRunOne(const String& payload) {
       lastCheck = millis();
       if (masterStopRequested(id)) { stopped = true; break; }
     }
+    // Still "I am here" during a long pour. The loop that normally sends the
+    // heartbeat is held for the whole pour, so a 10 minute watering showed the
+    // master offline after 90 s. Same budget rule as the stop check.
+    if (remaining > STOP_CHECK_BUDGET_MS && millis() - lastBeat >= HEARTBEAT_MS) {
+      lastBeat = millis();
+      sendHeartbeat();
+    }
   }
 
   digitalWrite(pin, RELAY_OFF);
   int ran = (int)((millis() - start) / 1000UL);
+  masterLastPourEndSec = (long)(nowMs() / 1000ULL);
   masterClearRunning();
   Serial.printf("[MASTER] %s %s, %ds\n", section.c_str(),
                 stopped ? "STOPPED early" : "done", ran);

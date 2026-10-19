@@ -68,7 +68,13 @@ pip_if_changed() {
 started_ok() {
   sleep 25
   systemctl is-active --quiet "$SERVICE" || return 1
-  journalctl -u "$SERVICE" --since "-45s" --no-pager -o cat | grep -q "Application startup complete" || return 1
+  # NOT `grep -q`: it stops reading at the first match, journalctl is killed by
+  # SIGPIPE while writing the rest, and pipefail turns that 141 into a failure.
+  # Once about 8 KB of log followed the match this failed every time: on
+  # 19 Oct 2026 PR #77 was rolled back although it had started fine, and the
+  # "rollback" was reported failed too. Replayed: 30/30 failures with -q, 0/30
+  # without.
+  journalctl -u "$SERVICE" --since "-45s" --no-pager -o cat | grep "Application startup complete" >/dev/null || return 1
   local code
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:8000/api/v2/care/overview)
   [[ "$code" == "401" || "$code" == "403" || "$code" == "200" ]]

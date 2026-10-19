@@ -26,6 +26,7 @@ import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
 import { waterSection, waterHouseOnce, fillTray, getCommandStatus, stopSection } from '../services/careV2';
 import ConfirmSheet from '../components/ConfirmSheet';
+import { DEFAULT_POUR_SEC, pourLabel } from '../services/pourLength';
 
 /** How long to wait for a node BEYOND the length of the pour itself.
  *
@@ -138,7 +139,7 @@ export default function RunScreen({ route, navigation }) {
        master answers for the first section; the server confirms the rest from
        that same answer, so the rows share one outcome here too. */
     const runOnce = async () => {
-      const secs = Math.max(...targets.map((t) => t.durationSec || 45));
+      const secs = Math.max(...targets.map((t) => t.durationSec || DEFAULT_POUR_SEC));
       const houseId = targets[0].houseId;
       setRows((cur) => cur.map((r) => ({ ...r, state: 'sending', note: null })));
       try {
@@ -147,7 +148,7 @@ export default function RunScreen({ route, navigation }) {
         const lead = r?.leadSection || targets[0].sectionId;
         const li = Math.max(0, targets.findIndex((t) => t.sectionId === lead));
         if (!alive.current) return;
-        setRows((cur) => cur.map((row) => ({ ...row, state: 'confirming', note: `${secs}s, one run` })));
+        setRows((cur) => cur.map((row) => ({ ...row, state: 'confirming', note: `${pourLabel(secs)}, one run` })));
         setLive({ i: li, houseId, sectionId: lead,
                   id: cmdId, secs, remaining: secs, started: false, queued: false });
 
@@ -157,7 +158,7 @@ export default function RunScreen({ route, navigation }) {
         setStopping(false);
         const state = res.stopped ? 'stopped' : res.ok ? 'done' : 'unconfirmed';
         const note = res.stopped ? 'stopped by you'
-          : res.ok ? `${secs}s, one run` : 'the node may be offline';
+          : res.ok ? `${pourLabel(secs)}, one run` : 'the node may be offline';
         setRows((cur) => cur.map((row) => ({ ...row, state, note })));
       } catch (e) {
         if (!alive.current) return;
@@ -173,14 +174,14 @@ export default function RunScreen({ route, navigation }) {
         const t = targets[i];
         setRow(i, { state: 'sending' });
         try {
-          const secs = isWater ? (t.durationSec || 45) : (t.fillSeconds || 15);
+          const secs = isWater ? (t.durationSec || DEFAULT_POUR_SEC) : (t.fillSeconds || DEFAULT_POUR_SEC);
           const r = isWater
             ? await waterSection(t.houseId, t.sectionId, secs, !!t.withFertilizer)
             : await fillTray(t.houseId, t.sectionId, secs);
           const cmdId = r?.command?.id || r?.nodeCommand?.id || null;
 
           if (!alive.current) return;
-          setRow(i, { state: 'confirming', note: `${secs}s` });
+          setRow(i, { state: 'confirming', note: pourLabel(secs) });
           setLive({ i, houseId: t.houseId, sectionId: t.sectionId,
                     id: cmdId, secs, remaining: secs, started: false, queued: false });
 
@@ -191,7 +192,7 @@ export default function RunScreen({ route, navigation }) {
           setRow(i, {
             state: res.stopped ? 'stopped' : res.ok ? 'done' : 'unconfirmed',
             note: res.stopped ? 'stopped by you'
-                : res.ok ? `${secs}s`
+                : res.ok ? pourLabel(secs)
                 : 'the node may be offline',
           });
         } catch (e) {
@@ -263,14 +264,14 @@ export default function RunScreen({ route, navigation }) {
           : isWater ? 'Stop watering this section?' : 'Stop filling this tray?'}
         body={oneRun
           ? (live?.started
-              ? `The pump has about ${Math.max(0, live?.remaining || 0)} seconds left. `
+              ? `The pump has about ${pourLabel(live?.remaining || 0)} left. `
                 + 'Stopping ends the run for every section in it, and the node takes a '
                 + 'few seconds to react.'
               : 'The run has not started yet. Stopping asks the master to cancel it for '
                 + 'every section, and it takes a few seconds to react.')
           : live?.started
           ? `${rows[live?.i]?.name || 'This section'} has about `
-            + `${Math.max(0, live?.remaining || 0)} seconds left. Stopping leaves it `
+            + `${pourLabel(live?.remaining || 0)} left. Stopping leaves it `
             + 'part-way through, and the node takes a few seconds to react. The '
             + 'remaining sections still run.'
           : `${rows[live?.i]?.name || 'This section'} has not started yet. Stopping `

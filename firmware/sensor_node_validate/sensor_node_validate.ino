@@ -66,7 +66,7 @@
 
 /* Reported in the device record, and printed in the boot banner so the serial
    monitor alone shows which build is on the board. */
-#define FW_VERSION "validation-2.8"
+#define FW_VERSION "validation-2.9"
 
 /* ═══════════ QUIET_NODE: battery boards that only record ═══════════
    0 (the default) changes nothing. Set it to 1 for a board that runs from a
@@ -262,9 +262,14 @@ void setupRelays() {
 
 /* Runs one relay for a bounded time.
    The cap is a safety net, not a preference: a command that arrives corrupted,
-   or a backend bug asking for 9999 seconds, must not empty a tank over a plant.
-   Anything longer than the cap is clamped and the clamp is reported. */
-const uint32_t RELAY_MAX_SEC = 120;
+   or a backend bug asking for 99999 seconds, must not empty a tank over a plant.
+   Anything longer than the cap is clamped and the clamp is reported.
+
+   ONE HOUR since validation-2.9 (19 Oct 2026). It was 120 s while the watering
+   length came from a model bounded to 30-120 s; lengths are now the grower's
+   (10 minutes by default) and the backend allows up to an hour. The backend
+   reads `fw` and holds a master below 2.9 to 120 s, telling the farmer why. */
+const uint32_t RELAY_MAX_SEC = 3600;
 
 void runRelay(int pin, uint32_t seconds, const char* what, const String& cmdId) {
   if (seconds == 0) return;

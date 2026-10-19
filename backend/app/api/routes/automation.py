@@ -47,7 +47,7 @@ from pydantic import BaseModel
 
 from app.api.routes.smart_care_v2 import (
     _fb_get, _fb_put, _fb_delete, _plan_section, _tray_decision, _run_per_section,
-    second_session_due, _issue_node_command, RELAY_MAX_SEC, farm_now, farm_tz,
+    second_session_due, _issue_node_command, RELAY_MAX_SEC, _dur_words, farm_now, farm_tz,
     farm_auto_mode, section_acts_alone, _ready,
     _record_fertilized, _log_event, _acting_houses, _is_current, _actionable,
     _command_refusal, SETUP_HINT, settle_pending_feeds, settle_pending_acks, _relay_channel,
@@ -640,9 +640,10 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                 with_fert = bool(fert.get("due")) and fert.get("npkType") not in (None, "None")
 
                 if section_is_auto(s, master):
-                    # Same cap the relay enforces, so the alarm text and the
-                    # pump agree on how long the plants were watered for.
-                    secs = max(10, min(sess["durationSec"], RELAY_MAX_SEC))
+                    # The grower's length (19 Oct 2026: no length model). The
+                    # master's own ceiling is applied in _issue_node_command and
+                    # read back below, so the log and the pump agree.
+                    secs = max(1, min(int(sess["durationSec"]), RELAY_MAX_SEC))
                     # The scheduled watering has to reach the physical node too,
                     # not just the simulator's control/* contract.
                     node_cmd = _issue_node_command(hid, sid, "water", secs,
@@ -661,10 +662,11 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                             "action", f"{hid}-{sid}-cannot-water-{day}-{tag}",
                             "Watering could not be sent",
                             f"{hname} · {sname} was due to be watered at {sess['time']} for "
-                            f"{secs}s, but {why}. Nothing was poured - water it by hand. "
+                            f"{_dur_words(secs)}, but {why}. Nothing was poured - water it by hand. "
                             f"{SETUP_HINT}",
                             hid, sid, action="check-device")
                         continue
+                    secs = node_cmd.get("durationSec", secs)
                     _fb_put(f"/farm/houses/{hid}/sections/{sid}/control/waterCommand.json", {
                         "requested": True,
                         "durationSec": secs,
@@ -695,7 +697,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                         "info", f"{hid}-{sid}-water-{day}-{tag}",
                         "Plants watered",
                         f"{hname} · {sname} was watered at {sess['time']} for "
-                        f"{sess['durationSec']}s"
+                        f"{_dur_words(sess['durationSec'])}"
                         + (f", with {fert.get('npkType')} plant food mixed in." if with_fert else "."),
                         hid, sid)
                 else:
@@ -703,7 +705,7 @@ def run_watering_link(now: datetime, houses: Optional[dict] = None) -> dict:
                     _raise_alarm(
                         "action", f"{hid}-{sid}-water-{day}-{tag}",
                         "Water the plants now",
-                        f"{hname} · {sname} should be watered now for {sess['durationSec']}s"
+                        f"{hname} · {sname} should be watered now for {_dur_words(sess['durationSec'])}"
                         + (f", with {fert.get('npkType')} plant food." if with_fert else ".")
                         + " Automatic care is off, so please do it from the app.",
                         hid, sid, action="water")

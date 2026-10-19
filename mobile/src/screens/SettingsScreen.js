@@ -1,21 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, Animated, Alert, ActivityIndicator,
+  Animated, Alert, ActivityIndicator,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import ScreenHeader from '../components/ScreenHeader';
 import LocationPicker from '../components/LocationPicker';
+import { hasFarmLocation } from '../components/FarmLocationBanner';
 import { useCan, useAuth, useIsAdmin } from '../config/auth';
-import { LIVE_MS } from '../hooks/useLiveData';
-import { usePrefs } from '../config/prefs';
-import {
-  getDevices, getOverview, getModelInfo, setFarmLocation,
-  intervalLabel, lastSeenLabel, signalLabel,
-} from '../services/careV2';
+import { getOverview, setFarmLocation, setPourDefaults } from '../services/careV2';
+import Sheet from '../components/Sheet';
+import DurationPicker from '../components/DurationPicker';
+import { DEFAULT_POUR_SEC, pourLabel } from '../services/pourLength';
 
 /* This screen used to read the LEGACY v1 paths at the Firebase root - /latest,
    /prediction and /history - which nothing else in the v2 app touches. They
@@ -29,28 +26,19 @@ import {
    status shown on this page is a status the hardware really has.
 
    There is no tray probe: it was removed on 10 Oct 2026. The grower sets how
-   long a tray fill runs (a section's Pour lengths) and the models decide when. */
+   long a tray fill runs (a section's Pour lengths) and the models decide when.
+
+   19 Oct 2026, at the grower's request, this page keeps only what a farm user
+   needs: where the farm is, who is signed in, and the app version. Removed:
+   a fixed "My Vanda Orchid" profile card whose edit button promised a future
+   release; a readings strip and a HARDWARE card that both described ONE
+   sensor board (the first one online) on farms that have several; a CLOUD
+   card in developer words; four alert switches that were saved on the phone
+   and read by nothing else in the app; and the university project rows.
+   Board health is on My Farm (its status line) and each section's Setup tab. */
 
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 const Divider = () => <View style={s.divider} />;
-
-const StatusBadge = ({ ok, label, unknown }) => {
-  const fg = unknown ? COLORS.textTertiary : ok ? COLORS.success : COLORS.danger;
-  const bg = unknown ? COLORS.bgCardAlt : ok ? COLORS.successDim : COLORS.dangerDim;
-  return (
-    <View style={[s.badge, { backgroundColor: bg }]}>
-      <View style={[s.badgeDot, { backgroundColor: fg }]} />
-      <Text style={[s.badgeText, { color: fg }]}>{label}</Text>
-    </View>
-  );
-};
-
-/* A sensor's badge judges the node's LAST reading, so it only means anything
-   while the node is online. Offline for 38 days, it went on saying "OK". */
-const SensorBadge = ({ ok, live }) => (
-  live ? <StatusBadge ok={ok} label={ok ? 'OK' : 'Error'} />
-       : <StatusBadge unknown label="No recent reading" />
-);
 
 const Row = ({ icon, iconColor, label, value, hint, right, onPress }) => (
   <TouchableOpacity style={s.row} activeOpacity={onPress ? 0.6 : 1} onPress={onPress}>
@@ -67,24 +55,6 @@ const Row = ({ icon, iconColor, label, value, hint, right, onPress }) => (
   </TouchableOpacity>
 );
 
-const ToggleRow = ({ icon, iconColor, label, sub, value, onToggle }) => (
-  <View style={s.row}>
-    <View style={[s.rowIcon, { backgroundColor: `${iconColor || COLORS.primary}14` }]}>
-      <Ionicons name={icon} size={17} color={iconColor || COLORS.primary} />
-    </View>
-    <View style={{ flex: 1 }}>
-      <Text style={s.rowLabel}>{label}</Text>
-      {sub && <Text style={s.rowHint}>{sub}</Text>}
-    </View>
-    <Switch
-      value={value}
-      onValueChange={onToggle}
-      trackColor={{ false: COLORS.border, true: `${iconColor || COLORS.primary}55` }}
-      thumbColor={value ? (iconColor || COLORS.primary) : '#CCC'}
-    />
-  </View>
-);
-
 // ─── Main screen ───────────────────────────────────────────────────────────────
 export default function SettingsScreen({ navigation }) {
   /* What this account may do. The server refuses the rest whatever
@@ -93,25 +63,13 @@ export default function SettingsScreen({ navigation }) {
   const can = useCan();
   const isAdmin = useIsAdmin();
   const { email: authEmail, signOut } = useAuth();
-  const [device,  setDevice]  = useState(null);   // the physical node
-  const [section, setSection] = useState(null);   // the section it reports for
-  const [models,  setModels]  = useState(null);   // live /model-info
-  const [online,  setOnline]  = useState(null);   // is the backend reachable at all
   const [farm,    setFarm]    = useState(null);   // /farm/meta, incl. coordinates
+  const [farmErr, setFarmErr] = useState(false);  // could not load it at all
   const [locOpen, setLocOpen] = useState(false);  // the map picker
   const [locSaving, setLocSaving] = useState(false);
-  const [alerts, setAlerts] = useState({
-    watering:      true,
-    fertilizer:    true,
-    disease:       true,
-    sensorOffline: true,
-  });
-
-  const [profile] = useState({
-    name:    'My Vanda Orchid',
-    species: 'Vanda',
-    pot:     'Basket (Aerial Roots)',
-  });
+  // The farm's default lengths, being edited: { waterSec, traySec } or null.
+  const [lenEdit, setLenEdit] = useState(null);
+  const [lenSaving, setLenSaving] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -133,72 +91,35 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
+  /* Save the farm's default lengths; the server rewrites every section that
+     uses them, so today's plans change at once rather than at the next dawn. */
+  const saveLengths = async () => {
+    try {
+      setLenSaving(true);
+      const res = await setPourDefaults(lenEdit.waterSec, lenEdit.traySec);
+      setFarm({ ...(farm || {}), pourDefaults: res.pourDefaults || lenEdit });
+      setLenEdit(null);
+    } catch (e) {
+      Alert.alert('Could not save', e.message);
+    } finally {
+      setLenSaving(false);
+    }
+  };
+
   useEffect(() => {
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
 
-    AsyncStorage.getItem('alerts').then(v => { if (v) setAlerts(JSON.parse(v)); });
-
     let alive = true;
-    const load = async () => {
-      try {
-        const [devs, ov] = await Promise.all([getDevices(), getOverview()]);
-        if (!alive) return;
-        setOnline(true);
-
-        // The node heard from most recently. With one board on the bench this is
-        // simply "the node"; with four it is the one worth showing a status for.
-        const list = devs.devices || [];
-        const dev = list.find((d) => d.online) || list[0] || null;
-        setDevice(dev);
-
-        // Its section, so the sensor rows describe the readings THAT node sent
-        // rather than whatever was last written anywhere on the farm.
-        let sec = null;
-        (ov.houses || []).forEach((h) => {
-          (h.sections || []).forEach((x) => {
-            if (dev && dev.assignedTo === h.houseId + '/' + x.sectionId) sec = x;
-          });
-        });
-        setSection(sec);
-        setFarm(ov.farm || null);
-      } catch (_) {
-        if (alive) setOnline(false);
-      }
-      try { const m = await getModelInfo(); if (alive) setModels(m); }
-      catch (_) { if (alive) setModels(null); }
-    };
-
-    load();
-    const t = setInterval(load, LIVE_MS);
-    return () => { alive = false; clearInterval(t); };
+    getOverview()
+      // {} rather than null once loaded, so "nothing saved" and "still
+      // loading" read differently.
+      .then((ov) => { if (alive) { setFarm(ov.farm || {}); setFarmErr(false); } })
+      .catch(() => { if (alive) setFarmErr(true); });
+    return () => { alive = false; };
   }, []);
 
-  const toggleAlert = async key => {
-    const next = { ...alerts, [key]: !alerts[key] };
-    setAlerts(next);
-    await AsyncStorage.setItem('alerts', JSON.stringify(next));
-  };
-
-  // ── Live status, all of it from the v2 API ──────────────────────────────────────────────────
-  const latest = section?.latest || null;
-  // The node reports -999 for a sensor it could not read, and the backend clamps
-  // that to a safe default before the models see it. So a plain truthiness check
-  // here would call a dead sensor healthy - ask the node's own fault flag too.
-  const bad = (v) => v == null || v === -999;
-
-  const isESP32Live  = !!device?.online;
-  const isDHT22OK    = !!latest && !bad(latest.temperature) && !bad(latest.humidity);
-  const isBH1750OK   = !!latest && !bad(latest.light) && latest.sensorFault !== true;
-  const isFirebaseOK = online === true;
-  const mlOK         = !!models;
-
-  const sig          = signalLabel(device?.rssi);
-  const lastSeenStr  = section?.freshness?.label ?? (device ? lastSeenLabel(device.lastSeenSec) : '-');
-  const intervalStr  = device ? intervalLabel(device.readIntervalMs) : '-';
-
-  const planStr = section?.plan?.waterTime
-    ? section.plan.waterTime + ' for ' + section.plan.durationSec + 's'
-    : 'not planned yet';
+  const located = hasFarmLocation(farm);
+  const mayMove = can('setFarmLocation');
 
   return (
     <View style={s.screen}>
@@ -207,115 +128,81 @@ export default function SettingsScreen({ navigation }) {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         <Animated.View style={{ opacity: fadeAnim }}>
 
-          {/* ── Orchid Profile card ───────────────────────────────────── */}
-          <LinearGradient
-            colors={[COLORS.primary, COLORS.primaryDark]}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-            style={[s.profileCard, SHADOW.md]}
-          >
-            <View style={s.profileAvatar}>
-              <Ionicons name="flower-outline" size={30} color="#FFF" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.profileName}>{profile.name}</Text>
-              <Text style={s.profileSub}>{profile.species} · {profile.pot}</Text>
-            </View>
-            <TouchableOpacity
-              style={s.profileEdit}
-              onPress={() => Alert.alert('Edit Profile', 'Profile editing will be added in the next release.')}
-            >
-              <Ionicons name="pencil-outline" size={16} color="rgba(255,255,255,0.85)" />
-            </TouchableOpacity>
-          </LinearGradient>
-
-          {/* ── Live snapshot strip ───────────────────────────────────── */}
-          <View style={[s.snapRow, SHADOW.sm]}>
-            {[
-              { label: 'Temp',  value: isDHT22OK  ? `${latest.temperature.toFixed(1)}°` : '-',  color: COLORS.temperature },
-              { label: 'Humid', value: isDHT22OK  ? `${latest.humidity.toFixed(0)}%`     : '-',  color: COLORS.humidity    },
-              { label: 'Light', value: isBH1750OK ? `${latest.light.toFixed(0)} lx`      : 'N/A', color: COLORS.light      },
-            ].map((item, i, arr) => (
-              <React.Fragment key={i}>
-                <View style={s.snapCell}>
-                  <Text style={[s.snapValue, { color: item.color }]}>{item.value}</Text>
-                  <Text style={s.snapLabel}>{item.label}</Text>
-                </View>
-                {i < arr.length - 1 && <View style={s.snapSep} />}
-              </React.Fragment>
-            ))}
-          </View>
-
           {/* ── FARM LOCATION ────────────────────────────────────────────
-              Which place the outdoor weather forecast is downloaded for. Set on
-              first run; this row is for changing it afterwards, so it states
-              the position and nothing else - the explanation of what happens
-              when it is unset belongs in setup, not here. */}
+              Which place the outdoor weather forecast is downloaded for. Asked
+              during setup, and required since 19 Oct 2026: while it is unset,
+              Home and My Farm carry a banner and this row says what it costs. */}
           <Text style={s.sectionLabel}>FARM LOCATION</Text>
           <View style={[s.card, SHADOW.sm]}>
             {/* The coordinates stay readable - they explain which weather
                 forecast the models are using. Only moving the pin is admin. */}
             <TouchableOpacity
               style={s.locView}
-              disabled={!can('setFarmLocation')}
-              onPress={can('setFarmLocation') ? () => setLocOpen(true) : undefined}
+              disabled={!mayMove || farmErr}
+              onPress={mayMove && !farmErr ? () => setLocOpen(true) : undefined}
               activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel="Change where the farm is on the map">
-              <Ionicons name="location" size={22} color={COLORS.primary} />
+              <Ionicons name={located ? 'location' : 'location-outline'} size={22}
+                color={farm && !located && !farmErr ? COLORS.warning : COLORS.primary} />
               <View style={{ flex: 1 }}>
-                <Text style={s.locValue}>
-                  {farm?.latitude != null
-                    ? `${Number(farm.latitude).toFixed(4)}, ${Number(farm.longitude).toFixed(4)}`
-                    : 'Choose on the map'}
+                <Text style={[s.locValue, farm && !located && !farmErr && { color: COLORS.warning }]}>
+                  {farmErr ? 'Could not load'
+                    : located
+                      ? `${Number(farm.latitude).toFixed(4)}, ${Number(farm.longitude).toFixed(4)}`
+                      : farm ? 'Not set yet' : 'Loading…'}
                 </Text>
-                <Text style={s.locSub}>Used for the weather forecast.</Text>
+                <Text style={s.locSub}>
+                  {farmErr ? 'Check the internet connection and open Settings again.'
+                    : located || !farm ? 'Used for the weather forecast.'
+                      : 'Until it is set, the app uses the weather at Peradeniya.'}
+                  {!mayMove && !farmErr ? ' Only the farm’s admin can change it.' : ''}
+                </Text>
               </View>
               {locSaving
                 ? <ActivityIndicator size="small" color={COLORS.primary} />
-                : <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />}
+                : mayMove && !farmErr
+                  ? <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+                  : null}
             </TouchableOpacity>
           </View>
 
-          {/* ── HARDWARE ─────────────────────────────────────────────── */}
-          <Text style={s.sectionLabel}>HARDWARE</Text>
+          {/* ── WATERING AND TRAY ──────────────────────────────────────
+              How long automatic care waters and fills a tray (19 Oct 2026). The
+              models decide WHEN; these say how long, for every section that has
+              no length of its own (a section's Pour lengths card overrides
+              them). They are also where a hand-pressed Water Now or Fill Tray
+              starts, and the farmer can change it there each time. */}
+          <Text style={s.sectionLabel}>WATERING AND TRAY</Text>
           <View style={[s.card, SHADOW.sm]}>
-            <Row icon="hardware-chip"        iconColor={COLORS.primary}     label="ESP32 Controller"      right={<StatusBadge ok={isESP32Live} label={isESP32Live ? 'Live' : 'Offline'} />} />
-            <Divider />
-            <Row icon="thermometer-outline"  iconColor={COLORS.temperature} label="DHT22 (Temp/Humidity)" right={<SensorBadge ok={isDHT22OK} live={isESP32Live} />} />
-            <Divider />
-            <Row icon="sunny-outline"        iconColor={COLORS.light}       label="BH1750 Light Sensor"   right={<SensorBadge ok={isBH1750OK} live={isESP32Live} />} />
-            <Divider />
-            <Row icon="wifi-outline"         iconColor={COLORS.info}        label="Wi-Fi Signal"          value={sig.label} hint={device?.ip || undefined} />
-            <Divider />
-            <Row icon="time-outline"         iconColor={COLORS.textSecondary} label="Last Reading"        value={lastSeenStr} />
-            <Divider />
-            <Row icon="reload-circle-outline" iconColor={COLORS.textSecondary} label="Read Interval"
-                 value={intervalStr} hint="Change it on the section's Sensor node card" />
+            <TouchableOpacity
+              style={s.locView}
+              disabled={!can('setPourDefaults') || !farm}
+              onPress={can('setPourDefaults') && farm ? () => setLenEdit({
+                waterSec: farm?.pourDefaults?.waterSec ?? DEFAULT_POUR_SEC,
+                traySec: farm?.pourDefaults?.traySec ?? DEFAULT_POUR_SEC,
+              }) : undefined}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Change the default watering and tray fill lengths">
+              <Ionicons name="timer-outline" size={22} color={COLORS.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.locValue}>
+                  Watering {pourLabel(farm?.pourDefaults?.waterSec ?? DEFAULT_POUR_SEC)}
+                  {'  ·  '}Tray fill {pourLabel(farm?.pourDefaults?.traySec ?? DEFAULT_POUR_SEC)}
+                </Text>
+                <Text style={s.locSub}>
+                  Used in automatic care for every section without its own lengths, and as
+                  the starting length when you water or fill by hand.
+                  {!can('setPourDefaults') ? ' Only the farm\u2019s admin can change them.' : ''}
+                </Text>
+              </View>
+              {can('setPourDefaults')
+                ? <Ionicons name="chevron-forward" size={18} color={COLORS.textTertiary} />
+                : null}
+            </TouchableOpacity>
           </View>
 
-          {/* ── CLOUD ────────────────────────────────────────────────── */}
-          <Text style={s.sectionLabel}>CLOUD</Text>
-          <View style={[s.card, SHADOW.sm]}>
-            <Row icon="cloud-outline"     iconColor={COLORS.info}    label="Firebase RTDB"    right={<StatusBadge ok={isFirebaseOK} label={isFirebaseOK ? 'Online' : 'Offline'} />} />
-            <Divider />
-            <Row icon="sparkles-outline"  iconColor={COLORS.warning} label="ML Backend"       right={<StatusBadge ok={mlOK}         label={mlOK         ? 'Running' : 'No data'} />} />
-            <Divider />
-            <Row icon="analytics-outline" iconColor={COLORS.primary} label="Today's Plan"     value={planStr} />
-          </View>
-
-          {/* ── ALERTS ───────────────────────────────────────────────── */}
-          <Text style={s.sectionLabel}>ALERTS & NOTIFICATIONS</Text>
-          <View style={[s.card, SHADOW.sm]}>
-            <ToggleRow icon="water-outline"   iconColor={COLORS.primary}    label="Watering Alerts"        sub="Notify when roots need water"       value={alerts.watering}      onToggle={() => toggleAlert('watering')}      />
-            <Divider />
-            <ToggleRow icon="flask-outline"   iconColor={COLORS.fertilizer} label="Fertilizer Alerts"      sub="Notify when fertilizing is due"     value={alerts.fertilizer}    onToggle={() => toggleAlert('fertilizer')}    />
-            <Divider />
-            <ToggleRow icon="search-outline"  iconColor={COLORS.danger}     label="Disease Warnings"       sub="Alert on disease detection result"  value={alerts.disease}       onToggle={() => toggleAlert('disease')}       />
-            <Divider />
-            <ToggleRow icon="wifi-outline"    iconColor={COLORS.warning}    label="Sensor Offline Warning" sub="Alert when ESP32 disconnects"       value={alerts.sensorOffline} onToggle={() => toggleAlert('sensorOffline')} />
-          </View>
-
-          {/* ── ABOUT ────────────────────────────────────────────────── */}
           {/* ── ACCOUNT ──────────────────────────────────────────────
               Who is signed in, and the two things they can do about it. The
               email is shown because a farm phone gets handed around, and
@@ -357,13 +244,8 @@ export default function SettingsScreen({ navigation }) {
           <View style={[s.card, SHADOW.sm]}>
             <Row icon="leaf"                  iconColor={COLORS.primary}   label="System"        value="Smart Orchid Care" />
             <Divider />
+            {/* Matches app.json and android/app/build.gradle (1.0.0, 19 Oct 2026). */}
             <Row icon="git-branch-outline"    iconColor={COLORS.textSecondary} label="Version"   value="v1.0.0" />
-            <Divider />
-            <Row icon="school-outline"        iconColor={COLORS.textSecondary} label="Project"   value="R26-SE-018" />
-            <Divider />
-            <Row icon="ribbon-outline"        iconColor={COLORS.textSecondary} label="Module"    value="SE4010 · SLIIT" />
-            <Divider />
-            <Row icon="bulb-outline"          iconColor={COLORS.textSecondary} label="Component" value="3, Watering & Fertilization" />
             <Divider />
             <Row
               icon="document-text-outline"
@@ -382,9 +264,30 @@ export default function SettingsScreen({ navigation }) {
         <View style={{ height: 40 }} />
       </ScrollView>
 
+      <Sheet visible={!!lenEdit} title="Watering and tray fill"
+        subtitle="How long each runs in automatic care"
+        onClose={lenSaving ? undefined : () => setLenEdit(null)}
+        footer={
+          <TouchableOpacity style={s.lenSave} disabled={lenSaving} onPress={saveLengths}
+            accessibilityRole="button">
+            {lenSaving ? <ActivityIndicator color="#FFF" size="small" />
+                       : <Text style={s.lenSaveTxt}>Save</Text>}
+          </TouchableOpacity>
+        }>
+        {lenEdit && (
+          <>
+            <DurationPicker label="Watering" value={lenEdit.waterSec}
+              onChange={(v) => setLenEdit({ ...lenEdit, waterSec: v })} />
+            <DurationPicker label="Tray fill" value={lenEdit.traySec}
+              onChange={(v) => setLenEdit({ ...lenEdit, traySec: v })} />
+          </>
+        )}
+      </Sheet>
+
       <LocationPicker
         visible={locOpen}
         initial={farm}
+        saving={locSaving}
         onCancel={() => setLocOpen(false)}
         onPick={saveLocation}
       />
@@ -397,22 +300,9 @@ const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.bg },
   scroll: { padding: SPACE.xl, paddingTop: SPACE.lg },
 
-  // Profile
-  profileCard:   { flexDirection: 'row', alignItems: 'center', borderRadius: RADIUS.lg, padding: SPACE.xl, marginBottom: SPACE.xl, gap: SPACE.lg },
-  profileAvatar: { width: 52, height: 52, borderRadius: RADIUS.md, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
-  profileName:   { color: '#FFF', fontSize: FONT.lg, fontWeight: '800' },
-  profileSub:    { color: 'rgba(255,255,255,0.75)', fontSize: FONT.sm, marginTop: 3 },
-  profileEdit:   { width: 34, height: 34, borderRadius: RADIUS.full, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
-
-  // Snapshot strip
-  snapRow:  { flexDirection: 'row', backgroundColor: COLORS.bgCard, borderRadius: RADIUS.md, padding: SPACE.lg, marginBottom: SPACE.xl },
-  snapCell: { flex: 1, alignItems: 'center' },
-  snapValue:{ fontSize: FONT.md, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  snapLabel:{ color: COLORS.textTertiary, fontSize: 9, fontWeight: '600', letterSpacing: 0.8, marginTop: 3 },
-  snapSep:  { width: 1, backgroundColor: COLORS.borderLight, marginVertical: 4 },
-
   // Section
-  locView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md },
+  locView:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.md,
+               paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md + 2 },
   locValue:  { color: COLORS.text, fontSize: FONT.md, fontWeight: '800' },
   locSub:    { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2, lineHeight: 16 },
   sectionLabel: { color: COLORS.textTertiary, fontSize: FONT.xs, fontWeight: '700', letterSpacing: 1.5, marginBottom: SPACE.sm, marginLeft: 2, marginTop: 4 },
@@ -426,9 +316,7 @@ const s = StyleSheet.create({
   rowHint:  { color: COLORS.textTertiary, fontSize: FONT.xs, marginTop: 2 },
   rowValue: { color: COLORS.textTertiary, fontSize: FONT.sm, maxWidth: 160, textAlign: 'right' },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-
-  // Badge
-  badge:    { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: RADIUS.full, gap: 5 },
-  badgeDot: { width: 6, height: 6, borderRadius: 3 },
-  badgeText:{ fontSize: FONT.xs, fontWeight: '700' },
+  lenSave:  { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: SPACE.md + 2,
+              borderRadius: RADIUS.md, backgroundColor: COLORS.primary },
+  lenSaveTxt: { color: '#FFF', fontSize: FONT.md, fontWeight: '800' },
 });

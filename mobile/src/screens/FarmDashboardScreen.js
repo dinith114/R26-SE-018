@@ -48,7 +48,7 @@ import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
 import ActivityBar from '../components/ActivityBar';
 import ScreenHeader from '../components/ScreenHeader';
-import ModeToggle from '../components/ModeToggle';
+import FarmLocationBanner from '../components/FarmLocationBanner';
 import AutoControls from '../components/AutoControls';
 import { FarmSkeleton } from '../components/Skeleton';
 import { FreshnessBadge, STATE_STYLE, isFault } from '../components/Freshness';
@@ -64,6 +64,8 @@ import {
 import HouseSizeDialog from '../components/HouseSizeDialog';
 import { usePrefs } from '../config/prefs';
 import { formatLength } from '../services/lengthUnits';
+import DurationPicker from '../components/DurationPicker';
+import { DEFAULT_POUR_SEC, pourLabel } from '../services/pourLength';
 
 /** "GOOD" shouted at the farmer; "Good" just tells them. */
 const titleCase = (t) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : t);
@@ -360,11 +362,20 @@ export default function FarmDashboardScreen({ navigation }) {
      all the durations added together. One run as long as the longest is then
      offered, and chosen by default. With valves per section it is not offered
      (afterSections decides). */
-  const runSecs = chosen.map((x) => x.plan?.durationSec || 45);
+  // Lengths are the grower's (19 Oct 2026): each section's own, or the farm
+  // default from Settings. The farmer can change it on the confirm step.
+  const farmLengths = data?.farm?.pourDefaults || {};
+  const runSecs = chosen.map((x) => x.plan?.durationSec || farmLengths.waterSec || DEFAULT_POUR_SEC);
   const longestSecs = runSecs.length ? Math.max(...runSecs) : 0;
   const totalSecs = runSecs.reduce((a, b) => a + b, 0);
   const feedDueNames = chosen.filter((x) => x.fertilizer?.due).map((x) => x.meta?.name || x.sectionId);
   const oneRun = flow?.kind === 'water' && flow?.mode === 'once' && chosen.length > 1;
+  // The length every chosen section gets, picked on the confirm step. Starts
+  // from the longest of their own lengths (for a tray fill, their tray lengths).
+  const trayDefault = Math.max(0, ...chosen.map((x) => x.tray?.amountSeconds || 0))
+    || farmLengths.traySec || DEFAULT_POUR_SEC;
+  const flowSecs = flow?.secs
+    ?? (flow?.kind === 'water' ? (longestSecs || farmLengths.waterSec || DEFAULT_POUR_SEC) : trayDefault);
 
   const afterSections = (sectionIds) => {
     const many = flow.kind === 'water' && sectionIds.length > 1;
@@ -383,8 +394,8 @@ export default function FarmDashboardScreen({ navigation }) {
       houseId: flow.houseId,
       sectionId: x.sectionId,
       name: x.meta?.name || x.sectionId,
-      durationSec: x.plan?.durationSec || 45,
-      fillSeconds: x.tray?.fillSeconds || x.tray?.amountSeconds || 15,
+      durationSec: flowSecs,
+      fillSeconds: flowSecs,
       withFertilizer: !!x.fertilizer?.due,
     }));
     setFlow(null);
@@ -507,6 +518,10 @@ export default function FarmDashboardScreen({ navigation }) {
           </View>
         ) : (
           <>
+            {/* Until the farm's location is saved (19 Oct 2026). Above the
+                status line because it is the one thing here only setup fixes. */}
+            <FarmLocationBanner farm={data?.farm} onSaved={load} />
+
             {/* ── 1. One line: does anything need me? ────────────────────── */}
             {/* No shadow: on Android a shadow under a see-through tint is drawn
                 through it as a grey box, which is what made the old master
@@ -536,11 +551,8 @@ export default function FarmDashboardScreen({ navigation }) {
                 then the houses themselves. ─────────────────────────────── */}
             <View style={[styles.card, SHADOW.sm]}>
               <Text style={styles.cardTitle}>Automation</Text>
-              {/* ModeToggle and AutoControls used to sit eighty lines apart with
-                  four unrelated blocks between them, so the farmer had to know
-                  which of two switches did what. They are one control surface
-                  and now read as one. */}
-              <ModeToggle style={styles.modeInCard} />
+              {/* The Simple / Expert switch sat here until 19 Oct 2026. The
+                  grower asked for it to go: this full view is the only one. */}
               <AutoControls autoMode={auto?.autoMode} pendingAction={auto?.pendingAction || 0}
                 onChanged={refreshAuto} />
 
@@ -556,7 +568,7 @@ export default function FarmDashboardScreen({ navigation }) {
                   <Text style={styles.nextText} numberOfLines={1}>
                     Next: <Text style={styles.nextStrong}>{nextUp.name}</Text> at{' '}
                     <Text style={styles.nextStrong}>{nextUp.at}</Text>
-                    {nextUp.secs ? ` for ${nextUp.secs}s` : ''}
+                    {nextUp.secs ? ` for ${pourLabel(nextUp.secs)}` : ''}
                   </Text>
                   <Ionicons name="chevron-forward" size={14} color={COLORS.textTertiary} />
                 </TouchableOpacity>
@@ -1181,14 +1193,14 @@ export default function FarmDashboardScreen({ navigation }) {
         options={[
           { key: 'once',
             label: 'Whole house, one run',
-            sub: `The pump runs once for ${longestSecs}s, the longest of the plans, and `
+            sub: `The pump runs once for ${pourLabel(longestSecs)}, the longest of the plans, and `
                + 'every chosen section gets that one watering.'
                + (feedDueNames.length
                    ? ` No plant food in this run (due in ${feedDueNames.join(', ')}).`
                    : '') },
           { key: 'each',
             label: 'One section at a time',
-            sub: `${chosen.length} runs back to back, ${totalSecs}s of pumping. With one `
+            sub: `${chosen.length} runs back to back, ${pourLabel(totalSecs)} of pumping. With one `
                + 'shared pump every run waters the whole house.' },
         ]}
         value={flow?.mode || 'once'}
@@ -1207,17 +1219,22 @@ export default function FarmDashboardScreen({ navigation }) {
         body={`${chosen.map((x) => x.meta?.name || x.sectionId).join(', ')}.\n\n`
             + (flow?.kind === 'water'
                 ? (oneRun
-                    ? `One run of the shared pump, ${longestSecs} seconds, waters all of them.`
-                    : 'Each pump runs for its own planned duration, one section at a time.')
-                : 'Each tray gets a short burst of water, one section at a time. It raises '
-                  + 'humidity around the plants and does not touch the roots.')}
+                    ? `One run of the shared pump, ${pourLabel(flowSecs)}, waters all of them.`
+                    : `Each section is watered for ${pourLabel(flowSecs)}, one at a time.`)
+                : `Each tray gets ${pourLabel(flowSecs)} of water, one section at a time. It raises `
+                  + 'humidity around the plants and does not touch the roots.')
+            + ' Choose a different length below if needed.'}
         caution={flow?.kind === 'water'
           ? 'Vanda roots rot if they are watered too often. Only do this if the plants clearly need it.'
           : null}
         confirmLabel={flow?.kind === 'water' ? 'Water now' : 'Fill now'}
         onCancel={() => setFlow(null)}
-        onConfirm={launch}
-      />
+        onConfirm={launch}>
+        {flow?.step === 'confirm' && (
+          <DurationPicker value={flowSecs} onChange={(v) => setFlow({ ...flow, secs: v })}
+            mlPerSec={chosen[0]?.plan?.mlPerSec} limit={flowHouse?.pourLimit} />
+        )}
+      </ConfirmSheet>
 
       <RenameDialog
         visible={!!renaming}
@@ -1290,7 +1307,6 @@ const styles = StyleSheet.create({
   needFix:   { width: 84, color: COLORS.textTertiary, fontSize: FONT.xs,
                lineHeight: 14, textAlign: 'right' },
 
-  modeInCard:{ marginBottom: SPACE.md },
   nextRow:   { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
                marginTop: SPACE.md, paddingTop: SPACE.md,
                borderTopWidth: 1, borderTopColor: COLORS.borderLight },

@@ -151,8 +151,37 @@ def test_unknown_section_and_empty_choice_are_refused(monkeypatch):
     assert queue(f) == {}
 
 
-def test_duration_is_held_to_the_relay_limit(monkeypatch):
+def test_an_old_master_holds_a_pour_to_two_minutes_and_says_why(monkeypatch):
+    # No firmware record, or one before validation-2.9: the board itself stops
+    # at 120 s, so the command says 120 and carries the reason for the app.
     f = FakeFirebase()
+    f.put(f"/devices/{MASTER}.json", {"fw": "validation-2.6"})
     sc = install(monkeypatch, f)
-    sc.water_house_once("H1", sc.HouseWaterCmd(sectionIds=["S1", "S2"], durationSec=9999), ctx=None)
-    assert list(queue(f).values())[0]["durationSec"] == sc.RELAY_MAX_SEC
+    out = sc.water_house_once("H1", sc.HouseWaterCmd(sectionIds=["S1", "S2"], durationSec=600), ctx=None)
+    cmd = list(queue(f).values())[0]
+    assert cmd["durationSec"] == sc.LEGACY_RELAY_MAX_SEC == 120
+    assert cmd["requestedSec"] == 600 and "validation-2.9" in cmd["capReason"]
+    assert out["command"]["durationSec"] == 120 and out["capReason"]
+
+
+def test_a_new_master_runs_the_growers_length_up_to_an_hour(monkeypatch):
+    f = FakeFirebase()
+    f.put(f"/devices/{MASTER}.json", {"fw": "validation-2.9"})
+    sc = install(monkeypatch, f)
+    sc.water_house_once("H1", sc.HouseWaterCmd(sectionIds=["S1", "S2"], durationSec=600), ctx=None)
+    cmd = list(queue(f).values())[0]
+    assert cmd["durationSec"] == 600 and "capReason" not in cmd
+    f2 = FakeFirebase()
+    f2.put(f"/devices/{MASTER}.json", {"fw": "validation-2.9"})
+    sc = install(monkeypatch, f2)
+    sc.water_house_once("H1", sc.HouseWaterCmd(sectionIds=["S1"], durationSec=99999), ctx=None)
+    assert list(queue(f2).values())[0]["durationSec"] == sc.RELAY_MAX_SEC == 3600
+
+
+def test_with_no_length_sent_the_farm_default_is_used(monkeypatch):
+    f = FakeFirebase()
+    f.put(f"/devices/{MASTER}.json", {"fw": "validation-2.9"})
+    f.put("/farm/meta.json", {"pourDefaults": {"waterSec": 420, "traySec": 30}})
+    sc = install(monkeypatch, f)
+    sc.water_house_once("H1", sc.HouseWaterCmd(sectionIds=["S1", "S2"]), ctx=None)
+    assert list(queue(f).values())[0]["durationSec"] == 420

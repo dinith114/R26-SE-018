@@ -89,6 +89,15 @@ export const setSectionDurations = (h, s, waterDurationSec, trayFillSec) =>
     body: JSON.stringify({ waterDurationSec, trayFillSec }),
   });
 
+/* The farm's default watering and tray fill lengths, in seconds (Settings).
+   Every section without its own Pour length uses them, in automatic care and
+   as the starting value of a manual Water Now or Fill Tray. */
+export const setPourDefaults = (waterSec, traySec) =>
+  req('/farm/pour-defaults', {
+    method: 'PUT',
+    body: JSON.stringify({ waterSec, traySec }),
+  });
+
 /**
   * Place a section on the house floor, in metres from a corner the farmer picks.
   *
@@ -258,7 +267,10 @@ export const getCommandStatus = (h, s, id) =>
       + (id ? `?id=${encodeURIComponent(id)}` : ''));
 
 /* ── control ── */
-export const waterSection = (h, s, durationSec = 45, withFertilizer = false) =>
+/* Lengths are the grower's (19 Oct 2026): the farmer picks one each time,
+   starting from the section's own length or the farm default. Left out (null),
+   the server uses those same defaults. */
+export const waterSection = (h, s, durationSec = null, withFertilizer = false) =>
   req(`/houses/${h}/sections/${s}/water`,
       { method: 'POST', body: JSON.stringify({ durationSec, withFertilizer, triggeredBy: 'user' }) });
 
@@ -269,7 +281,7 @@ export const waterHouseOnce = (h, sectionIds, durationSec) =>
   req(`/houses/${h}/water-once`,
       { method: 'POST', body: JSON.stringify({ sectionIds, durationSec, triggeredBy: 'user' }) });
 
-export const fillTray = (h, s, fillSeconds = 15) =>
+export const fillTray = (h, s, fillSeconds = null) =>
   req(`/houses/${h}/sections/${s}/tray-fill`,
       { method: 'POST', body: JSON.stringify({ fillSeconds, triggeredBy: 'user' }) });
 

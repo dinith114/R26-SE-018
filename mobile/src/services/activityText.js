@@ -56,7 +56,7 @@ export function describe(item, { elapsed = 0, sectionId = null, nowSec = null } 
     const left = item.remainingSec == null ? null : Math.max(0, Math.round(item.remainingSec - elapsed));
     return {
       title: `${tray ? 'Filling the tray' : 'Watering'}${place ? ` · ${place}` : ''}`,
-      sub: `${left == null ? 'running' : `${left} s left`} · ${who}`,
+      sub: `${left == null ? 'running' : `${left < 60 ? `${left} s` : `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`} left`} · ${who}`,
       tone: 'info', icon, remaining: left, canStop: true,
       progress: left == null || !dur ? null : Math.min(1, Math.max(0, (dur - left) / dur)),
     };

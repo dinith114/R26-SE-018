@@ -37,9 +37,6 @@ EXPLAINED = {
     ("src/screens/AlarmScreen.js", "fillTray"):
         "one Act button covers water and tray; it is gated on waterSection and "
         "both are admin+operator, so one check is the same check",
-    ("src/screens/TodayScreen.js", "trayCheckAll"):
-        "issued by the Check button alongside planAll, which gates it; the two "
-        "go out in one call and share admin+operator",
     ("src/screens/SectionDetailScreen.js", "requestDeviceScan"):
         "only reachable from the Wi-Fi dialog, whose single door is gated on "
         "setNodeWifi (admin), so a check here would always be true where it runs",
