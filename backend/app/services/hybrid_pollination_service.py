@@ -216,6 +216,14 @@ class HybridPollinationService:
                 probabilities[cls] = round(float(prob), 4)
             confidence = round(float(max(proba)), 4)
 
+        # Held before anything damps it, because the app shows both numbers and
+        # on screen they were indistinguishable: the header read "Confidence
+        # 49.2%" while the bar directly beneath read "Suitable 98%", with
+        # nothing to say they were different quantities. A reader can only
+        # conclude that one of them is wrong.
+        model_score = confidence
+        damping = []
+
         # Recommendation
         recommendation = self._get_recommendation(label, confidence, effective_traits)
 
@@ -228,8 +236,35 @@ class HybridPollinationService:
         # than quietly presenting the more optimistic of the two.
         conflict = self._trait_conflict(label, resolution)
         if conflict:
+            # A measured weak trait VETOES a Suitable verdict rather than
+            # merely annotating it.
+            #
+            # The screen used to carry a flat contradiction: "Leaf Condition
+            # weak", "Plant Strength weak", and a headline reading Suitable.
+            # Printing a note under it does not resolve that for a grower - it
+            # asks them to arbitrate between two of the system's own models,
+            # which is the system's job.
+            #
+            # The veto runs one way only. A weak reading can stop a Suitable
+            # verdict; a healthy reading can never create one, because the
+            # trait models are the weaker evidence (plant strength 0.698, leaf
+            # condition 0.557) and should not be able to promote a plant the
+            # classifier doubted.
+            #
+            # One way is justified by the asymmetry of the error, which is the
+            # same argument the input gate and the flower detector already
+            # rest on: a false Suitable commits a weak plant to nine months
+            # carrying a capsule and costs the grower a season, while a false
+            # Not Suitable costs them a second look at another plant.
+            label = "Not Suitable"
+            vetoed_by = conflict
+            recommendation = self._get_recommendation(label, confidence,
+                                                      effective_traits)
             recommendation = f"{conflict}\n\n{recommendation}"
             confidence = round(confidence * 0.5, 4)
+            damping.append("image analysis measured this plant as weak")
+        else:
+            vetoed_by = ""
 
         # A photograph unlike the reference collection gets its verdict damped
         # and labelled. Measured reason: all 58 internet orchid photographs that
@@ -245,10 +280,14 @@ class HybridPollinationService:
                 + recommendation
             )
             confidence = round(confidence * 0.6, 4)
+            damping.append("this photograph is unlike the training set")
 
         return {
             "suitability": label,
             "confidence": confidence,
+            "model_score": model_score,
+            "confidence_reduced_because": damping,
+            "vetoed_by": vetoed_by,
             "probabilities": probabilities,
             "recommendation": recommendation,
             "features_extracted": len(image_features),
@@ -266,18 +305,53 @@ class HybridPollinationService:
             return ""
 
         traits = resolution.get("traits", {})
+        permissive = label in ("Suitable", "Moderate")
+
+        # Visible disease is checked FIRST, and separately, because it is the
+        # strongest veto of the three and it is the one the reference labels
+        # were actually made with.
+        #
+        # Measured on the 28 annotated plants, one vote per plant rather than
+        # per photograph: of the 10 marked disease_visible=yes, 9 were labelled
+        # Not Suitable and none were labelled Suitable; of the 18 marked no,
+        # 17 were Suitable and none were Not Suitable. Disease alone accounts
+        # for 26 of the 28 labels. Leaf and strength, by contrast, read `weak`
+        # on only 4 plants - all 4 correctly Not Suitable, but a rule that
+        # reaches 4 plants in 28.
+        #
+        # It is also the best-evidenced of the three. A `measured` disease
+        # reading comes from Component 2's model at 0.806, against plant
+        # strength 0.698 and leaf condition 0.557, and resolve_disease only
+        # reports a value at all once it clears ACT_THRESHOLD - below that it
+        # answers `unknown` and no veto arises.
+        disease = traits.get("disease_visible") or {}
+        if (permissive and disease.get("source") == "measured"
+                and disease.get("value") == "yes"):
+            return (f"Image analysis found visible disease on this plant. The "
+                    f"suitability model scored it {label}, but a diseased plant "
+                    f"passes the infection to the capsule and to anything "
+                    f"pollinated from it, so the verdict is held at Not "
+                    f"Suitable. Treat the plant first and photograph it again "
+                    f"once it has recovered.")
+
         weak = []
         for name in ("leaf_condition", "plant_strength"):
             t = traits.get(name) or {}
             if t.get("source") == "measured" and t.get("value") in ("weak",):
                 weak.append(name.replace("_", " "))
 
-        if weak and label == "Suitable":
+        # Moderate is vetoed as well as Suitable. Both labels green-light a
+        # cross - Moderate's own recommendation text says the plant "may be
+        # used for pollination" - so a plant measured weak should not be
+        # pollinated on either of them.
+        if weak and permissive:
             joined = " and ".join(weak)
-            return (f"NOTE: the suitability model says Suitable, but image analysis "
-                    f"measured {joined} as weak. These are separate models and they "
-                    f"disagree here, so treat this result with caution and inspect "
-                    f"the plant yourself.")
+            return (f"Image analysis measured {joined} as weak. The suitability "
+                    f"model scored this plant {label}, but a plant measured weak "
+                    f"is not asked to carry a capsule for nine months on the "
+                    f"strength of that score, so the verdict is held at Not "
+                    f"Suitable. Inspect the plant: if the reading is wrong, the "
+                    f"plant is the thing to trust, not the photograph.")
 
         return ""
 
