@@ -71,6 +71,7 @@ export const PERMS = {
 
   /* ---- anyone signed in ---- */
   exportTimeline:       ['admin', 'operator', 'viewer'],
+  getActivity:          ['admin', 'operator', 'viewer'],
   getAlarms:            ['admin', 'operator', 'viewer'],
   getAlerts:            ['admin', 'operator', 'viewer'],
   getAutoMode:          ['admin', 'operator', 'viewer'],
@@ -78,6 +79,7 @@ export const PERMS = {
   getCommandStatus:     ['admin', 'operator', 'viewer'],
   getDeviceScan:        ['admin', 'operator', 'viewer'],
   getDevices:           ['admin', 'operator', 'viewer'],
+  getDropPredictions:   ['admin', 'operator', 'viewer'],
   getEngine:            ['admin', 'operator', 'viewer'],
   getHistory:           ['admin', 'operator', 'viewer'],
   getHouse:             ['admin', 'operator', 'viewer'],

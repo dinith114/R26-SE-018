@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONT, SPACE, RADIUS, SHADOW } from '../config/theme';
 import { useCan } from '../config/auth';
 import ScreenHeader from '../components/ScreenHeader';
+import ActivityBar from '../components/ActivityBar';
 import { LIVE_MS } from '../hooks/useLiveData';
 import RenameDialog from '../components/RenameDialog';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -25,18 +26,19 @@ import {
   getHistory, deleteSection, renameSection, humidityStatus, vpdStatus,
   setSectionOverride, getAutoMode, RH_LOW, RH_HIGH,
   getSectionDevice, unassignDevice, assignDevice, identifyDevice, pingDevice,
-  getHouseHealth,
+  getHouseHealth, getDropPredictions,
   setSectionDurations, setSectionPosition, setHouseMaster, getDevices,
   getPingResult, lastSeenLabel, signalLabel,
   stopSection, setNodeWifi, requestDeviceScan, getDeviceScan,
   setDeviceInterval, intervalLabel, getCommandStatus, setGrowthStage,
 } from '../services/careV2';
-import { sectionIssues, farmClock } from '../services/deviceHealth';
+import { sectionIssues, farmClock, isNote } from '../services/deviceHealth';
 import { HISTORY_PRESETS, rangeWindow, chartPoints } from '../services/historyRange';
 import { FEED_STAGES, isFeedStage } from '../services/growthStage';
 import { READ_PRESETS, isPreset, formatInterval } from '../services/readInterval';
 import IntervalDialog from '../components/IntervalDialog';
 import UnitToggle from '../components/UnitToggle';
+import DigitalTwin from '../components/DigitalTwin';
 import { usePrefs } from '../config/prefs';
 import { editText, parseLength, convertText, formatLength } from '../services/lengthUnits';
 
@@ -119,6 +121,7 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [masterBusy, setMasterBusy] = useState(false);
   const [allDevices, setAllDevices] = useState([]);
   const [houseMeta,  setHouseMeta]  = useState(null);
+  const [houseSecs,  setHouseSecs]  = useState({});
 
   /* Derived from `sec`, and declared HERE rather than beside the JSX.
   
@@ -212,10 +215,13 @@ export default function SectionDetailScreen({ route, navigation }) {
   const [toast, setToast] = useState(null);      // { text, kind }
   const [pendingCtl, setPendingCtl] = useState(null);
   const [health, setHealth] = useState(null);
+  const [dropCheck, setDropCheck] = useState(null);
 
   const load = useCallback(async () => {
     // Hardware checks, on their own: never allowed to stop the screen loading.
     getHouseHealth(houseId).then(setHealth).catch(() => setHealth(null));
+    // The humidity-drop forecast's track record, the same way (18 Oct 2026).
+    getDropPredictions(houseId, sectionId, 7).then(setDropCheck).catch(() => setDropCheck(null));
     try {
       // The device lookup is allowed to fail on its own: an older backend
       // without /api/v2/devices should still render the whole screen.
@@ -235,6 +241,8 @@ export default function SectionDetailScreen({ route, navigation }) {
       // The master is a HOUSE-level setting shown on a section screen, so the
       // house meta has to be carried along with the section.
       setHouseMeta(house?.meta || null);
+      // The other sections, for the position picker's map (18 Oct 2026).
+      setHouseSecs(house?.sections || {});
       setDevice(dev?.device || null);
       // fertilizer is stored with the plan, so show it immediately
       if (s?.fertilizer && 'due' in s.fertilizer) setFert(s.fertilizer);
@@ -1257,9 +1265,9 @@ export default function SectionDetailScreen({ route, navigation }) {
         {/* Something wrong with the hardware goes first, above the tabs: the
             push about it brings the farmer to this screen, and a reading from
             a sensor that is not answering is not worth looking at. */}
-        {sectionIssues(health, sectionId).length > 0 && (
+        {sectionIssues(health, sectionId).some((i) => !isNote(i)) && (
           <View style={[styles.healthCard, SHADOW.sm]}>
-            {sectionIssues(health, sectionId).map((i) => (
+            {sectionIssues(health, sectionId).filter((i) => !isNote(i)).map((i) => (
               <View key={i.kind} style={styles.healthRow}>
                 <Ionicons name="warning-outline" size={16} color={COLORS.danger} />
                 <View style={{ flex: 1 }}>
@@ -1272,6 +1280,15 @@ export default function SectionDetailScreen({ route, navigation }) {
             ))}
           </View>
         )}
+        {/* Notes, not faults: one small line each (the user's call, 18 Oct 2026). */}
+        {sectionIssues(health, sectionId).filter(isNote).map((i) => (
+          <View key={i.kind} style={styles.noteRow}>
+            <Ionicons name="alert-circle-outline" size={14} color={COLORS.warning} />
+            <Text style={styles.noteTxt}>
+              {i.title}{i.sinceMs ? ` · since ${farmClock(i.sinceMs)}` : ''}
+            </Text>
+          </View>
+        ))}
 
         {/* Three jobs, not one scroll: what is happening now, what has
             happened, and how this section is set up. */}
@@ -1424,6 +1441,10 @@ export default function SectionDetailScreen({ route, navigation }) {
             </View>
           ) : (
             <>
+            {/* A pour this screen did not start, or started before the farmer left
+                and came back: Automatic care, a whole-house run, My Farm's Water
+                Now. The card above only follows a pour pressed here (18 Oct 2026). */}
+            <ActivityBar houseId={houseId} sectionId={sectionId} />
             {/* The two things a farmer opens this screen to do, directly under the
                 readings they decide from. They used to sit below the chart, the
                 forecast, the plan, the tray, the fertilizer and the control card -
@@ -1626,6 +1647,45 @@ export default function SectionDetailScreen({ route, navigation }) {
               due, because "due / not due" alone gave the farmer nothing to check
               against and no way to tell whether a feed had been recorded at
               all. */}
+          {/* WAS THE DROP FORECAST RIGHT? (18 Oct 2026) Every humidity-drop
+              forecast is kept and checked against the next three hours of this
+              section's own readings, so the model can be judged on this farm and
+              not only on the years it was tested on. */}
+          {dropCheck?.summary && (() => {
+            const s = dropCheck.summary;
+            const pct = (v) => (v == null ? null : `${Math.round(v * 100)} %`);
+            return (
+              <View style={[styles.card, SHADOW.sm, { marginTop: SPACE.md }]}>
+                <Text style={styles.durValue}>Was the humidity-drop forecast right?</Text>
+                <Text style={styles.durSub}>Last 7 days, each forecast checked over the next 3 hours</Text>
+                {s.judged ? (
+                  <>
+                    <Text style={[styles.durHint, { marginTop: SPACE.sm }]}>
+                      {s.hit} came true · {s['false alarm']} false alarm{s['false alarm'] === 1 ? '' : 's'}
+                      {' · '}{s.missed} missed · {s['correct quiet']} correct "no drop"
+                    </Text>
+                    {(s.precision != null || s.recall != null) && (
+                      <Text style={styles.durHint}>
+                        {s.precision != null ? `When it warned, it was right ${pct(s.precision)} of the time. ` : ''}
+                        {s.recall != null ? `It caught ${pct(s.recall)} of the real drops.` : ''}
+                      </Text>
+                    )}
+                  </>
+                ) : (
+                  <Text style={[styles.durHint, { marginTop: SPACE.sm }]}>
+                    No forecast has finished its 3-hour window with enough readings yet.
+                  </Text>
+                )}
+                {s['tray filled'] > 0 && (
+                  <Text style={styles.durHint}>
+                    {s['tray filled']} set aside: the tray was filled in that window, which
+                    changes what humidity does.
+                  </Text>
+                )}
+              </View>
+            );
+          })()}
+
           {(() => {
             const f = fert || sec?.fertilizer;
             if (!f) return null;
@@ -1952,6 +2012,42 @@ export default function SectionDetailScreen({ route, navigation }) {
           <View style={[styles.card, SHADOW.sm]}>
             {posEdit ? (
               <>
+                {/* PICK IT ON THE PLAN (18 Oct 2026). Typing two numbers measured
+                    from a corner was the only way, so a section added without
+                    them never appeared on the map. A tap fills the boxes below;
+                    typing still works for a measured position. */}
+                {Number(houseMeta?.width) > 0 && Number(houseMeta?.length) > 0 ? (
+                  <View style={{ marginBottom: SPACE.md }}>
+                    <Text style={styles.durHint}>
+                      Tap the plan where this section's sensor is, or type it below.
+                    </Text>
+                    <DigitalTwin width={houseMeta.width} length={houseMeta.length}
+                      showPipes={false} maxHeight={300}
+                      nodes={(() => {
+                        const others = Object.entries(houseSecs || {})
+                          .filter(([id, s]) => id !== sectionId
+                            && s?.meta?.x != null && s?.meta?.y != null)
+                          .map(([id, s]) => ({
+                            id, short: String(id).replace(/^S/, ''),
+                            x: Number(s.meta.x), y: Number(s.meta.y),
+                            kind: (s.node || {}).mac ? 'real' : 'nonode',
+                          }));
+                        const px = parseLength(posEdit.x, lengthUnit, { min: 0, max: 500, what: 'X' });
+                        const py = parseLength(posEdit.y, lengthUnit, { min: 0, max: 500, what: 'Y' });
+                        return (px.error || py.error || posEdit.x === '' || posEdit.y === '')
+                          ? others
+                          : [...others, { id: sectionId, short: String(sectionId).replace(/^S/, ''),
+                                          x: px.m, y: py.m, kind: 'here' }];
+                      })()}
+                      onPressMap={({ x, y }) => setPosEdit((p) => ({
+                        ...p, x: editText(x, lengthUnit), y: editText(y, lengthUnit) }))} />
+                  </View>
+                ) : (
+                  <Text style={[styles.durHint, { marginBottom: SPACE.md }]}>
+                    Set the house size (My Farm, the house's menu, House size) to pick
+                    this spot on a map.
+                  </Text>
+                )}
                 <UnitToggle style={{ marginBottom: SPACE.md }}
                   onChange={(from, to) => setPosEdit((p) => ({
                     ...p, x: convertText(p.x, from, to), y: convertText(p.y, from, to) }))} />
@@ -2477,4 +2573,7 @@ const styles = StyleSheet.create({
   healthRow:   { flexDirection: 'row', gap: SPACE.sm, alignItems: 'flex-start' },
   healthTitle: { color: COLORS.danger, fontSize: FONT.sm, fontWeight: '800' },
   healthMsg:   { color: COLORS.textSecondary, fontSize: FONT.xs, lineHeight: 17, marginTop: 2 },
+  noteRow:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACE.sm,
+                 paddingHorizontal: 2 },
+  noteTxt:     { color: COLORS.warning, fontSize: FONT.xs, fontWeight: '700' },
 });
