@@ -330,8 +330,19 @@ The rules live in `backend/app/services/disease_contributions.py`; the tests in
 
 **Making someone an expert** — on the server, not in the app:
 
-1. A farm admin creates their account in the app's Team screen (any role;
-   *viewer* is enough, and gives no power over the farm).
+1. Give them an account of their own, **not** one inside a grower's farm,
+   where they could see that farm and its admin could remove them. The vendor
+   creates one for the research institute with the script that creates farm
+   accounts (`docs/CUTOVER.md`, step 2):
+
+   ```bash
+   cd backend
+   ORCHID_API_KEY=<the vendor key> python -m scripts.provision_first_tenant \
+       --name "Orchid Disease Review - <institute>" --email <researcher's email>
+   ```
+
+   The account has no greenhouses, so ignore the firmware notes it prints.
+   Being its admin gives no right to review; only step 2 does.
 2. Put their sign-in email, or their account uid, in **either**
    - `ml-models/disease_detection/data/experts.txt`, one per line
      (`#` starts a comment), or
@@ -355,3 +366,21 @@ near-identical copy) use limits measured on the 667 dataset photos:
 cd tools
 ../.venv/Scripts/python.exe measure_photo_checks.py   # writes results/photo_checks/
 ```
+
+**Checks before the expert sees a photo.** The app runs these the moment a
+photo is chosen and while the name is typed (`POST /contribute/check`,
+`GET /contribute/check-name`), and the server runs them again on sending:
+
+| Check | What happens |
+|---|---|
+| A leaf photo unlike every orchid leaf the model knows | refused (the same distance check and 0.55 limit as Check a plant) |
+| A stem or flower photo unlike the leaf photos | sent, and marked for the expert: the check learned from leaves only |
+| The model is at least 90% sure it shows a disease the app already detects, or a healthy leaf | the grower must confirm it is different; the expert then sees what the model thought |
+| A name the app already detects ("black spot", "phylosticta") or too general ("leaf spot") | refused, with the reason |
+| The model is not running on the server | the photo is still accepted and marked "not checked by the model" |
+
+Measured with the live model (17 non-orchid photos, and the 67 validation and
+67 test orchid photos, sent as leaf photos): 15 of the 17 non-orchid photos
+are refused (11 as not an orchid, 4 as too poor to judge), none of the 134
+orchid photos is refused, and about two in three of them, being diseases the
+app already detects, get the "looks like a known disease" question.

@@ -61,8 +61,6 @@ import { getToken, signOutNow } from './auth';
 import { makeRequest } from './request';
 import {
   DISEASE_API,
-  API_BASE_URL,
-  API_HOST,
   REQUEST_TIMEOUT_MS,
   CONFIDENCE_THRESHOLD,
 } from '../config/api';
@@ -78,26 +76,46 @@ export class ApiError extends Error {
   }
 }
 
-const NETWORK_HINT =
-  `Tried ${API_BASE_URL}\n\n` +
-  '• Is the backend running? It must be started with --host 0.0.0.0\n' +
-  '• Is your phone on the same Wi-Fi as the laptop?\n' +
-  `• Is ${API_HOST} still the laptop's IP? Check with ipconfig and update ` +
-  'src/config/api.js\n' +
-  '• Windows Firewall may be blocking Python';
+/* What a grower is told. Every failure ends in one of these, or in a sentence
+   the disease routes wrote for a person - never in a status code, a file path
+   on the server or the text of an exception. The technical detail still goes
+   to the developer console (devLog), where it is useful. */
+const NO_CONNECTION = {
+  message: 'No connection.',
+  hint: 'Check that your phone is connected to the internet, then try again.',
+};
+const TOO_SLOW = {
+  message: 'This is taking too long.',
+  hint: 'Your connection may be slow. Please try again.',
+};
+const SERVER_TROUBLE = {
+  message: 'Something went wrong on our side.',
+  hint: 'Please try again in a few minutes.',
+};
+const BAD_PHOTO = {
+  message: "This photo can't be used.",
+  hint: 'Take a new photo, or choose a different one.',
+};
 
-/** Pull a readable message out of whatever the server sent back. */
+const fail = (said, kind, status = null) =>
+  new ApiError(said.message, { kind, status, hint: said.hint });
+
+/* Development builds only. console.log, not console.warn: a warning would put
+   a yellow banner on the phone in the middle of a demo in Expo Go. */
+function devLog(...args) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) console.log('[disease]', ...args);
+}
+
+/**
+ * The server's own sentence, when it sent one. Used only for the answers the
+ * disease routes write for a person (a photo too dark, a name the app already
+ * knows). A list of FastAPI validation errors is not one, so it gets the
+ * fallback.
+ */
 function detailFromText(text, fallback) {
   try {
-    const body = JSON.parse(text);
-    if (typeof body?.detail === 'string') return body.detail;
-    if (Array.isArray(body?.detail) && body.detail.length) {
-      // FastAPI validation errors look like [{loc:[...], msg:'...', type:'...'}]
-      const first = body.detail[0];
-      const where = Array.isArray(first?.loc) ? first.loc.join(' → ') : '';
-      return where ? `${first.msg} (${where})` : first?.msg || fallback;
-    }
-    return fallback;
+    const detail = JSON.parse(text)?.detail;
+    return typeof detail === 'string' && detail ? detail : fallback;
   } catch {
     return fallback;
   }
@@ -156,19 +174,15 @@ function postForm(url, formData, timeoutMs = REQUEST_TIMEOUT_MS, token = null) {
 
     xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
 
-    xhr.onerror = () =>
-      reject(new ApiError('Cannot reach the server.', {
-        kind: 'network',
-        hint: NETWORK_HINT,
-      }));
+    xhr.onerror = () => {
+      devLog('could not reach', url);
+      reject(fail(NO_CONNECTION, 'network'));
+    };
 
-    xhr.ontimeout = () =>
-      reject(new ApiError('The server took too long to respond.', {
-        kind: 'timeout',
-        hint:
-          'The first analysis after starting the server is slow because it ' +
-          'loads the models. Wait a moment and try again.',
-      }));
+    xhr.ontimeout = () => {
+      devLog('timed out', url);
+      reject(fail(TOO_SLOW, 'timeout'));
+    };
 
     xhr.send(formData);
   });
@@ -231,63 +245,33 @@ export async function detectDisease(asset) {
     form
   );
 
-  if (status === 503) {
-    throw new ApiError(
-      detailFromText(text, 'The prediction models are not available.'),
-      {
-        kind: 'models',
-        status,
-        hint:
-          'The trained model files are missing on the server. Check that ' +
-          'ml-models/disease_detection/models/ contains disease_model.keras ' +
-          'and class_names.json.',
-      }
-    );
-  }
-
-  if (status === 400) {
-    throw new ApiError(
-      detailFromText(text, 'That file could not be read as a photograph.'),
-      { kind: 'image', status, hint: 'Choose a JPEG or PNG photo.' }
-    );
-  }
-
-  if (status === 422) {
-    // The upload reached the server but the file field was not readable.
-    throw new ApiError(
-      detailFromText(text, 'The server could not read the uploaded file.'),
-      {
-        kind: 'image',
-        status,
-        hint:
-          'The photo did not upload in a form the server could read. Try ' +
-          'picking a different image from your gallery.',
-      }
-    );
-  }
-
   if (status < 200 || status >= 300) {
-    throw new ApiError(
-      detailFromText(text, `Server error (HTTP ${status}).`),
-      { kind: 'server', status }
-    );
+    // The server's own words go to the developer console only: for a missing
+    // model they name files on the server, and for an unreadable photo they
+    // carry the text of a Python exception.
+    devLog('detect answered', status, text);
+    if (status === 503) {
+      throw new ApiError("Plant checking isn't available right now.", {
+        kind: 'models', status, hint: 'Please try again later.',
+      });
+    }
+    // 400 is a file the server would not accept; 422 is an upload whose image
+    // field arrived unreadable. Either way, another photo is the fix.
+    if (status === 400 || status === 422) throw fail(BAD_PHOTO, 'image', status);
+    throw fail(SERVER_TROUBLE, 'server', status);
   }
 
   let payload;
   try {
     payload = JSON.parse(text);
   } catch {
-    throw new ApiError('The server sent a response the app could not read.', {
-      kind: 'server',
-      status,
-    });
+    devLog('detect sent something that is not JSON', text);
+    throw fail(SERVER_TROUBLE, 'server', status);
   }
 
   if (!payload?.result) {
-    throw new ApiError('The server response was missing the analysis result.', {
-      kind: 'server',
-      status,
-    });
+    devLog('detect answer had no result', text);
+    throw fail(SERVER_TROUBLE, 'server', status);
   }
 
   return payload.result;
@@ -300,30 +284,32 @@ export async function detectDisease(asset) {
 async function getJson(url, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  let text;
   try {
-    const response = await fetch(url, {
+    response = await fetch(url, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new ApiError(
-        detailFromText(text, `Server error (HTTP ${response.status}).`),
-        { kind: 'server', status: response.status }
-      );
-    }
-    return JSON.parse(text);
+    text = await response.text();
   } catch (err) {
-    if (err instanceof ApiError) throw err;
-    if (err.name === 'AbortError') {
-      throw new ApiError('The server took too long to respond.', { kind: 'timeout' });
-    }
-    throw new ApiError('Cannot reach the server.', {
-      kind: 'network',
-      hint: NETWORK_HINT,
-    });
+    if (err?.name === 'AbortError') throw fail(TOO_SLOW, 'timeout');
+    devLog('could not reach', url, err?.message);
+    throw fail(NO_CONNECTION, 'network');
   } finally {
     clearTimeout(timer);
+  }
+  if (!response.ok) {
+    devLog(url, 'answered', response.status, text);
+    throw fail(SERVER_TROUBLE, 'server', response.status);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    // A reply that arrived but is not JSON is the server's fault, not the
+    // connection's, so it must not be reported as "No connection".
+    devLog(url, 'sent something that is not JSON', text);
+    throw fail(SERVER_TROUBLE, 'server', response.status);
   }
 }
 
@@ -362,60 +348,49 @@ async function signedIn(path, options = {}) {
       throw new ApiError('Please sign in again.', { kind: 'auth', status: 401 });
     }
     if (err?.status) {
-      // The server's message is written for a person ("Only an orchid
-      // expert can review contributed photos."), so it is shown as-is.
+      devLog(path, 'answered', err.status, err.message);
+      // The disease routes' own refusals are written for a person ("Only an
+      // orchid expert can review contributed photos."), so they are shown
+      // as-is. A 5xx, or the shared helper's "Server error 502" for a reply
+      // that was not JSON, is not a sentence anyone can act on.
+      const readable = err.status < 500 && typeof err.message === 'string' &&
+        err.message !== '' && !err.message.startsWith('Server error') &&
+        !err.message.includes('[object');
+      if (!readable) throw fail(SERVER_TROUBLE, 'server', err.status);
       throw new ApiError(err.message, {
         kind: err.status === 403 ? 'forbidden' : 'server', status: err.status,
       });
     }
-    throw new ApiError('Cannot reach the server.', { kind: 'network', hint: NETWORK_HINT });
+    devLog('could not reach', path, err?.message);
+    throw fail(NO_CONNECTION, 'network');
   }
 }
 
-/**
- * Submit a photograph plus the contributor's own labels. Needs a signed-in
- * account: the server records who sent each photo, because the counter for a
- * new disease needs photos from at least three different growers.
- *
- * Nothing about the live model changes. The photo is checked (too small, dark
- * or blurred is refused with the reason), stored as an ORIGINAL, and waits for
- * an orchid expert. It counts for nothing until the expert approves it.
- *
- * `form` is { disease, plantPart, severity, confirmedBy, notes }. confirmedBy
- * is optional information for the expert; it does not make the photo count.
- *
- * Returns { image_id, status: 'pending', possible_copy, progress, ... }.
- */
-export async function contributeImage(asset, form) {
+/** The local file behind a picker asset (or a plain uri), named and typed for upload. */
+function imageParts(asset) {
   const uri = typeof asset === 'string' ? asset : asset?.uri;
   if (!uri) {
     throw new ApiError('No image selected.', { kind: 'image' });
   }
-
   const described = describeImage(uri, typeof asset === 'object' ? asset?.mimeType : null);
   const name = (typeof asset === 'object' && asset?.fileName) || described.name;
+  return { uri, name, type: described.type };
+}
 
-  // Built fresh for every attempt: a multipart body is not guaranteed to be
-  // re-readable once sent, and the 401 path below sends it a second time.
-  const makeBody = async () => {
-    const body = await buildImageForm(uri, name, described.type);
-    body.append('disease', form.disease || '');
-    body.append('plant_part', form.plantPart || '');
-    body.append('severity', form.severity || '');
-    body.append('confirmed_by', form.confirmedBy || '');
-    body.append('notes', form.notes || '');
-    return body;
-  };
-
+/**
+ * POST a multipart form as the signed-in grower. Same rule as
+ * services/request.js: a 401 earns exactly one retry behind a forced token
+ * refresh, and only a second refusal signs the account out. `makeBody` builds
+ * the form afresh for each attempt, because a multipart body is not guaranteed
+ * to be re-readable once sent.
+ */
+async function postSignedForm(path, makeBody) {
   const token = await getToken();
   if (!token) {
     throw new ApiError('Please sign in to send a photo.', { kind: 'auth' });
   }
-  const url = `${DISEASE_API}/contribute`;
+  const url = `${DISEASE_API}${path}`;
   let { status, text } = await postForm(url, await makeBody(), REQUEST_TIMEOUT_MS, token);
-
-  // Same rule as services/request.js: a 401 earns exactly one retry behind a
-  // forced token refresh, and only a second refusal signs the account out.
   if (status === 401) {
     let fresh = null;
     try { fresh = await getToken({ force: true }); } catch (_) { fresh = null; }
@@ -425,6 +400,99 @@ export async function contributeImage(asset, form) {
       throw new ApiError('Your sign-in has expired. Please sign in again.', {
         kind: 'auth', status,
       });
+    }
+  }
+  return { status, text };
+}
+
+/** The server's "looks like a disease the app already detects" answer, if this is one. */
+function looksKnownFrom(text) {
+  try {
+    const detail = JSON.parse(text)?.detail;
+    return detail && typeof detail === 'object' && detail.code === 'looks_known' ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check a photo the moment it is chosen on Contribute, before the rest of the
+ * form is filled in. Nothing is stored; the server applies the same rules
+ * again when the photo is sent.
+ *
+ * Returns { quality_ok, problems: [{code, message}], already_sent,
+ *           checked_by_model, is_orchid, model_guess,
+ *           by_part: { leaf|stem|flower: { verdict, message } }, name }
+ * where verdict is 'ok' | 'refuse' | 'confirm' | 'note' | 'not_checked'.
+ */
+export async function checkContributionPhoto(asset, { disease = '', plantPart = '' } = {}) {
+  const img = imageParts(asset);
+  const { status, text } = await postSignedForm('/contribute/check', async () => {
+    const body = await buildImageForm(img.uri, img.name, img.type);
+    body.append('disease', disease || '');
+    body.append('plant_part', plantPart || '');
+    return body;
+  });
+  if (status < 200 || status >= 300) {
+    devLog('photo check answered', status, text);
+    throw status === 400 ? fail(BAD_PHOTO, 'image', status) : fail(SERVER_TROUBLE, 'server', status);
+  }
+  try {
+    return JSON.parse(text).result;
+  } catch {
+    devLog('photo check sent something that is not JSON', text);
+    throw fail(SERVER_TROUBLE, 'server', status);
+  }
+}
+
+/**
+ * Whether a typed disease name can be sent: { ok, message, known,
+ * known_display_name, already_collecting, similar: [{disease, display_name}] }.
+ */
+export async function checkContributionName(name) {
+  const body = await getJson(
+    `${DISEASE_API}/contribute/check-name?name=${encodeURIComponent(name)}`
+  );
+  return body.result;
+}
+
+/**
+ * Submit a photograph plus the contributor's own labels. Needs a signed-in
+ * account: the server records who sent each photo, because the counter for a
+ * new disease needs photos from at least three different growers.
+ *
+ * Nothing about the live model changes. The photo is checked (too small, dark
+ * or blurred, or a leaf unlike any orchid, is refused with the reason), stored
+ * as an ORIGINAL, and waits for an orchid expert. It counts for nothing until
+ * the expert approves it.
+ *
+ * `form` is { disease, plantPart, severity, confirmedBy, notes, confirmedNew }.
+ * confirmedBy is optional information for the expert. confirmedNew is the
+ * grower saying the photo shows a different disease after being told it looks
+ * like one the app already detects; without it the server answers with an
+ * ApiError of kind 'looks_known'.
+ *
+ * Returns { image_id, status: 'pending', possible_copy, progress, ... }.
+ */
+export async function contributeImage(asset, form) {
+  const img = imageParts(asset);
+  const { status, text } = await postSignedForm('/contribute', async () => {
+    const body = await buildImageForm(img.uri, img.name, img.type);
+    body.append('disease', form.disease || '');
+    body.append('plant_part', form.plantPart || '');
+    body.append('severity', form.severity || '');
+    body.append('confirmed_by', form.confirmedBy || '');
+    body.append('notes', form.notes || '');
+    body.append('confirmed_new', form.confirmedNew ? 'true' : 'false');
+    return body;
+  });
+
+  if (status === 409) {
+    const looks = looksKnownFrom(text);
+    if (looks) {
+      const err = new ApiError(looks.message, { kind: 'looks_known', status });
+      err.looksKnown = looks;
+      throw err;
     }
   }
 
@@ -441,39 +509,25 @@ export async function contributeImage(asset, form) {
       kind: 'form', status,
     });
   }
-  if (status === 400) {
-    throw new ApiError(
-      detailFromText(text, 'That file could not be read as a photograph.'),
-      { kind: 'image', status, hint: 'Choose a JPEG or PNG photo.' }
-    );
-  }
-  if (status === 503) {
-    throw new ApiError(
-      detailFromText(text, 'The server cannot store contributions right now.'),
-      { kind: 'server', status }
-    );
-  }
   if (status < 200 || status >= 300) {
-    throw new ApiError(
-      detailFromText(text, `Server error (HTTP ${status}).`),
-      { kind: 'server', status }
-    );
+    devLog('contribute answered', status, text);
+    if (status === 400) throw fail(BAD_PHOTO, 'image', status);
+    if (status === 503) {
+      throw new ApiError("Photos can't be sent right now.", {
+        kind: 'server', status, hint: 'Please try again later.',
+      });
+    }
+    throw fail(SERVER_TROUBLE, 'server', status);
   }
 
   try {
     const payload = JSON.parse(text);
-    if (!payload?.result) {
-      throw new ApiError('The server response was missing the result.', {
-        kind: 'server', status,
-      });
-    }
-    return payload.result;
-  } catch (err) {
-    if (err instanceof ApiError) throw err;
-    throw new ApiError('The server sent a response the app could not read.', {
-      kind: 'server', status,
-    });
+    if (payload?.result) return payload.result;
+  } catch {
+    /* reported below, the same as a reply with no result in it */
   }
+  devLog('contribute answer had no result', text);
+  throw fail(SERVER_TROUBLE, 'server', status);
 }
 
 /** How close each contributed disease is to being trainable. Open to read. */

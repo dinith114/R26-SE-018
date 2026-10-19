@@ -8,6 +8,13 @@ never be able to fill the counter that makes a new disease trainable, so:
   * only approved photographs count, from at least three accounts, and
     near-identical photographs count once
   * every decision is appended to a log that is never rewritten
+  * before the expert sees anything: a leaf photo unlike any orchid leaf is
+    refused, a photo the model takes for a disease the app already detects
+    needs the grower to say it is different, and a name the app already
+    detects is refused
+
+The live model is replaced by dc.assess_photo stubs: CI has no TensorFlow, and
+these tests pin the rules, not the network.
 
 Real routing through TestClient and a throwaway app, as test_auth_deps.py does,
 with the token check replaced by firebase_auth.set_decoder. Storage goes to a
@@ -34,8 +41,10 @@ PEOPLE = {
     "grower-1": {"uid": "g1", "tenantId": "t1", "role": "viewer", "email": "g1@farm.lk"},
     "grower-2": {"uid": "g2", "tenantId": "t1", "role": "operator", "email": "g2@farm.lk"},
     "grower-3": {"uid": "g3", "tenantId": "t2", "role": "admin", "email": "g3@farm.lk"},
-    # Mixed case on purpose: the expert list must match emails case-insensitively.
-    "expert": {"uid": "ex", "tenantId": "t1", "role": "viewer", "email": "Researcher@Lab.lk"},
+    # The reviewer has the research institute's own account, not one inside a
+    # grower's farm. Mixed case on purpose: the expert list must match emails
+    # case-insensitively.
+    "expert": {"uid": "ex", "tenantId": "institute", "role": "admin", "email": "Researcher@Lab.lk"},
 }
 API = "/api/v1/disease"
 
@@ -53,6 +62,9 @@ def storage(tmp_path, monkeypatch):
     monkeypatch.setattr(dc, "LOG_PATH", tmp_path / "pending" / "review_log.jsonl")
     monkeypatch.setattr(dc, "EXPERTS_FILE", tmp_path / "experts.txt")
     monkeypatch.setenv(dc.EXPERTS_ENV, "researcher@lab.lk")
+    # As on a server without the model: the same answer with or without
+    # TensorFlow installed. Tests about the model say what it sees.
+    monkeypatch.setattr(dc, "assess_photo", lambda data: None)
     set_decoder(_decode)
     yield tmp_path
     set_decoder(None)
@@ -356,3 +368,137 @@ def test_old_self_verified_photos_go_back_to_waiting(tmp_path):
     assert row["status"] == "pending"
     assert row["claimed_confirmed_by"] == "Peradeniya"
     assert len(row["dhash"]) == 16                  # fingerprinted, so copies are caught
+
+
+# --------------------------------------------------------------------------
+# checks before the expert: the name, and what the model sees
+# --------------------------------------------------------------------------
+
+def model_says(monkeypatch, is_orchid=True, guess=None, confidence=None, distance=0.3):
+    monkeypatch.setattr(dc, "assess_photo", lambda data: {
+        "is_orchid": is_orchid, "distance": distance, "distance_limit": 0.55,
+        "guess": guess if is_orchid else None, "confidence": confidence})
+
+
+@pytest.mark.parametrize("name, words", [
+    ("Black Leaf Spot", "already detects Black Leaf Spot"),
+    ("black spot", "already detects Black Leaf Spot"),
+    ("Black lef spot", "already detects Black Leaf Spot"),
+    ("Phylosticta", "already detects Phyllosticta Leaf Spot"),
+    ("Phyllosticta leaf spot disease", "already detects Phyllosticta Leaf Spot"),
+    ("Phyllosticta capitalensis", "already detects Phyllosticta Leaf Spot"),
+    ("healthy leaf", "Check a plant already handles healthy leaves"),
+    ("leaf spot", "too general"),
+    ("Disease", "too general"),
+    ("fungus", "too general"),
+])
+def test_a_name_the_app_already_detects_or_too_general_is_refused(client, name, words):
+    r = send(client, "grower-1", photo(30), disease=name)
+    assert r.status_code == 422, name
+    assert words in r.json()["detail"]
+    assert not dc.CSV_PATH.exists()
+
+
+@pytest.mark.parametrize("name", ["Black rot", "Anthracnose", "Cercospora leaf spot",
+                                  "Bacterial soft rot", "Fusarium wilt"])
+def test_a_new_disease_is_accepted_even_when_its_name_is_close(client, name):
+    assert send(client, "grower-1", photo(31), disease=name).status_code == 200, name
+
+
+def test_a_leaf_photo_unlike_any_orchid_is_refused_before_review(client, monkeypatch):
+    model_says(monkeypatch, is_orchid=False, distance=0.71)
+    r = send(client, "grower-1", photo(32), part="leaf")
+    assert r.status_code == 422
+    assert "doesn't look like an orchid leaf" in r.json()["detail"]
+    assert not dc.CSV_PATH.exists()
+
+
+def test_a_stem_photo_unlike_the_leaf_photos_is_sent_and_marked(client, monkeypatch):
+    # The orchid check learned from leaves only; a real stem must not be turned away.
+    model_says(monkeypatch, is_orchid=False, distance=0.62)
+    r = send(client, "grower-1", photo(33), part="stem")
+    assert r.status_code == 200
+    image_id = r.json()["result"]["image_id"]
+    item = client.get(API + "/review/items/" + image_id, headers=auth("expert")).json()["item"]
+    assert item["model_check"]["status"] == "note"
+    assert "Unlike the orchid leaf photos" in item["model_check"]["text"]
+
+
+def test_a_photo_the_model_knows_needs_the_grower_to_say_it_is_different(client, monkeypatch):
+    model_says(monkeypatch, guess="phyllosticta_leaf_spot", confidence=0.96)
+    r = send(client, "grower-1", photo(34))
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["code"] == "looks_known" and detail["disease"] == "phyllosticta_leaf_spot"
+    assert "Phyllosticta Leaf Spot (96% sure)" in detail["message"]
+    assert not dc.CSV_PATH.exists()
+
+    r = send(client, "grower-1", photo(34), confirmed_new="true")
+    assert r.status_code == 200
+    image_id = r.json()["result"]["image_id"]
+    item = client.get(API + "/review/items/" + image_id, headers=auth("expert")).json()["item"]
+    assert item["model_check"]["status"] == "sent_anyway"
+    assert "thinks this is Phyllosticta Leaf Spot (96%)" in item["model_check"]["text"]
+
+
+def test_an_unsure_model_lets_the_photo_through(client, monkeypatch):
+    model_says(monkeypatch, guess="black_leaf_spot", confidence=0.62)
+    r = send(client, "grower-1", photo(35))
+    assert r.status_code == 200
+    row = csv_rows()[0]
+    assert (row["model_check"], row["model_guess"], row["model_confidence"]) == (
+        "ok", "black_leaf_spot", "0.62")
+
+
+def test_without_the_model_photos_are_still_accepted_and_marked(client):
+    r = send(client, "grower-1", photo(36))
+    assert r.status_code == 200
+    image_id = r.json()["result"]["image_id"]
+    item = client.get(API + "/review/items/" + image_id, headers=auth("expert")).json()["item"]
+    assert item["model_check"]["status"] == "not_checked"
+    assert "Not checked by the model" in item["model_check"]["text"]
+
+
+def test_the_instant_check_reports_everything_before_anything_is_sent(client, monkeypatch):
+    def check(data, **form):
+        return client.post(API + "/contribute/check", headers=auth("grower-1"),
+                           files={"image": ("leaf.jpg", data, "image/jpeg")}, data=form)
+
+    assert client.post(API + "/contribute/check",
+                       files={"image": ("leaf.jpg", photo(37), "image/jpeg")}).status_code == 401
+
+    model_says(monkeypatch, is_orchid=False, distance=0.7)
+    body = check(photo(37), disease="black spot").json()["result"]
+    assert body["quality_ok"] is True and body["is_orchid"] is False
+    assert body["by_part"]["leaf"]["verdict"] == "refuse"
+    assert body["by_part"]["flower"]["verdict"] == "note"
+    assert body["name"]["ok"] is False and body["name"]["known"] == "black_leaf_spot"
+
+    model_says(monkeypatch, guess="healthy", confidence=0.93)
+    body = check(photo(37)).json()["result"]
+    assert body["by_part"]["leaf"]["verdict"] == "confirm"
+    assert "looks healthy" in body["by_part"]["leaf"]["message"]
+    assert body["by_part"]["stem"]["verdict"] == "ok"   # the model knows only leaves
+    assert body["model_guess"]["disease"] == "healthy"
+
+    dark = check(photo(38, dark=True)).json()["result"]
+    assert dark["quality_ok"] is False and "too dark" in dark["problems"][0]["message"]
+    assert dark["checked_by_model"] is False           # refused whatever the model thinks
+
+    model_says(monkeypatch, guess="black_leaf_spot", confidence=0.5)
+    sent = photo(39)
+    assert check(sent).json()["result"]["already_sent"] is False
+    send(client, "grower-1", sent)
+    assert check(sent).json()["result"]["already_sent"] is True
+    assert not list((dc.PENDING / "anthracnose").glob("*.jpg"))[1:]  # the check stored nothing
+
+
+def test_the_name_check_suggests_a_name_already_being_collected(client):
+    send(client, "grower-1", photo(40), disease="Anthracnose")
+    r = client.get(API + "/contribute/check-name", params={"name": "Anthracnos"}).json()["result"]
+    assert r["ok"] is True and r["already_collecting"] is False
+    assert [s["display_name"] for s in r["similar"]] == ["Anthracnose"]
+    same = client.get(API + "/contribute/check-name", params={"name": "anthracnose"}).json()["result"]
+    assert same["already_collecting"] is True and same["similar"] == []
+    known = client.get(API + "/contribute/check-name", params={"name": "BLS"}).json()["result"]
+    assert known["ok"] is False and known["known_display_name"] == "Black Leaf Spot"
