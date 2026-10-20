@@ -5,6 +5,8 @@ import SplashScreen from './src/screens/SplashScreen';
 import AppNavigator from './src/navigation/AppNavigator';
 import LoginScreen from './src/screens/LoginScreen';
 import NoFarmScreen from './src/screens/NoFarmScreen';
+import ReviewerNavigator from './src/navigation/ReviewerNavigator';
+import { getExpertStatus } from './src/services/diseaseApi';
 import { PrefsProvider } from './src/config/prefs';
 import { AuthProvider, useAuth } from './src/config/auth';
 import usePushAlarms from './src/hooks/usePushAlarms';
@@ -101,6 +103,19 @@ function Root() {
   const navRef = useRef(null);
   const pendingNav = useRef(null);
 
+  /* Reviewer accounts (the research institute) get their own screens. The
+     server's reviewer list decides; null while the app asks. Every review
+     request is still checked on the server, so this only changes what is shown. */
+  const [reviewer, setReviewer] = useState(null);
+  useEffect(() => {
+    setReviewer(null);
+    if (!user || !tenantId) return undefined;
+    let active = true;
+    const timer = setTimeout(() => { if (active) setReviewer((r) => (r === null ? false : r)); }, 8000);
+    getExpertStatus().then((yes) => { if (active) setReviewer(yes); });
+    return () => { active = false; clearTimeout(timer); };
+  }, [user, tenantId]);
+
   const onSplashFinish = useCallback(() => setIsLoading(false), []);
 
   /* Navigate, even if the tap arrived before there was anything to navigate.
@@ -163,6 +178,23 @@ function Root() {
     return (
       <View style={styles.container}>
         <NoFarmScreen />
+        <StatusBar style="dark" />
+      </View>
+    );
+  }
+
+  if (reviewer === null) {
+    return (
+      <View style={styles.container}>
+        <StatusBar style="dark" />
+      </View>
+    );
+  }
+
+  if (reviewer) {
+    return (
+      <View style={styles.container}>
+        <ReviewerNavigator />
         <StatusBar style="dark" />
       </View>
     );
