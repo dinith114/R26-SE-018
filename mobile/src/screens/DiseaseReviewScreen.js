@@ -428,6 +428,7 @@ const DiseaseReviewScreen = ({ navigation }) => {
         subtitle={selected ? selected : 'Photos count only once you approve them'}
         navigation={headerNav}
         showBack
+        showNotification={false}
       />
 
       <ScrollView
